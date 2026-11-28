@@ -57,6 +57,7 @@ fn reconcile_case(store: &Store, actor: &str, case: &str) -> Result<ResultRecord
         crate::wasm_execution::verify_committed_csv_aggregation(store, &state, &result)?;
         crate::counterfactual::verify_committed(store, &state, &result)?;
         crate::core::verify_committed_conversation_return(store, &state, &result)?;
+        crate::core::verify_committed_prefixed_correction(store, &state, &result)?;
         return Ok(result);
     }
     if crate::wasm_execution::reconciliation_required(&state) {

@@ -13,6 +13,7 @@ use rusqlite::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
+    borrow::Cow,
     cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
@@ -120,6 +121,14 @@ pub struct Store {
     connection: Connection,
     blobs: PathBuf,
     active_memory: RefCell<Option<MemoryUse>>,
+}
+
+struct PreparedMemory<'a> {
+    value: Cow<'a, MemoryState>,
+    previous: Option<MemoryState>,
+    expected_head: Option<(i64, String)>,
+    sha: String,
+    length: usize,
 }
 
 /// Exact input and result reads in one authenticated, verified SQLite snapshot.
@@ -1735,6 +1744,16 @@ impl Store {
         revision: &CaseRevision,
         deadline: Option<Instant>,
     ) -> Result<()> {
+        self.append_case_before_with_memory(actor, revision, deadline, None)
+    }
+
+    pub(crate) fn append_case_before_with_memory(
+        &self,
+        actor: &str,
+        revision: &CaseRevision,
+        deadline: Option<Instant>,
+        memory: Option<&MemoryState>,
+    ) -> Result<()> {
         if actor != revision.actor_id || revision.schema_version != SCHEMA_VERSION {
             return Err(failure(
                 "ACCESS_DENIED",
@@ -1743,6 +1762,48 @@ impl Store {
         }
         Self::require_case(&self.connection, actor, &revision.case_id)?;
         self.verify_case(&revision.case_id)?;
+        let prepared_memory = if let Some(memory) = memory {
+            if revision.lifecycle != Lifecycle::Commit
+                || revision.result.as_ref().is_none_or(|result| {
+                    result.lifecycle != Lifecycle::Commit
+                        || result.actor_memory_revision != Some(memory.revision)
+                        || Some(result.id.as_str()) != revision.input_fingerprint.as_deref()
+                        || revision.bundle.as_ref().is_none_or(|bundle| {
+                            bundle.request.input_id != result.input_id
+                                || bundle.request.input_version != result.input_version
+                        })
+                })
+            {
+                return Err(failure(
+                    "MEMORY_COMMIT_MISMATCH",
+                    "記憶の更新先と確定結果の入力・記憶版が一致しません。",
+                ));
+            }
+            if self.active_memory.borrow().as_ref().is_some_and(|scope| {
+                scope.case != revision.case_id
+                    || (scope.input_fingerprint.is_some()
+                        && scope.input_fingerprint != revision.input_fingerprint)
+            }) {
+                return Err(failure(
+                    "MEMORY_SCOPE_CONTEXT_REQUIRED",
+                    "記憶の利用範囲が確定する会話の入力と一致しません。",
+                ));
+            }
+            if deadline.is_some_and(|limit| Instant::now() >= limit) {
+                return Err(failure(
+                    "DEADLINE",
+                    "記憶を確定する前に元Goalの締切に達しました。",
+                ));
+            }
+            Some(self.prepare_memory(actor, memory)?.ok_or_else(|| {
+                failure(
+                    "MEMORY_COMMIT_MISMATCH",
+                    "確定結果に対応する新しい記憶版がありません。",
+                )
+            })?)
+        } else {
+            None
+        };
         let (sha, length) = self.publish_blob(revision)?;
         let bundle = revision
             .bundle
@@ -1933,6 +1994,15 @@ impl Store {
             let evidence: MemoryPolicy =
                 serde_json::from_slice(&self.get_bytes(actor, &revision.case_id, reference)?)?;
             self.commit_memory_policy(&transaction, &bundle.request, evidence)?;
+        }
+        if let Some(memory) = prepared_memory {
+            self.write_prepared_memory(&transaction, actor, &memory)?;
+            if deadline.is_some_and(|limit| Instant::now() >= limit) {
+                return Err(failure(
+                    "DEADLINE",
+                    "記憶を確定する前に元Goalの締切に達しました。",
+                ));
+            }
         }
         sql(transaction.commit())?;
         Ok(())
@@ -2863,10 +2933,7 @@ impl Store {
 
     fn load_memory_head(&self, actor: &str) -> Result<(MemoryState, Option<(i64, String)>)> {
         valid_id(actor)?;
-        let reference: Option<(i64, String)> = sql(self.connection.query_row(
-            "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1",
-            [actor], |row| Ok((row.get(0)?,row.get(1)?)),
-        ).optional())?;
+        let reference = Self::memory_head_on(&self.connection, actor)?;
         let memory = reference
             .as_ref()
             .map(|(_, sha)| self.read_blob(sha))
@@ -3000,6 +3067,20 @@ impl Store {
     }
 
     pub fn save_memory(&self, actor: &str, memory: &MemoryState) -> Result<()> {
+        let Some(memory) = self.prepare_memory(actor, memory)? else {
+            return Ok(());
+        };
+        let transaction = self.transaction()?;
+        self.write_prepared_memory(&transaction, actor, &memory)?;
+        sql(transaction.commit())?;
+        Ok(())
+    }
+
+    fn prepare_memory<'a>(
+        &self,
+        actor: &str,
+        memory: &'a MemoryState,
+    ) -> Result<Option<PreparedMemory<'a>>> {
         let scope = self.mark_memory_use(actor)?;
         self.verify_memory_use(actor)?;
         valid_id(actor)?;
@@ -3014,7 +3095,7 @@ impl Store {
                 let (raw, head) = self.load_memory_head(actor)?;
                 let baseline = self.project_memory(actor, &scope.case, &raw)?;
                 if memory == &baseline {
-                    return Ok(());
+                    return Ok(None);
                 }
                 let merged = crate::memory_merge::merge_case_edit(
                     actor,
@@ -3027,19 +3108,15 @@ impl Store {
             }
             _ => None,
         };
-        let memory = projected_edit.as_ref().map_or(memory, |(merged, _)| merged);
-        self.validate_memory_scope(actor, memory)?;
-        let bytes = canonical(memory)?;
+        let (memory, projection_head) = match projected_edit {
+            Some((merged, head)) => (Cow::Owned(merged), Some(head)),
+            None => (Cow::Borrowed(memory), None),
+        };
+        self.validate_memory_scope(actor, &memory)?;
+        let bytes = canonical(memory.as_ref())?;
         let sha = digest(&bytes);
-        let old: Option<(i64, String)> = sql(self.connection.query_row(
-            "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1",
-            [actor],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional())?;
-        if projected_edit
-            .as_ref()
-            .is_some_and(|(_, head)| *head != old)
-        {
+        let old = Self::memory_head_on(&self.connection, actor)?;
+        if projection_head.is_some_and(|head| head != old) {
             return Err(failure(
                 "REVISION_CONFLICT",
                 "記憶の保存版が処理中に変わりました。",
@@ -3056,9 +3133,9 @@ impl Store {
                 ));
             }
             if *old_sha == sha {
-                return Ok(());
+                return Ok(None);
             }
-            Self::validate_memory_evolution(&previous, memory)?;
+            Self::validate_memory_evolution(&previous, &memory)?;
             Some(previous)
         } else if memory.revision > 1 {
             return Err(failure(
@@ -3076,25 +3153,41 @@ impl Store {
                 "published actor memory digest differs from its canonical snapshot",
             ));
         }
-        let transaction = self.transaction()?;
-        self.verify_memory_use_on(&transaction, actor)?;
-        let current: Option<(i64, String)> = sql(transaction.query_row(
-            "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1", [actor], |r| Ok((r.get(0)?,r.get(1)?)),
-        ).optional())?;
-        if current != old {
+        Ok(Some(PreparedMemory {
+            value: memory,
+            previous: previous_memory,
+            expected_head: old,
+            sha,
+            length,
+        }))
+    }
+
+    fn write_prepared_memory(
+        &self,
+        transaction: &Transaction<'_>,
+        actor: &str,
+        memory: &PreparedMemory<'_>,
+    ) -> Result<()> {
+        self.verify_memory_use_on(transaction, actor)?;
+        if Self::memory_head_on(transaction, actor)? != memory.expected_head {
             return Err(failure(
                 "REVISION_CONFLICT",
                 "actor memory changed while a new immutable revision was prepared",
             ));
         }
-        Self::reference(&transaction, &sha, length, "memory")?;
+        Self::reference(transaction, &memory.sha, memory.length, "memory")?;
         sql(transaction.execute(
             "INSERT INTO memory_revision(actor_id,revision,record_sha256) VALUES(?1,?2,?3)",
-            params![actor, integer(memory.revision)?, sha],
+            params![actor, integer(memory.value.revision)?, memory.sha],
         ))?;
-        sync_memory_index(&transaction, actor, previous_memory.as_ref(), memory)?;
-        sql(transaction.commit())?;
-        Ok(())
+        sync_memory_index(transaction, actor, memory.previous.as_ref(), &memory.value)
+    }
+
+    fn memory_head_on(connection: &Connection, actor: &str) -> Result<Option<(i64, String)>> {
+        sql(connection.query_row(
+            "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1",
+            [actor], |row| Ok((row.get(0)?, row.get(1)?)),
+        ).optional())
     }
 
     /// Reports orphan published content for diagnostics. It does not delete

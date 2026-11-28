@@ -1250,6 +1250,40 @@ pub(crate) fn seal_with_source_context(
     source_context: Option<SourceContext>,
 ) -> Result<InputBundle> {
     validate_user_seal_request(request, previous)?;
+    if crate::premise_correction_input::has_correction_prefix(&request.text) {
+        let text = request.text.trim();
+        let after_scope = text
+            .strip_prefix("[scope=")
+            .and_then(|text| text.split_once(']'))
+            .map_or(text, |(_, clause)| clause.trim_start());
+        let legacy_colon = ["訂正:", "訂正：", "訂正します:", "訂正します："]
+            .iter()
+            .find_map(|prefix| after_scope.strip_prefix(prefix));
+        let legacy = match legacy_colon {
+            Some(clause) if single_correction_clause(clause.trim()) => {
+                premise_correction_intent(&request.text)?
+            }
+            _ => None,
+        };
+        if let Some(intent) = legacy.filter(|intent| {
+            matches!(
+                intent,
+                Intent::CorrectPremise { .. } | Intent::CorrectPreviousPremise { .. }
+            )
+        }) && let Some(roles) = premise_correction_source_roles(&request.text, &intent)?
+        {
+            let contextual = matches!(intent, Intent::CorrectPreviousPremise { .. });
+            return seal_user_input(
+                request,
+                if contextual { previous } else { None },
+                PARSER_VERSION,
+                intent,
+                roles,
+                Vec::new(),
+            );
+        }
+        return seal_prefixed_correction(request, parse_prefixed_correction(request)?, None);
+    }
     if let Some(named) = crate::conversation_history_input::parse(&request.text) {
         return seal_named_conversation_return(request, named, None);
     }
@@ -3348,9 +3382,261 @@ fn premise_correction_source_roles(
 /// Project complete source-role maps for supported assertions and corrections.
 /// Contextual assertion/correction maps retain the literal pronoun; the sealed
 /// bundle binds that request to the prior result used by Core.
+pub(crate) const PREFIXED_CORRECTION_PARSER_VERSION: &str =
+    "declarative-ja-v256-prefixed-premise-correction";
+
+pub(crate) struct PrefixedCorrection {
+    pub(crate) superseded: Option<Proposition>,
+    pub(crate) replacement: Proposition,
+    pub(crate) needs_context: bool,
+    roles: BTreeMap<String, Vec<SourceSpan>>,
+}
+
+pub(crate) fn compatible_correction(old: &Proposition, new: &Proposition) -> bool {
+    !old.negative
+        && !new.negative
+        && !singular_previous_subject(&old.subject)
+        && crate::relations::is_ground(old)
+        && crate::relations::is_ground(new)
+        && old.object != new.object
+        && Proposition {
+            object: new.object.clone(),
+            ..old.clone()
+        } == *new
+}
+
+fn prefixed_correction_scope_supported(request: &RequestEnvelope) -> bool {
+    matches!(request.locale.as_str(), "ja" | "ja-JP")
+        && request.attachments.is_empty()
+        && request.output_path.is_none()
+        && request.purpose.is_none()
+        && request.speech.is_none()
+}
+
+fn single_correction_clause(clause: &str) -> bool {
+    let statement = clause.strip_suffix(['。', '．', '.']).unwrap_or(clause);
+    if statement.is_empty()
+        || statement.contains([
+            '。', '！', '!', '？', '?', '；', ';', '、', '，', ',', '：', ':', '\r', '\n',
+        ])
+    {
+        return false;
+    }
+    let mut chars = statement.chars().peekable();
+    let mut previous = None;
+    while let Some(current) = chars.next() {
+        if matches!(current, '.' | '．')
+            && !(previous.is_some_and(|c: char| c.is_ascii_alphanumeric())
+                && chars.peek().is_some_and(|c| c.is_ascii_alphanumeric()))
+        {
+            return false;
+        }
+        previous = Some(current);
+    }
+    true
+}
+
+pub(crate) fn parse_prefixed_correction(
+    request: &RequestEnvelope,
+) -> Result<Option<PrefixedCorrection>> {
+    let Some(parsed) = crate::premise_correction_input::parse(&request.text) else {
+        return Ok(None);
+    };
+    let clause = &parsed.replacement.text;
+    if !single_correction_clause(clause) {
+        return Ok(None);
+    }
+    let (superseded, replacement, source_roles, path_prefix) =
+        match premise_correction_intent(clause)? {
+            Some(intent @ Intent::CorrectPremise { .. }) => {
+                let Some(roles) = premise_correction_source_roles(clause, &intent)? else {
+                    return Ok(None);
+                };
+                let Intent::CorrectPremise {
+                    superseded,
+                    replacement,
+                } = intent
+                else {
+                    unreachable!()
+                };
+                (Some(superseded), replacement, roles, None)
+            }
+            Some(_) => return Ok(None),
+            None => {
+                let intent = interpret(clause)?;
+                let Intent::Assert { proposition } = &intent else {
+                    return Ok(None);
+                };
+                if proposition.negative
+                    || singular_previous_subject(&proposition.subject)
+                    || !crate::relations::is_ground(proposition)
+                {
+                    return Ok(None);
+                }
+                let roles = source_role_spans(clause, &intent)?;
+                if !roles.contains_key("/Assert/proposition/subject")
+                    || !roles.contains_key("/Assert/proposition/object")
+                {
+                    return Ok(None);
+                }
+                (
+                    None,
+                    proposition.clone(),
+                    roles,
+                    Some("/Assert/proposition/"),
+                )
+            }
+        };
+    let mut roles = BTreeMap::from([("/CorrectPremise/cue".into(), vec![parsed.cue])]);
+    for (role, mut spans) in source_roles {
+        let role = match path_prefix {
+            Some(prefix) => {
+                let Some(suffix) = role.strip_prefix(prefix) else {
+                    return Ok(None);
+                };
+                format!("/CorrectPremise/replacement/{suffix}")
+            }
+            None => role,
+        };
+        for span in &mut spans {
+            span.start += parsed.replacement.start;
+            span.end += parsed.replacement.start;
+            if source_span_at(&request.text, span.start, span.end).as_ref() != Some(span) {
+                return Ok(None);
+            }
+        }
+        roles.insert(role, spans);
+    }
+    let needs_context =
+        superseded.is_none() || parsed.explicit_previous || request.context_ref.is_some();
+    Ok(Some(PrefixedCorrection {
+        superseded,
+        replacement,
+        needs_context,
+        roles,
+    }))
+}
+
+pub(crate) fn seal_prefixed_correction(
+    request: &RequestEnvelope,
+    parsed: Option<PrefixedCorrection>,
+    anchor: Option<(&ResultRecord, &Proposition)>,
+) -> Result<InputBundle> {
+    let clarification = "元の前提と新しい前提を書いてください。直前の前提を訂正する場合は、新しい前提を一文で指定してください。";
+    let Some(parsed) = parsed.filter(|_| prefixed_correction_scope_supported(request)) else {
+        let reason = if prefixed_correction_scope_supported(request) {
+            clarification
+        } else {
+            "前提の訂正は、日本語の本文だけで指定してください。"
+        };
+        return seal_user_input(
+            request,
+            None,
+            PREFIXED_CORRECTION_PARSER_VERSION,
+            Intent::Unknown {
+                reason: reason.into(),
+            },
+            BTreeMap::new(),
+            vec![reason.into()],
+        );
+    };
+    let superseded = if parsed.needs_context {
+        anchor.map(|(_, proposition)| proposition.clone())
+    } else {
+        parsed.superseded.clone()
+    };
+    let intent = if let Some(superseded) = superseded {
+        if !compatible_correction(&superseded, &parsed.replacement)
+            || parsed
+                .superseded
+                .as_ref()
+                .is_some_and(|stated| stated != &superseded)
+        {
+            return Err(failure(
+                "CORRECTION_TARGET_MISMATCH",
+                "訂正前後で対象・関係・適用範囲が同じか確認してください。",
+            ));
+        }
+        Intent::CorrectPremise {
+            superseded,
+            replacement: parsed.replacement,
+        }
+    } else {
+        Intent::Unknown {
+            reason: clarification.into(),
+        }
+    };
+    seal_user_input(
+        request,
+        anchor.map(|(result, _)| result),
+        PREFIXED_CORRECTION_PARSER_VERSION,
+        intent,
+        parsed.roles,
+        Vec::new(),
+    )
+}
+
+fn prefixed_correction_evidence(bundle: &InputBundle) -> Result<Option<SealedSourceEvidence>> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let Intent::CorrectPremise {
+        superseded,
+        replacement,
+    } = &meaning.intent
+    else {
+        return Ok(None);
+    };
+    let Some(parsed) = parse_prefixed_correction(request)? else {
+        return Ok(None);
+    };
+    let scoped = meaning.context_result_ref.is_some();
+    if !prefixed_correction_scope_supported(request)
+        || request.text.len() > request.budget.max_input_bytes
+        || meaning.source_kind != "USER_REQUEST"
+        || !meaning.unresolved.is_empty()
+        || !compatible_correction(superseded, replacement)
+        || parsed.replacement != *replacement
+        || parsed
+            .superseded
+            .as_ref()
+            .is_some_and(|stated| stated != superseded)
+        || parsed.needs_context != scoped
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| Some(id) != meaning.context_result_ref.as_ref())
+        || (!scoped && bundle.context_sha256 != identity(&None::<&ResultRecord>)?)
+        || meaning.source_roles != parsed.roles
+        || !matches!(meaning.spans.as_slice(), [span] if span.start==0 && span.end==request.text.len() && span.text==request.text)
+        || bundle.raw_sha256 != digest(request.text.as_bytes())
+        || bundle.semantic_signature != identity(meaning)?
+        || bundle.fingerprint
+            != identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                PREFIXED_CORRECTION_PARSER_VERSION,
+            ))?
+    {
+        return Ok(None);
+    }
+    Ok(Some(SealedSourceEvidence {
+        evidence_version: SOURCE_EVIDENCE_VERSION.into(),
+        input_fingerprint: identity(request)?,
+        bundle_fingerprint: bundle.fingerprint.clone(),
+        raw_sha256: bundle.raw_sha256.clone(),
+        semantic_signature: bundle.semantic_signature.clone(),
+        parser_version: meaning.parser_version.clone(),
+        source_roles: parsed.roles,
+    }))
+}
+
 pub(crate) fn assertion_source_evidence(
     bundle: &InputBundle,
 ) -> Result<Option<SealedSourceEvidence>> {
+    if bundle.meaning.parser_version == PREFIXED_CORRECTION_PARSER_VERSION {
+        return prefixed_correction_evidence(bundle);
+    }
     if matches!(
         &bundle.meaning.intent,
         Intent::CorrectPremise { .. } | Intent::CorrectPreviousPremise { .. }

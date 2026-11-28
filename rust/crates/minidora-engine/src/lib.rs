@@ -47,6 +47,7 @@ mod pdf_scan;
 mod pdf_text;
 mod pdf_worker;
 pub mod ports;
+mod premise_correction_input;
 mod purpose_profile;
 pub mod recovery;
 pub mod relations;

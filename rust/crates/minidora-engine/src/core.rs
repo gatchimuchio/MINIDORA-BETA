@@ -8915,7 +8915,11 @@ impl Engine {
         let mut explicit_summary_question_scope = None;
         let mut hearing_answer = None;
         let sealed = sealed.and_then(|bundle| {
-            if bundle.meaning.parser_version == input::NAMED_CONVERSATION_PARSER_VERSION {
+            if matches!(
+                bundle.meaning.parser_version.as_str(),
+                input::NAMED_CONVERSATION_PARSER_VERSION
+                    | input::PREFIXED_CORRECTION_PARSER_VERSION
+            ) {
                 return Ok(bundle);
             }
             if has_compute_budget
@@ -9432,6 +9436,33 @@ impl Engine {
                 Err(Error::Contract { code, message })
                     if matches!(code.as_str(), "DEADLINE" | "ACTION_BUDGET_EXHAUSTED") =>
                 {
+                    state.bundle = Some(bundle);
+                    self.advance(&mut state, Lifecycle::Sealed, None)?;
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if bundle.meaning.parser_version == input::PREFIXED_CORRECTION_PARSER_VERSION
+            && bundle.meaning.unresolved.is_empty()
+            && matches!(bundle.meaning.intent, Intent::Unknown { .. })
+            && has_compute_budget
+        {
+            let binding = (|| -> Result<InputBundle> {
+                let prior = previous.ok_or_else(|| failure(
+                    "MISSING_CORRECTION_CONTEXT",
+                    "訂正する直前の提示前提を特定できません。元の値と新しい値を一文で指定してください。",
+                ))?;
+                let anchor = prefixed_correction_anchor(&self.store, &state, prior)?;
+                input::seal_prefixed_correction(
+                    &request,
+                    input::parse_prefixed_correction(&request)?,
+                    Some((prior, &anchor.proposition)),
+                )
+            })();
+            match binding {
+                Ok(bound) => bundle = bound,
+                Err(Error::Contract { code, message }) => {
                     state.bundle = Some(bundle);
                     self.advance(&mut state, Lifecycle::Sealed, None)?;
                     return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
@@ -10864,6 +10895,7 @@ impl Engine {
         };
         let mut units = Vec::new();
         let mut pending_hearing = false;
+        let mut pending_correction_memory = None;
         let mut approved_surfaces = None;
         let mut report_goal_content = None;
         enum MediaOutput {
@@ -14358,7 +14390,9 @@ impl Engine {
             } => {
                 let _ = direct_typed_relation_correction_input(&bundle, superseded, replacement)?;
                 let source_evidence = input::assertion_source_evidence(&bundle)?;
-                if bundle.meaning.parser_version == input::PARSER_VERSION
+                let prefixed =
+                    bundle.meaning.parser_version == input::PREFIXED_CORRECTION_PARSER_VERSION;
+                if (bundle.meaning.parser_version == input::PARSER_VERSION || prefixed)
                     && source_evidence.is_none()
                 {
                     return self.stop(
@@ -14369,7 +14403,23 @@ impl Engine {
                     );
                 }
                 let mut memory = self.store.load_memory(actor)?;
-                let targets = active_direct_premise_ids(&memory, superseded);
+                let targets = if prefixed {
+                    match prefixed_correction_targets(
+                        &self.store,
+                        &state,
+                        &bundle,
+                        &memory,
+                        superseded,
+                    ) {
+                        Ok(targets) => targets,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                } else {
+                    active_direct_premise_ids(&memory, superseded)
+                };
                 if targets.is_empty() {
                     return self.stop(
                         &mut state,
@@ -14379,29 +14429,24 @@ impl Engine {
                     );
                 }
 
-                let (dependencies, invalidated_count) = apply_premise_correction(
-                    &self.store,
-                    actor,
+                let (dependencies, invalidated_count) = prepare_premise_correction(
                     &mut memory,
                     &targets,
                     (superseded, replacement),
                     &fingerprint,
                     source_evidence,
                 )?;
-                let negative_superseded = Proposition {
-                    negative: true,
-                    ..superseded.clone()
-                };
-                units.push(format!(
-                    "訂正を会話内の提示前提として記録しました: {}。",
-                    describe(&negative_superseded)
+                if prefixed {
+                    pending_correction_memory = Some(memory);
+                } else {
+                    self.store.save_memory(actor, &memory)?;
+                }
+                units.extend(premise_correction_units(
+                    superseded,
+                    replacement,
+                    invalidated_count,
+                    prefixed,
                 ));
-                units.push(format!("置き換え後の提示前提: {}。", describe(replacement)));
-                units.push(format!(
-                    "以前の前提とその依存記録を{}件失効させ、元の記録は保持しました。",
-                    invalidated_count
-                ));
-                units.push("現実世界の真偽を検証したものではありません。".into());
                 result.dependencies = dependencies;
                 result.guarantee = Guarantee::UserPremise;
             }
@@ -17184,7 +17229,7 @@ impl Engine {
                 "採用前に締切へ達しました。",
             );
         }
-        state.result = Some(result.clone());
+        state.result = pending_correction_memory.is_none().then(|| result.clone());
         if let Some(source) = bundle
             .meaning
             .context_result_ref
@@ -17536,7 +17581,7 @@ impl Engine {
         result.text = plan.text.clone();
         result.content_plan = Some(plan.clone());
         result.lifecycle = Lifecycle::Adopted;
-        state.result = Some(result.clone());
+        state.result = pending_correction_memory.is_none().then(|| result.clone());
         self.advance(&mut state, Lifecycle::Adopted, None)?;
         if Instant::now() >= deadline {
             return self.stop(
@@ -17582,7 +17627,7 @@ impl Engine {
             &BTreeMap::from([("content".into(), content_artifact)]),
         )?;
         result.render = Some(render.clone());
-        state.result = Some(result.clone());
+        state.result = pending_correction_memory.is_none().then(|| result.clone());
         self.advance(
             &mut state,
             Lifecycle::Running,
@@ -17824,11 +17869,20 @@ impl Engine {
                 "元Goalの締切に達したため、得られた成果と作用記録を保持しました。",
             );
         }
+        if let Some(memory) = pending_correction_memory.as_ref() {
+            result.actor_memory_revision = Some(memory.revision);
+        }
         result.lifecycle = Lifecycle::Commit;
         state.result = Some(result.clone());
         #[cfg(test)]
         let deadline = self.output_deadline_at(OutputCheckpoint::CommitPersistence, deadline);
-        match self.advance_before(&mut state, Lifecycle::Commit, None, Some(deadline)) {
+        match self.advance_before_with_memory(
+            &mut state,
+            Lifecycle::Commit,
+            None,
+            Some(deadline),
+            pending_correction_memory.as_ref(),
+        ) {
             Ok(()) => {}
             Err(Error::Contract { code, .. }) if code == "DEADLINE" => {
                 return self.stop(
@@ -17837,6 +17891,26 @@ impl Engine {
                     "DEADLINE",
                     "終端を保存する前に元Goalの締切に達しました。得られた成果と作用記録を保持しました。",
                 );
+            }
+            Err(Error::Contract { code, message })
+                if pending_correction_memory.is_some()
+                    && matches!(
+                        code.as_str(),
+                        "REVISION_CONFLICT"
+                            | "MEMORY_SCOPE_CONFLICT"
+                            | "MEMORY_POLICY_CHANGED"
+                            | "MEMORY_INDEX_CONFLICT"
+                    ) =>
+            {
+                if self
+                    .store
+                    .load_case(actor, &request.case_id)?
+                    .as_ref()
+                    .is_some_and(|current| current.revision == state.revision)
+                {
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                return Err(failure(&code, message));
             }
             Err(error) => return Err(error),
         }
@@ -17907,6 +17981,17 @@ impl Engine {
         reason: Option<String>,
         deadline: Option<Instant>,
     ) -> Result<()> {
+        self.advance_before_with_memory(state, next, reason, deadline, None)
+    }
+
+    fn advance_before_with_memory(
+        &self,
+        state: &mut CaseRevision,
+        next: Lifecycle,
+        reason: Option<String>,
+        deadline: Option<Instant>,
+        memory: Option<&MemoryState>,
+    ) -> Result<()> {
         if !state.lifecycle.permits(next) {
             return Err(failure(
                 "INVALID_TRANSITION",
@@ -17922,7 +18007,7 @@ impl Engine {
             result.lifecycle = next;
         }
         self.store
-            .append_case_before(&state.actor_id, &updated, deadline)?;
+            .append_case_before_with_memory(&state.actor_id, &updated, deadline, memory)?;
         *state = updated;
         Ok(())
     }
@@ -18051,6 +18136,23 @@ impl Engine {
             result.dependencies.clear();
             result.content_plan = None;
             result.render = None;
+        }
+        let atomic_correction = state.bundle.as_ref().is_some_and(|bundle| {
+            bundle.meaning.parser_version == input::PREFIXED_CORRECTION_PARSER_VERSION
+        });
+        let message = if atomic_correction && code == "DEADLINE" {
+            "締切までに訂正を確定できませんでした。"
+        } else {
+            message
+        };
+        if atomic_correction {
+            result.text.clear();
+            result.guarantee = Guarantee::Unknown;
+            result.dependencies.clear();
+            result.content_plan = None;
+            result.render = None;
+            result.execution_graph_ref = None;
+            result.actor_memory_revision = None;
         }
         result.lifecycle = lifecycle;
         result.reason = Some(format!("{code}: {message}"));
@@ -18418,6 +18520,254 @@ fn direct_atomic_meaning_input(
     Ok(Some(input))
 }
 
+fn prefixed_correction_anchor(
+    store: &Store,
+    state: &CaseRevision,
+    prior: &ResultRecord,
+) -> Result<PreviousAssertionContext> {
+    let unavailable = || {
+        failure(
+            "MISSING_CORRECTION_CONTEXT",
+            "訂正する直前の提示前提を特定できません。元の値と新しい値を一文で指定してください。",
+        )
+    };
+    if state.prior_results.get(&prior.id) != Some(prior)
+        || store
+            .get_input_result(
+                &state.actor_id,
+                &state.case_id,
+                &prior.input_id,
+                prior.input_version,
+            )?
+            .as_ref()
+            != Some(prior)
+    {
+        return Err(unavailable());
+    }
+    previous_assertion_context(
+        store,
+        &state.actor_id,
+        &state.case_id,
+        &state.prior_results,
+        prior,
+    )?
+    .filter(|assertion| assertion.context.is_none() && assertion.source_evidence.is_some())
+    .ok_or_else(unavailable)
+}
+
+fn prefixed_correction_targets(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    memory: &MemoryState,
+    superseded: &Proposition,
+) -> Result<Vec<String>> {
+    let Some(id) = bundle.meaning.context_result_ref.as_ref() else {
+        return Ok(active_direct_premise_ids(memory, superseded));
+    };
+    let mismatch = || {
+        failure(
+            "CORRECTION_TARGET_MISMATCH",
+            "元の前提が訂正の参照先と一致しません。",
+        )
+    };
+    let prior = state.prior_results.get(id).ok_or_else(mismatch)?;
+    if !registered_relation_context_matches(bundle, &state.prior_results, prior)?
+        || (bundle.request.context_ref.is_none()
+            && store.input_start_predecessor(state)?.as_ref() != Some(prior))
+    {
+        return Err(mismatch());
+    }
+    store.inherit_memory_context(&state.actor_id, &state.case_id, prior)?;
+    let anchor = prefixed_correction_anchor(store, state, prior)?;
+    let fact = anchor.active_fact(memory)?;
+    if fact.proposition != *superseded
+        || fact.source_evidence.as_ref() != anchor.source_evidence.as_ref()
+    {
+        return Err(mismatch());
+    }
+    Ok(vec![fact.id.clone()])
+}
+
+fn premise_correction_units(
+    superseded: &Proposition,
+    replacement: &Proposition,
+    invalidated_count: usize,
+    atomic: bool,
+) -> Vec<String> {
+    let negative = Proposition {
+        negative: true,
+        ..superseded.clone()
+    };
+    if atomic {
+        return vec![
+            format!("訂正する元の前提: {}。", describe(superseded)),
+            format!("置き換え後の提示前提: {}。", describe(replacement)),
+            format!(
+                "失効対象は{}件です。元の記録は履歴に残ります。",
+                invalidated_count
+            ),
+        ];
+    }
+    vec![
+        format!(
+            "訂正を会話内の提示前提として記録しました: {}。",
+            describe(&negative)
+        ),
+        format!("置き換え後の提示前提: {}。", describe(replacement)),
+        format!(
+            "以前の前提とその依存記録を{}件失効させ、元の記録は保持しました。",
+            invalidated_count
+        ),
+        "現実世界の真偽を検証したものではありません。".into(),
+    ]
+}
+
+pub(crate) fn verify_committed_prefixed_correction(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+) -> Result<()> {
+    let Some(bundle) = state.bundle.as_ref().filter(|bundle| {
+        bundle.meaning.parser_version == input::PREFIXED_CORRECTION_PARSER_VERSION
+    }) else {
+        return Ok(());
+    };
+    let invalid = || {
+        failure(
+            "CORRECTION_REPLAY_MISMATCH",
+            "保存した訂正と当時の前提・回答を照合できません。",
+        )
+    };
+    let Intent::CorrectPremise {
+        superseded,
+        replacement,
+    } = &bundle.meaning.intent
+    else {
+        return Err(invalid());
+    };
+    let actor = &state.actor_id;
+    let case = &state.case_id;
+    let evidence = input::assertion_source_evidence(bundle)?.ok_or_else(invalid)?;
+    if result.lifecycle != Lifecycle::Commit
+        || result.guarantee != Guarantee::UserPremise
+        || !result.receipts.is_empty()
+        || !result.evidence.is_empty()
+        || result.id != identity(&bundle.request)?
+        || state.input_fingerprint.as_ref() != Some(&result.id)
+        || store
+            .get_input_bundle(actor, case, &result.input_id, result.input_version)?
+            .is_none_or(|(_, recorded)| recorded != *bundle)
+        || store
+            .get_input_result(actor, case, &result.input_id, result.input_version)?
+            .as_ref()
+            != Some(result)
+    {
+        return Err(invalid());
+    }
+    store.inherit_memory_context(actor, case, result)?;
+    let after_id = result.actor_memory_revision.ok_or_else(invalid)?;
+    let before_id = after_id.checked_sub(1).ok_or_else(invalid)?;
+    let mut candidate = store
+        .load_memory_revision(actor, before_id)?
+        .ok_or_else(invalid)?;
+    let known_after = store
+        .load_memory_revision(actor, after_id)?
+        .ok_or_else(invalid)?;
+    let targets = prefixed_correction_targets(store, state, bundle, &candidate, superseded)?;
+    if targets.is_empty() {
+        return Err(invalid());
+    }
+    let (dependencies, changed) = prepare_premise_correction(
+        &mut candidate,
+        &targets,
+        (superseded, replacement),
+        &result.id,
+        Some(evidence),
+    )?;
+    if !store.bound_memory_policy(actor)?.enabled {
+        candidate = store.project_memory(actor, case, &candidate)?;
+    }
+    let units = premise_correction_units(superseded, replacement, changed, true);
+    let plan = result.content_plan.as_ref().ok_or_else(invalid)?;
+    let render = result.render.as_ref().ok_or_else(invalid)?;
+    let goal_ref = state.goal_sha256.as_ref().ok_or_else(invalid)?;
+    let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
+    if candidate != known_after
+        || dependencies != result.dependencies
+        || units != plan.required_units
+        || units.join("\n") != result.text
+        || goal.input_fingerprint != result.id
+        || goal.intent != bundle.meaning.intent
+        || goal.budget != bundle.request.budget
+        || goal.permissions != bundle.request.permissions
+        || goal.output_path.is_some()
+        || !validate_goal_render(&goal, plan, render)
+    {
+        return Err(invalid());
+    }
+    crate::document::revalidate_previous_document_render(
+        store,
+        actor,
+        case,
+        result,
+        None,
+        "CORRECTION_REPLAY_MISMATCH",
+        "premise correction",
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+#[test]
+fn prefixed_premise_correction_rolls_back_at_commit_deadline() {
+    let directory = std::env::temp_dir().join(format!(
+        "minidora-prefixed-correction-{}",
+        std::process::id()
+    ));
+    std::fs::create_dir(&directory).unwrap();
+    let actor = "correction-atomic-actor";
+    let case = "correction-atomic-case";
+    let mut engine = Engine::open(&directory).unwrap();
+    let anchor = engine
+        .execute(
+            actor,
+            RequestEnvelope::new(case, "assert", actor, "海岸班は第一区画です。"),
+        )
+        .unwrap();
+    assert_eq!(anchor.lifecycle, Lifecycle::Commit);
+    let before = engine.store.load_memory(actor).unwrap();
+
+    engine.expire_output_at = Some(OutputCheckpoint::CommitPersistence);
+    let text = "訂正します。海岸班は第二区画です。";
+    let suspended = engine
+        .execute(actor, RequestEnvelope::new(case, "deadline", actor, text))
+        .unwrap();
+    assert_eq!(suspended.lifecycle, Lifecycle::Suspend, "{suspended:?}");
+    assert!(
+        suspended
+            .reason
+            .as_deref()
+            .is_some_and(|reason| reason.starts_with("DEADLINE:"))
+    );
+    assert!(suspended.content_plan.is_none() && suspended.actor_memory_revision.is_none());
+    assert_eq!(engine.store.load_memory(actor).unwrap(), before);
+
+    engine.expire_output_at = None;
+    let mut retry = RequestEnvelope::new(case, "retry", actor, text);
+    retry.context_ref = Some(anchor.id);
+    let committed = engine.execute(actor, retry).unwrap();
+    assert_eq!(committed.lifecycle, Lifecycle::Commit, "{committed:?}");
+    assert_eq!(committed.actor_memory_revision, Some(before.revision + 1));
+    assert_eq!(
+        crate::recovery::reconcile(&engine.store, actor, case).unwrap(),
+        committed
+    );
+
+    drop(engine);
+    std::fs::remove_dir_all(directory).unwrap();
+}
+
 fn active_direct_premise_ids(memory: &MemoryState, proposition: &Proposition) -> Vec<String> {
     memory
         .facts
@@ -18435,6 +18785,19 @@ fn active_direct_premise_ids(memory: &MemoryState, proposition: &Proposition) ->
 fn apply_premise_correction(
     store: &Store,
     actor: &str,
+    memory: &mut MemoryState,
+    targets: &[String],
+    propositions: (&Proposition, &Proposition),
+    fingerprint: &str,
+    source_evidence: Option<SealedSourceEvidence>,
+) -> Result<(Vec<String>, usize)> {
+    let result =
+        prepare_premise_correction(memory, targets, propositions, fingerprint, source_evidence)?;
+    store.save_memory(actor, memory)?;
+    Ok(result)
+}
+
+fn prepare_premise_correction(
     memory: &mut MemoryState,
     targets: &[String],
     propositions: (&Proposition, &Proposition),
@@ -18466,7 +18829,6 @@ fn apply_premise_correction(
     memory.revision = original_memory_revision
         .checked_add(1)
         .ok_or_else(|| failure("MEMORY_REVISION_LIMIT", "memory revision overflow"))?;
-    store.save_memory(actor, memory)?;
     let invalidated_count = invalidated.len();
     invalidated.push(negative_fact.id);
     invalidated.push(replacement_fact.id);
@@ -19441,11 +19803,13 @@ fn committed_user_premise_input(
 
 fn is_natural_correction(bundle: &InputBundle) -> bool {
     // The typed API may explicitly move a premise to a different scope.
-    bundle.meaning.parser_version == input::PARSER_VERSION
-        && matches!(
-            bundle.meaning.intent,
-            Intent::CorrectPremise { .. } | Intent::CorrectPreviousPremise { .. }
-        )
+    matches!(
+        bundle.meaning.parser_version.as_str(),
+        input::PARSER_VERSION | input::PREFIXED_CORRECTION_PARSER_VERSION
+    ) && matches!(
+        bundle.meaning.intent,
+        Intent::CorrectPremise { .. } | Intent::CorrectPreviousPremise { .. }
+    )
 }
 
 fn correction_assertion_source(
