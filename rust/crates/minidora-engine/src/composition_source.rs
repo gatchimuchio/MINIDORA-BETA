@@ -167,26 +167,32 @@ pub(crate) fn select_json_number<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{composition, core::base_result, input};
+    use crate::{composition, core::base_result, input, scheduler::Scheduler};
     use minidora_domain::{
-        BranchOutcome, BranchState, RequestEnvelope, RetryAfterDirective, RetryAfterObservation,
-        digest, identity,
+        BranchOutcome, BranchState, ContentPlan, Guarantee, Lifecycle, RequestEnvelope,
+        RetryAfterDirective, RetryAfterObservation, digest, identity,
     };
-    use std::collections::BTreeMap;
+    use std::{collections::BTreeMap, path::Path};
 
     const URL: &str = "https://source.example/values.json";
 
-    fn bundle(store: &Store, case: &str) -> InputBundle {
+    fn bundle(store: &Store, case: &str, destination: Option<&Path>) -> InputBundle {
         let mut request = RequestEnvelope::new(
             case,
             "read",
             "owner",
-            &format!("- 取得 {URL}\n- json-number @{{request-1}} /a~1b/0"),
+            &format!(
+                "- 取得 {URL}\n- json-number @{{request-1}} /a~1b/0\n- Calculate @{{request-2}} + 7"
+            ),
         );
         request
             .permissions
             .read_hosts
             .insert("source.example".into());
+        if let Some(path) = destination {
+            request.output_path = Some(path.to_owned());
+            request.permissions.write_paths.insert(path.to_owned());
+        }
         assert!(
             store
                 .register_input("owner", &request, &identity(&request).unwrap())
@@ -224,7 +230,7 @@ mod tests {
     fn composed_retained_source_selects_exact_json_and_binds_calculation() {
         let temporary = tempfile::tempdir().unwrap();
         let store = Store::open(temporary.path()).unwrap();
-        let prepared = bundle(&store, "original");
+        let prepared = bundle(&store, "original", None);
         let body = r#"{"a/b":[9.007199254740993e+15,"91"],"ラベル":"数値"}"#;
         let packet = fixture(body);
         let reference = store.put_artifact("owner", "original", &packet).unwrap();
@@ -255,15 +261,159 @@ mod tests {
             select_json_number(&store, &prepared, &reference, "/a~1b/1"),
             Err(Error::Contract { code, .. }) if code == "JSON_POINTER_NOT_NUMERIC"
         ));
-        let elsewhere = bundle(&store, "elsewhere");
+        let elsewhere = bundle(&store, "elsewhere", None);
         assert!(select_json_number(&store, &elsewhere, &reference, "/a~1b/0").is_err());
+    }
+
+    #[test]
+    fn composed_file_delivery_replays_retained_https_number_and_calculation() {
+        let temporary = tempfile::tempdir().unwrap();
+        let target = temporary.path().join("result.txt");
+        let store = Store::open(temporary.path()).unwrap();
+        let prepared = bundle(&store, "file-replay", Some(&target));
+        let request = &prepared.request;
+        let Intent::IndependentRequests { items } = &prepared.meaning.intent else {
+            panic!("expected sealed compound input");
+        };
+        let packet = fixture(r#"{"a/b":[9.007199254740993e+15]}"#);
+        let packet_ref = store
+            .put_artifact(&request.actor_id, &request.case_id, &packet)
+            .unwrap();
+        let mut graph = Scheduler::new(
+            composition::nodes(items).collect(),
+            request.budget.max_actions,
+        )
+        .unwrap();
+        let mut outcome = composition::Outcome::new();
+        // Return the retained fixture via the read seam. No port is invoked.
+        composition::evaluate_items(
+            &store,
+            &prepared,
+            items,
+            &mut graph,
+            || false,
+            |index, uri| {
+                assert_eq!((index, uri), (0, URL));
+                Ok((packet_ref.clone(), packet.clone()))
+            },
+            |_, bytes| store.put_bytes(&request.actor_id, &request.case_id, bytes),
+            &mut outcome,
+        )
+        .unwrap();
+        assert!(outcome.complete());
+        assert_eq!(outcome.guarantee, Guarantee::SourceReport);
+        let mut result = base_result(request);
+        result.lifecycle = Lifecycle::Adopted;
+        result.text = outcome.units.join("\n");
+        result.guarantee = outcome.guarantee;
+        result.branch_outcomes = outcome.branches;
+        result.dependencies = result
+            .branch_outcomes
+            .iter()
+            .map(|branch| branch.artifact_ref.clone())
+            .collect();
+        assert!(result.text.ends_with(" = 9007199254741000"));
+        assert_eq!(
+            graph.consumed_by("request-2").unwrap()["request-1"],
+            result.dependencies[0]
+        );
+        assert_eq!(
+            graph.consumed_by("request-3").unwrap()["request-2"],
+            result.dependencies[1]
+        );
+        let compute_ref = store
+            .put_artifact(
+                &request.actor_id,
+                &request.case_id,
+                &(
+                    &result.calculation,
+                    &outcome.units,
+                    &result.evidence,
+                    &result.dependencies,
+                ),
+            )
+            .unwrap();
+        let model = language::SequenceModel::train(&outcome.units, 2, 1).unwrap();
+        let observation = model
+            .realize_supported(
+                std::slice::from_ref(&result.text),
+                request.budget.max_evidence_bytes,
+            )
+            .unwrap();
+        let mut dependencies = result.dependencies.clone();
+        dependencies.push(compute_ref);
+        let mut plan = ContentPlan {
+            id: String::new(),
+            text: observation.text.clone(),
+            locale: request.locale.clone(),
+            guarantee: result.guarantee.clone(),
+            required_units: outcome.units,
+            dependencies,
+            model_revision: observation.model_revision.clone(),
+            model_artifact_ref: store
+                .put_artifact(&request.actor_id, &request.case_id, &model)
+                .unwrap(),
+            model_observation_ref: store
+                .put_artifact(&request.actor_id, &request.case_id, &observation)
+                .unwrap(),
+        };
+        plan.id = identity(&plan).unwrap();
+        let plan_ref = store
+            .put_artifact(&request.actor_id, &request.case_id, &plan)
+            .unwrap();
+        drop(store);
+        let store = Store::open(temporary.path()).unwrap();
+        let plan: ContentPlan = serde_json::from_slice(
+            &store
+                .get_bytes(&request.actor_id, &request.case_id, &plan_ref)
+                .unwrap(),
+        )
+        .unwrap();
+        composition::verify_delivery(&store, &prepared, &result, &plan).unwrap();
+        assert!(!target.exists());
+
+        let replacement = fixture(r#"{"a/b":[9007199254740994]}"#);
+        let replacement_ref = store
+            .put_artifact(&request.actor_id, &request.case_id, &replacement)
+            .unwrap();
+        let bytes = store
+            .get_bytes(
+                &request.actor_id,
+                &request.case_id,
+                &result.branch_outcomes[0].artifact_ref,
+            )
+            .unwrap();
+        let mut altered_source: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        altered_source["evidence_ref"] = replacement_ref.into();
+        let altered_ref = store
+            .put_artifact(&request.actor_id, &request.case_id, &altered_source)
+            .unwrap();
+        let mut altered_result = result.clone();
+        let mut altered_plan = plan.clone();
+        altered_result.branch_outcomes[0].artifact_ref = altered_ref.clone();
+        altered_result.dependencies[0] = altered_ref.clone();
+        altered_plan.dependencies[0] = altered_ref;
+        assert!(matches!(
+            composition::verify_delivery(&store, &prepared, &altered_result, &altered_plan),
+            Err(Error::Contract { code, .. }) if code == "RECOVERY_COMPOUND_MISMATCH"
+        ));
+
+        let mut altered_result = result;
+        let mut altered_plan = plan;
+        altered_result.text.push_str("\nUnverified addition.");
+        altered_plan.text.clone_from(&altered_result.text);
+        assert!(matches!(
+            composition::verify_delivery(&store, &prepared, &altered_result, &altered_plan),
+            Err(Error::Contract { code, .. }) if code == "RECOVERY_COMPOUND_MISMATCH"
+        ));
+        assert!(!target.exists());
     }
 
     #[test]
     fn composed_retained_source_retry_requires_its_original_observation() {
         let temporary = tempfile::tempdir().unwrap();
         let store = Store::open(temporary.path()).unwrap();
-        let prepared = bundle(&store, "rate-limited");
+        let prepared = bundle(&store, "rate-limited", None);
         let Intent::IndependentRequests { items } = &prepared.meaning.intent else {
             panic!("expected sealed source item");
         };

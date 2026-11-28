@@ -10678,9 +10678,15 @@ impl Engine {
         let mut decision_file_budget_blocked = is_decision_intent(&bundle.meaning.intent)
             && effective_output_path.is_some()
             && request.budget.max_actions as usize == nodes.len() - 1;
+        let independent_file = matches!(&bundle.meaning.intent, Intent::IndependentRequests { .. })
+            && effective_output_path.is_some();
+        let independent_file_budget_blocked =
+            independent_file && request.budget.max_actions as usize == nodes.len() - 1;
         let blocked_nodes = usize::from(statistics_explanation_blocked)
             + usize::from(
-                (statistics_preview || decision_file_budget_blocked)
+                (statistics_preview
+                    || decision_file_budget_blocked
+                    || independent_file_budget_blocked)
                     && effective_output_path.is_some(),
             );
         let required_actions = nodes.len() - blocked_nodes
@@ -10780,17 +10786,17 @@ impl Engine {
         }
         let english = supports_english_output_locale(&request.locale);
         let english_display = english
-            && goal.output_path.is_none()
-            && (matches!(
-                &goal.intent,
-                Intent::Greet { .. } | Intent::IndependentRequests { .. }
-            ) || bundle.meaning.parser_version == input::ENGLISH_CALCULATION_PARSER_VERSION
-                || matches!(&goal.intent, Intent::ExplainPrevious)
-                    && verified_plain_calculation_predecessor(
-                        &bundle,
-                        previous,
-                        prior_explanation_input.as_ref(),
-                    ));
+            && (matches!(&goal.intent, Intent::IndependentRequests { .. })
+                || goal.output_path.is_none()
+                    && (matches!(&goal.intent, Intent::Greet { .. })
+                        || bundle.meaning.parser_version
+                            == input::ENGLISH_CALCULATION_PARSER_VERSION
+                        || matches!(&goal.intent, Intent::ExplainPrevious)
+                            && verified_plain_calculation_predecessor(
+                                &bundle,
+                                previous,
+                                prior_explanation_input.as_ref(),
+                            )));
         if !supports_japanese_output_locale(&request.locale)
             && !english_display
             && !(english && is_translation_intent(&goal.intent))
@@ -17718,17 +17724,42 @@ impl Engine {
                 "描画前に元Goalの締切へ達しました。",
             );
         }
+        let independent_file_stop = if independent_file {
+            required_file_permission_stop(&goal)
+                .map(|(code, message)| {
+                    (
+                        code,
+                        if english {
+                            "The requested file path has no write permission."
+                        } else {
+                            message
+                        },
+                    )
+                })
+                .or(independent_file_budget_blocked.then_some((
+                    "ACTION_BUDGET_EXHAUSTED",
+                    if english {
+                        "The results are shown above. Saving requires another action."
+                    } else {
+                        "結果を表示しました。保存には追加の行動予算が必要です。"
+                    },
+                )))
+        } else {
+            None
+        };
         // A preview is displayed without preparing the requested final write.
         let preview_goal = (pending_hearing
             || statistics_preview
             || decision_pending
             || decision_file_budget_blocked
-            || web_research_partial)
-            .then(|| {
-                let mut preview = goal.clone();
-                preview.output_path = None;
-                preview
-            });
+            || web_research_partial
+            || independent_requests_partial
+            || independent_file_stop.is_some())
+        .then(|| {
+            let mut preview = goal.clone();
+            preview.output_path = None;
+            preview
+        });
         let render_goal = preview_goal.as_ref().unwrap_or(&goal);
         let target = match &render_goal.output_path {
             Some(path) => RenderTarget::LocalFile { path: path.clone() },
@@ -17778,6 +17809,7 @@ impl Engine {
             || news_partial
             || web_research_partial
             || independent_requests_partial
+            || independent_file_stop.is_some()
         {
             result.execution_graph_ref = Some(store_execution_graph(
                 &self.store,
@@ -17797,6 +17829,9 @@ impl Engine {
                         "依頼全体には未完了の項目があります。確定した結果と各項目の状態を表示しました。"
                     },
                 );
+            }
+            if let Some((code, message)) = independent_file_stop {
+                return self.stop(&mut state, Lifecycle::Suspend, code, message);
             }
             if web_research_partial {
                 return self.stop(

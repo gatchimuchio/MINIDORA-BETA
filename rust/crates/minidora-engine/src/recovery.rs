@@ -150,6 +150,7 @@ fn reconcile_case(store: &Store, actor: &str, case: &str) -> Result<ResultRecord
                 matches!(
                     bundle.meaning.intent,
                     Intent::CalculateSequence { .. }
+                        | Intent::IndependentRequests { .. }
                         | Intent::CorrectCalculationSequenceStep { .. }
                         | Intent::AppendCalculationSequenceStep { .. }
                         | Intent::RemoveCalculationSequenceStep { .. }
@@ -5281,6 +5282,31 @@ fn inspect(
             "a clarification preview does not authorize a file effect",
         ));
     }
+    const COMPOUND_MISMATCH: &str = "RECOVERY_COMPOUND_MISMATCH";
+    let compound_items = match &goal.intent {
+        Intent::IndependentRequests { items } => Some(items.as_slice()),
+        _ => None,
+    };
+    let requires_compound = compound_items.is_some();
+    if let Some(items) = compound_items
+        && (result.branch_outcomes.len() != items.len()
+            || result
+                .branch_outcomes
+                .iter()
+                .any(|outcome| outcome.state != BranchState::Confirmed)
+            || matches!(
+                result
+                    .render
+                    .as_ref()
+                    .and_then(|render| render.target.as_ref()),
+                Some(RenderTarget::Display)
+            ))
+    {
+        return Err(failure(
+            "NO_LOCAL_FILE_GOAL",
+            "a compound preview or unfinished item does not authorize a file effect",
+        ));
+    }
     if matches!(
         &goal.intent,
         Intent::DescribeStatistics {
@@ -5405,6 +5431,15 @@ fn inspect(
         return Err(failure(
             RESEARCH_MISMATCH,
             "元のWeb資料の比較依頼を保存条件と照合できません。",
+        ));
+    }
+    if requires_compound
+        != (goal.required_predicates.first().map(String::as_str)
+            == Some(crate::composition::PREDICATE))
+    {
+        return Err(failure(
+            COMPOUND_MISMATCH,
+            "元の複合依頼と保存条件を照合できません。",
         ));
     }
     const PREVIOUS_STOP_MISMATCH: &str = "RECOVERY_PREVIOUS_STOP_MISMATCH";
@@ -5815,6 +5850,7 @@ fn inspect(
             || requires_image
             || requires_branch_text
             || requires_research
+            || requires_compound
             || requires_previous_stop
             || requires_generated_why
             || matches!(
@@ -6350,7 +6386,9 @@ fn inspect(
         ]
         .contains(&plan.locale.as_str())
     } else {
-        plan.locale == request.locale && crate::core::supports_japanese_output_locale(&plan.locale)
+        plan.locale == request.locale
+            && (crate::core::supports_japanese_output_locale(&plan.locale)
+                || (requires_compound && crate::core::supports_english_output_locale(&plan.locale)))
     };
     if plan.id != identity(&unsigned_plan)?
         || plan.text != result.text
@@ -6359,6 +6397,7 @@ fn inspect(
         || plan.required_units.is_empty()
         || plan.guarantee == Guarantee::Unknown
         || (plan.guarantee == Guarantee::Hypothesis
+            && !requires_compound
             && !matches!(
                 goal.intent,
                 Intent::SummarizePreviousSource
@@ -6423,6 +6462,10 @@ fn inspect(
     } else {
         None
     };
+    if requires_compound {
+        verify_registered_input(store, bundle, COMPOUND_MISMATCH)?;
+        crate::composition::verify_delivery(store, bundle, result, plan)?;
+    }
     if let Some((_, predicate)) = condition_contract {
         if goal.required_predicates.first().map(String::as_str) != Some(predicate) {
             return Err(failure(
@@ -7844,6 +7887,11 @@ fn inspect(
     };
     let mut expected_nodes = Vec::new();
     let mut sources = Vec::new();
+    let compound_nodes = compound_items
+        .map(|items| crate::composition::nodes(items).collect::<Vec<_>>())
+        .unwrap_or_default();
+    sources.extend(compound_nodes.iter().map(|node| node.id.clone()));
+    expected_nodes.extend(compound_nodes.iter().cloned());
     if let Some(report) = &statistics_report {
         use crate::core::{STATISTICS_EXPLANATION_NODE, STATISTICS_VALUES_NODE};
 
@@ -8246,6 +8294,24 @@ fn inspect(
     }
     let mut graph = Scheduler::new(nodes, goal.budget.max_actions)?;
     let mut source_refs = BTreeMap::new();
+    for (node, outcome) in compound_nodes.iter().zip(&result.branch_outcomes) {
+        if outcome.node_id != node.id {
+            return Err(failure(COMPOUND_MISMATCH, "The saved item order differs."));
+        }
+        let consumed = node
+            .requires
+            .iter()
+            .map(|id| {
+                graph
+                    .observed()
+                    .get(id)
+                    .map(|reference| (id.clone(), reference.clone()))
+                    .ok_or_else(|| failure(COMPOUND_MISMATCH, "A verified predecessor is missing."))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        graph.observe(&node.id, &outcome.artifact_ref, &consumed)?;
+        source_refs.insert(node.id.clone(), outcome.artifact_ref.clone());
+    }
     if let Some(report) = &statistics_report {
         use crate::core::{STATISTICS_EXPLANATION_NODE, STATISTICS_VALUES_NODE};
 
@@ -13078,6 +13144,86 @@ mod tests {
         assert_eq!(
             fs::metadata(&fixture.target).unwrap().modified().unwrap(),
             modified
+        );
+    }
+
+    #[test]
+    fn compound_file_reconciles_the_interrupted_original_commit_without_resending() {
+        use crate::core::OutputCheckpoint;
+
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        engine.expire_output_at = Some(OutputCheckpoint::Commit);
+        let mut request = RequestEnvelope::new(
+            "case",
+            "compound-file",
+            "alice",
+            "- Calculate 2 + 3\n- Calculate @{request-1} * 2",
+        );
+        request.locale = "en-US".into();
+        request.budget.max_actions = 6;
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let stopped = engine.execute("alice", request).unwrap();
+        assert_eq!(stopped.lifecycle, Lifecycle::Suspend, "{stopped:?}");
+        assert!(stopped.reason.as_deref().unwrap().starts_with("DEADLINE:"));
+        assert_eq!(stopped.content_plan.as_ref().unwrap().locale, "en-US");
+        assert!(stopped.text.ends_with(" = 10"), "{stopped:?}");
+        assert_eq!(stopped.branch_outcomes.len(), 2);
+        assert!(
+            stopped
+                .branch_outcomes
+                .iter()
+                .all(|outcome| outcome.state == BranchState::Confirmed)
+        );
+        let [receipt] = stopped.receipts.as_slice() else {
+            panic!("expected one confirmed receipt");
+        };
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, stopped.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let actions = engine.store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action_id, receipt.action_id);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        drop(engine);
+
+        let mut reopened = Engine::open(&fixture.state).unwrap();
+        let state = reopened.latest("alice", "case").unwrap().unwrap();
+        assert_eq!(state.result.as_ref(), Some(&stopped));
+        let mut mismatched = stopped.clone();
+        mismatched.branch_outcomes[1].artifact_ref =
+            stopped.branch_outcomes[0].artifact_ref.clone();
+        assert!(inspect(&reopened.store, "alice", &state, &mismatched).is_err());
+        let recovered = reopened.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.branch_outcomes, stopped.branch_outcomes);
+        assert_eq!(recovered.receipts, stopped.receipts);
+        assert_eq!(recovered.execution_graph_ref, stopped.execution_graph_ref);
+        assert_eq!(reopened.store.actions("alice", "case").unwrap(), actions);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let graph: serde_json::Value = serde_json::from_slice(
+            &reopened
+                .store
+                .get_bytes(
+                    "alice",
+                    "case",
+                    recovered.execution_graph_ref.as_ref().unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            graph[5]["request-2"]["request-1"],
+            recovered.branch_outcomes[0].artifact_ref
         );
     }
 

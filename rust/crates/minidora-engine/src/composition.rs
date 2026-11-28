@@ -7,9 +7,9 @@ use crate::{
     store::Store,
 };
 use minidora_domain::{
-    BranchOutcome, BranchState, Error, EvidencePacket, ExplanationAudience, ExplanationRequest,
-    Guarantee, IndependentRequest, InputBundle, Intent, Result, ResultRecord, SourceSpan,
-    canonical, digest, failure, identity,
+    BranchOutcome, BranchState, ContentPlan, Error, EvidencePacket, ExplanationAudience,
+    ExplanationRequest, Guarantee, IndependentRequest, InputBundle, Intent, Result, ResultRecord,
+    SourceSpan, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -317,6 +317,29 @@ pub(crate) fn produce(
     output: &mut Outcome,
 ) -> Result<()> {
     let request = &bundle.request;
+    let items = delivery_items(bundle)?;
+    let render_reserve = (request.budget.deadline_ms / 4).min(250);
+    let compute_limit = Duration::from_millis(request.budget.deadline_ms - render_reserve);
+    let source_count = items
+        .iter()
+        .filter(|item| composition_source::read_url(item).is_some())
+        .count();
+    let mut reads =
+        composition_source::SourceReads::new(retrieval, &request.budget, source_count, admit)?;
+    evaluate_items(
+        store,
+        bundle,
+        items,
+        graph,
+        || started.elapsed() >= compute_limit,
+        |_, uri| reads.observe(store, bundle, uri),
+        |_, bytes| store.put_bytes(&request.actor_id, &request.case_id, bytes),
+        output,
+    )
+}
+
+fn delivery_items(bundle: &InputBundle) -> Result<&[IndependentRequest]> {
+    let request = &bundle.request;
     let Intent::IndependentRequests { items } = &bundle.meaning.intent else {
         return Err(failure(
             "COMPOUND_INPUT_MISMATCH",
@@ -325,7 +348,6 @@ pub(crate) fn produce(
     };
     let english = supports_english_output_locale(&request.locale);
     if !request.attachments.is_empty()
-        || request.output_path.is_some()
         || request.context_ref.is_some()
         || request.speech.is_some()
         || request.purpose.is_some()
@@ -333,9 +355,9 @@ pub(crate) fn produce(
         return Err(failure(
             "COMPOUND_SCOPE_UNAVAILABLE",
             if english {
-                "Independent items currently accept a standalone text request for on-screen results."
+                "Independent items accept standalone text with an optional file destination."
             } else {
-                "複数の依頼では、入力欄に書いた内容を画面で確認できます。添付、保存先、参照先、音声、用途指定は外してください。"
+                "複数の依頼は入力欄に書いてください。保存先は指定できます。添付、参照先、音声、用途指定は外してください。"
             },
         ));
     }
@@ -353,16 +375,24 @@ pub(crate) fn produce(
             },
         ));
     }
-    let render_reserve = (request.budget.deadline_ms / 4).min(250);
-    let compute_limit = Duration::from_millis(request.budget.deadline_ms - render_reserve);
+    Ok(items)
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn evaluate_items(
+    store: &Store,
+    bundle: &InputBundle,
+    items: &[IndependentRequest],
+    graph: &mut Scheduler,
+    time_exhausted: impl Fn() -> bool,
+    mut source_packet: impl FnMut(usize, &str) -> Result<(String, EvidencePacket)>,
+    mut retain_observation: impl FnMut(usize, &[u8]) -> Result<String>,
+    output: &mut Outcome,
+) -> Result<()> {
+    let request = &bundle.request;
+    let english = supports_english_output_locale(&request.locale);
     // The remaining half covers the shared plan/render and their retained bytes.
     let mut evidence_remaining = request.budget.max_evidence_bytes / 2;
-    let source_count = items
-        .iter()
-        .filter(|item| composition_source::read_url(item).is_some())
-        .count();
-    let mut reads =
-        composition_source::SourceReads::new(retrieval, &request.budget, source_count, admit)?;
     let mut sources = BTreeMap::<String, String>::new();
     let mut quantities = BTreeMap::new();
     for (index, item) in items.iter().enumerate() {
@@ -385,7 +415,7 @@ pub(crate) fn produce(
         let mut evidence_ref = None;
         let mut retry_evidence = None;
         let available = evidence_remaining / (items.len() - index);
-        let evaluated = if started.elapsed() >= compute_limit {
+        let evaluated = if time_exhausted() {
             Ok(Branch::Blocked("BRANCH_TIME_BUDGET"))
         } else if blocked_predecessor {
             Ok(Branch::Blocked("BRANCH_REFERENCE_PREREQUISITE_UNCONFIRMED"))
@@ -394,30 +424,28 @@ pub(crate) fn produce(
             if available < 512 {
                 Ok(Branch::Blocked("BRANCH_EVIDENCE_BUDGET"))
             } else {
-                reads
-                    .observe(store, bundle, uri)
-                    .and_then(|(reference, packet)| {
-                        let value = if let Some(code) = &packet.failure {
-                            Err(failure(code, "The requested source was not obtained."))
+                source_packet(index, uri).and_then(|(reference, packet)| {
+                    let value = if let Some(code) = &packet.failure {
+                        Err(failure(code, "The requested source was not obtained."))
+                    } else {
+                        let unit = if english {
+                            format!("Source retained: {}", packet.final_uri)
                         } else {
-                            let unit = if english {
-                                format!("Source retained: {}", packet.final_uri)
-                            } else {
-                                format!("本文を取得しました。出典は {} です。", packet.final_uri)
-                            };
-                            Ok(Branch::Value(Value {
-                                units: vec![unit],
-                                bytes: canonical(&(&packet.id, &packet.raw_sha256, &reference))?,
-                                quantities: BTreeMap::new(),
-                                guarantee: Guarantee::SourceReport,
-                            }))
+                            format!("本文を取得しました。出典は {} です。", packet.final_uri)
                         };
-                        evidence_ref = Some(reference);
-                        if packet.retry_after.is_some() {
-                            retry_evidence = Some(packet);
-                        }
-                        value
-                    })
+                        Ok(Branch::Value(Value {
+                            units: vec![unit],
+                            bytes: canonical(&(&packet.id, &packet.raw_sha256, &reference))?,
+                            quantities: BTreeMap::new(),
+                            guarantee: Guarantee::SourceReport,
+                        }))
+                    };
+                    evidence_ref = Some(reference);
+                    if packet.retry_after.is_some() {
+                        retry_evidence = Some(packet);
+                    }
+                    value
+                })
             }
         } else if let Intent::SelectRequestJsonNumber { source, pointer } = item.intent.as_ref() {
             match sources.get(source) {
@@ -489,7 +517,7 @@ pub(crate) fn produce(
                     },
                 )
             })?;
-        let reference = store.put_bytes(&request.actor_id, &request.case_id, &bytes)?;
+        let reference = retain_observation(index, &bytes)?;
         graph.observe(&id, &reference, &prerequisites)?;
         if observed.state == BranchState::Confirmed
             && let Some(evidence) = observed.evidence_ref
@@ -606,6 +634,89 @@ fn display_units(observation: &Observation<'_>, number: usize, english: bool) ->
     vec![format!("{heading}　{status}")]
 }
 
+#[derive(Deserialize)]
+struct RetainedObservation {
+    node_id: String,
+    input_fingerprint: String,
+    source_range: (usize, usize),
+    evidence_ref: Option<String>,
+}
+
+/// Verify completed items against the sealed input and previously retained bytes.
+pub(crate) fn verify_delivery(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<()> {
+    let items = delivery_items(bundle)?;
+    let request = &bundle.request;
+    let invalid = || {
+        failure(
+            "RECOVERY_COMPOUND_MISMATCH",
+            "Saved compound observations do not match the original file request.",
+        )
+    };
+    if identity(request)? != result.id
+        || result.branch_outcomes.len() != items.len()
+        || result.calculation.is_some()
+        || !result.evidence.is_empty()
+        || plan.locale != request.locale
+    {
+        return Err(invalid());
+    }
+    let mut graph = Scheduler::new(nodes(items).collect(), request.budget.max_actions)?;
+    let mut observed = Outcome::new();
+    evaluate_items(
+        store,
+        bundle,
+        items,
+        &mut graph,
+        || false,
+        |index, uri| {
+            let branch = &result.branch_outcomes[index];
+            let bytes =
+                store.get_bytes(&request.actor_id, &request.case_id, &branch.artifact_ref)?;
+            let retained: RetainedObservation = serde_json::from_slice(&bytes)?;
+            let reference = retained.evidence_ref.ok_or_else(invalid)?;
+            let bytes = store.get_bytes(&request.actor_id, &request.case_id, &reference)?;
+            let packet: EvidencePacket = serde_json::from_slice(&bytes)?;
+            if packet.request_uri != uri || canonical(&packet)? != bytes {
+                return Err(invalid());
+            }
+            ports::validate_successful_packet(&packet, &request.permissions)?;
+            Ok((reference, packet))
+        },
+        |index, bytes| {
+            let reference = &result.branch_outcomes[index].artifact_ref;
+            if store.get_bytes(&request.actor_id, &request.case_id, reference)? != bytes {
+                return Err(invalid());
+            }
+            Ok(reference.clone())
+        },
+        &mut observed,
+    )?;
+    let dependencies: Vec<_> = observed
+        .branches
+        .iter()
+        .map(|branch| branch.artifact_ref.clone())
+        .collect();
+    if !observed.complete()
+        || observed.branches != result.branch_outcomes
+        || result.dependencies != dependencies
+        || plan.dependencies.len() != dependencies.len() + 1
+        || !plan.dependencies.starts_with(&dependencies)
+        || observed.guarantee != result.guarantee
+        || observed.guarantee != plan.guarantee
+        || observed.units != plan.required_units
+        || plan.text != observed.units.join("\n")
+        || result.text != plan.text
+    {
+        return Err(invalid());
+    }
+    Ok(())
+}
+
 /// Confirm that a Retry-After arose from an authored fetch item and its
 /// retained observation before the Core restores the case's transport gate.
 pub(crate) fn verify_retry_source(
@@ -614,13 +725,6 @@ pub(crate) fn verify_retry_source(
     result: &ResultRecord,
     packet: &EvidencePacket,
 ) -> Result<()> {
-    #[derive(Deserialize)]
-    struct RetainedObservation {
-        node_id: String,
-        input_fingerprint: String,
-        source_range: (usize, usize),
-        evidence_ref: Option<String>,
-    }
     let invalid = || {
         failure(
             "RETRY_AFTER_SOURCE_INVALID",
