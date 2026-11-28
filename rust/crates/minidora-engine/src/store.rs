@@ -4,7 +4,7 @@
 use crate::durability::sync_directory;
 use minidora_domain::{
     ALPHA8_SCHEMA_VERSION, ALPHA10_SCHEMA_VERSION, ActionRecord, CaseRevision, ConditionRecord,
-    EffectPhase, Fact, InputBundle, LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState,
+    EffectPhase, Fact, InputBundle, Intent, LEGACY_SCHEMA_VERSION, Lifecycle, MemoryState,
     PREVIOUS_SCHEMA_VERSION, Proposition, RelationRule, RenderTarget, RequestEnvelope, Result,
     ResultRecord, SCHEMA_VERSION, canonical, digest, failure, identity,
 };
@@ -13,6 +13,7 @@ use rusqlite::{
 };
 use serde::{Serialize, de::DeserializeOwned};
 use std::{
+    cell::RefCell,
     collections::{BTreeMap, BTreeSet},
     fs::{self, File, OpenOptions},
     io::Write,
@@ -20,6 +21,11 @@ use std::{
     sync::atomic::{AtomicU64, Ordering},
     time::{Duration, Instant},
 };
+
+mod case_branch;
+mod memory_policy;
+mod purpose_profile;
+pub(crate) use memory_policy::{MemoryPolicy, MemoryUse};
 
 static TEMP_SERIAL: AtomicU64 = AtomicU64::new(0);
 
@@ -98,9 +104,22 @@ fn create_stage_file_with(
     }
 }
 
+pub(crate) fn result_uses_previous_surface(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::ExplainPrevious
+            | Intent::ReplacePreviousText { .. }
+            | Intent::SummarizePreviousResult { .. }
+            | Intent::SummarizePreviousResultLines { .. }
+            | Intent::AssertPreviousRelation { .. }
+            | Intent::CorrectPreviousPremise { .. }
+    )
+}
+
 pub struct Store {
     connection: Connection,
     blobs: PathBuf,
+    active_memory: RefCell<Option<MemoryUse>>,
 }
 
 /// Exact input and result reads in one authenticated, verified SQLite snapshot.
@@ -129,8 +148,15 @@ impl VerifiedCaseHistory<'_> {
     }
 
     pub(crate) fn contains_committed_result(&self, result: &ResultRecord) -> Result<bool> {
+        Ok(self.committed_result_revision(result)?.is_some())
+    }
+
+    pub(crate) fn committed_result_revision(
+        &self,
+        result: &ResultRecord,
+    ) -> Result<Option<CaseRevision>> {
         let Some(references) = self.committed_revisions.get(&result.id) else {
-            return Ok(false);
+            return Ok(None);
         };
         for reference in references.iter().rev() {
             let revision: CaseRevision = self.store.read_blob(reference)?;
@@ -138,10 +164,10 @@ impl VerifiedCaseHistory<'_> {
                 && revision.input_fingerprint.as_deref() == Some(result.id.as_str())
                 && revision.result.as_ref() == Some(result)
             {
-                return Ok(true);
+                return Ok(Some(revision));
             }
         }
-        Ok(false)
+        Ok(None)
     }
 
     pub(crate) fn suspended_result_revision(
@@ -860,6 +886,7 @@ impl Store {
         }
         if initialize {
             sql(connection.execute_batch(SCHEMA))?;
+            sql(connection.execute_batch(memory_policy::SCHEMA))?;
             create_relation_index_schema(&connection, MemoryIndexSource::Durable)?;
             sql(connection.execute(
                 "INSERT OR IGNORE INTO store_metadata(key,value) VALUES('schema',?1)",
@@ -888,9 +915,15 @@ impl Store {
         }
         if initialize {
             install_action_identity_guards(&connection)?;
+            sql(connection.execute_batch(purpose_profile::SCHEMA))?;
+            sql(connection.execute_batch(case_branch::SCHEMA))?;
             sync_directory(path)?;
         }
-        let store = Self { connection, blobs };
+        let store = Self {
+            connection,
+            blobs,
+            active_memory: RefCell::new(None),
+        };
         store.verify_integrity()?;
         if initialize {
             sql(store.connection.execute(
@@ -901,12 +934,186 @@ impl Store {
         Ok(store)
     }
 
+    pub(crate) fn start_memory_use(
+        &self,
+        actor: &str,
+        case: &str,
+        input_fingerprint: Option<String>,
+    ) -> Result<Option<MemoryUse>> {
+        let policy = self.memory_policy(actor)?;
+        Ok(self.active_memory.replace(Some(MemoryUse {
+            actor: actor.into(),
+            case: case.into(),
+            policy,
+            input_fingerprint,
+            accessed: false,
+        })))
+    }
+
+    pub(crate) fn restore_memory_use(&self, previous: Option<MemoryUse>) {
+        self.active_memory.replace(previous);
+    }
+
+    pub(crate) fn in_case_memory<T>(
+        &self,
+        actor: &str,
+        case: &str,
+        use_memory: impl FnOnce() -> Result<T>,
+    ) -> Result<T> {
+        let previous = self.start_memory_use(actor, case, None)?;
+        let result = use_memory().and_then(|value| {
+            self.verify_memory_use(actor)?;
+            Ok(value)
+        });
+        self.restore_memory_use(previous);
+        result
+    }
+
+    pub(crate) fn bound_memory_policy(&self, actor: &str) -> Result<MemoryPolicy> {
+        if let Some(scope) = self.active_memory.borrow().as_ref() {
+            if scope.actor != actor {
+                return Err(failure("ACCESS_DENIED", "記憶の利用主体が一致しません。"));
+            }
+            return Ok(scope.policy);
+        }
+        self.memory_policy(actor)
+    }
+
+    fn mark_memory_use(&self, actor: &str) -> Result<Option<MemoryUse>> {
+        let mut active = self.active_memory.borrow_mut();
+        let Some(scope) = active.as_mut() else {
+            return Ok(None);
+        };
+        if scope.actor != actor {
+            return Err(failure("ACCESS_DENIED", "記憶の利用主体が一致しません。"));
+        }
+        scope.accessed = true;
+        Ok(Some(scope.clone()))
+    }
+
+    pub(crate) fn verify_memory_use(&self, actor: &str) -> Result<bool> {
+        self.verify_memory_use_on(&self.connection, actor)
+    }
+
+    fn verify_memory_use_on(&self, connection: &Connection, actor: &str) -> Result<bool> {
+        let active = self.active_memory.borrow();
+        let Some(scope) = active.as_ref().filter(|value| value.accessed) else {
+            return Ok(false);
+        };
+        if scope.actor != actor {
+            return Err(failure("ACCESS_DENIED", "記憶の利用主体が一致しません。"));
+        }
+        if memory_policy::memory_policy_on(connection, actor)? != scope.policy {
+            return Err(failure(
+                "MEMORY_POLICY_CHANGED",
+                "記憶設定が処理中に変わりました。新しい設定で依頼を受け付け直してください。",
+            ));
+        }
+        Ok(true)
+    }
+
+    pub(crate) fn memory_was_used(
+        &self,
+        actor: &str,
+        case: &str,
+        result: &ResultRecord,
+    ) -> Result<bool> {
+        let mut result = result;
+        let mut latest = None;
+        let mut visited = BTreeSet::new();
+        loop {
+            if result.actor_memory_revision.is_some()
+                || self.input_consumed_memory(
+                    actor,
+                    case,
+                    &result.input_id,
+                    result.input_version,
+                )?
+            {
+                return Ok(true);
+            }
+            let Some((_, bundle)) = self.read_input_bundle(
+                &self.connection,
+                actor,
+                case,
+                &result.input_id,
+                result.input_version,
+            )?
+            else {
+                return Ok(false);
+            };
+            if !result_uses_previous_surface(&bundle.meaning.intent) {
+                return Ok(false);
+            }
+            if visited.len() >= 32 || !visited.insert(result.id.clone()) {
+                return Ok(true);
+            }
+            let Some(reference) = bundle.meaning.context_result_ref.as_ref() else {
+                return Ok(true);
+            };
+            if latest.is_none() {
+                latest = self.latest_case(case)?;
+            }
+            let Some(state) = latest.as_ref() else {
+                return Ok(true);
+            };
+            let Some(prior) = state
+                .result
+                .as_ref()
+                .filter(|entry| &entry.id == reference)
+                .or_else(|| state.prior_results.get(reference))
+            else {
+                return Ok(true);
+            };
+            result = prior;
+        }
+    }
+
+    pub(crate) fn inherit_memory_context(
+        &self,
+        actor: &str,
+        case: &str,
+        result: &ResultRecord,
+    ) -> Result<()> {
+        if !self.admit_memory_context(actor, case, result)? {
+            return Err(failure(
+                "MEMORY_CONTEXT_UNAVAILABLE",
+                "現在の記憶設定では、その回答を新しい根拠として使えません。",
+            ));
+        }
+        if self.memory_was_used(actor, case, result)? {
+            self.mark_memory_use(actor)?;
+            self.verify_memory_use(actor)?;
+        }
+        Ok(())
+    }
+
+    /// An explicitly retained result may be inspected as history. Its
+    /// memory-derived content may only seed a request in the same mode.
+    pub(crate) fn admit_memory_context(
+        &self,
+        actor: &str,
+        case: &str,
+        result: &ResultRecord,
+    ) -> Result<bool> {
+        let current = self.bound_memory_policy(actor)?;
+        let origin = self.policy_for_input(actor, case, &result.input_id, result.input_version)?;
+        Ok(current.enabled == origin.enabled || !self.memory_was_used(actor, case, result)?)
+    }
+
     pub(crate) fn with_relation_index<T>(
         &self,
         actor: &str,
         read: impl FnOnce(&MemoryIndexSnapshot<'_, '_>) -> Result<T>,
     ) -> Result<Option<T>> {
         valid_id(actor)?;
+        if let Some(scope) = self.mark_memory_use(actor)? {
+            self.verify_memory_use(actor)?;
+            if !scope.policy.enabled {
+                let memory = self.load_memory(actor)?;
+                return Self::with_snapshot_relation_index(actor, &memory, read).map(Some);
+            }
+        }
         let transaction =
             Transaction::new_unchecked(&self.connection, TransactionBehavior::Deferred)
                 .map_err(|error| failure("STORE_SQLITE", error.to_string()))?;
@@ -1549,6 +1756,9 @@ impl Store {
             .transpose()?;
         let transaction = self.transaction()?;
         Self::require_case(&transaction, actor, &revision.case_id)?;
+        if matches!(revision.lifecycle, Lifecycle::Adopted | Lifecycle::Commit) {
+            self.verify_memory_use_on(&transaction, actor)?;
+        }
         if deadline.is_some_and(|limit| Instant::now() >= limit) {
             return Err(failure(
                 "DEADLINE",
@@ -1703,6 +1913,26 @@ impl Store {
                 "DEADLINE",
                 "the Goal deadline elapsed before case persistence",
             ));
+        }
+        if revision.lifecycle == Lifecycle::Commit
+            && let Some(bundle) = revision.bundle.as_ref()
+            && matches!(bundle.meaning.intent, Intent::SetMemorySharing { .. })
+        {
+            let result = revision.result.as_ref().ok_or_else(|| {
+                failure(
+                    "MEMORY_POLICY_INTEGRITY",
+                    "記憶設定の確定結果を確認できません。",
+                )
+            })?;
+            let [reference] = result.dependencies.as_slice() else {
+                return Err(failure(
+                    "MEMORY_POLICY_INTEGRITY",
+                    "記憶設定の根拠を確認できません。",
+                ));
+            };
+            let evidence: MemoryPolicy =
+                serde_json::from_slice(&self.get_bytes(actor, &revision.case_id, reference)?)?;
+            self.commit_memory_policy(&transaction, &bundle.request, evidence)?;
         }
         sql(transaction.commit())?;
         Ok(())
@@ -1866,6 +2096,91 @@ impl Store {
         Ok(Some(self.read_blob(&prior_ref)?))
     }
 
+    /// Select from committed inputs before the original admission boundary.
+    /// The consuming Core still verifies the chosen proof in case history.
+    pub(crate) fn recent_committed_input_before(
+        &self,
+        actor: &str,
+        case: &str,
+        through_revision: u64,
+        max_inputs: u32,
+        accepts: impl FnMut(&InputBundle, &ResultRecord) -> Result<bool>,
+    ) -> Result<Option<ResultRecord>> {
+        self.recent_result_input_before(actor, case, through_revision, max_inputs, false, accepts)
+            .map(|(result, _)| result)
+    }
+
+    /// Read only terminal comparison candidates. Core validates which suspended
+    /// displays still have applicable comparison evidence.
+    pub(crate) fn recent_result_input_before(
+        &self,
+        actor: &str,
+        case: &str,
+        through_revision: u64,
+        max_inputs: u32,
+        include_suspended: bool,
+        mut accepts: impl FnMut(&InputBundle, &ResultRecord) -> Result<bool>,
+    ) -> Result<(Option<ResultRecord>, u32)> {
+        Self::require_case(&self.connection, actor, case)?;
+        let mut statement = sql(self.connection.prepare(
+            "SELECT state_sha256 FROM case_revision WHERE case_id=?1
+             AND (lifecycle='COMMIT' OR (?4 AND lifecycle='SUSPEND'))
+             AND revision<=?2 ORDER BY revision DESC LIMIT ?3",
+        ))?;
+        let rows = sql(statement.query_map(
+            params![
+                case,
+                integer(through_revision)?,
+                i64::from(max_inputs) + 1,
+                include_suspended
+            ],
+            |row| row.get::<_, String>(0),
+        ))?;
+        let mut examined = 0;
+        for (index, row) in rows.enumerate() {
+            if index >= max_inputs as usize {
+                return Err(failure(
+                    "ACTION_BUDGET_EXHAUSTED",
+                    if include_suspended {
+                        "前の比較を探すための行動予算に達しました。"
+                    } else {
+                        "下書きを探すための行動予算に達しました。"
+                    },
+                ));
+            }
+            examined += 1;
+            let state: CaseRevision = self.read_blob(&sql(row)?)?;
+            if !(state.lifecycle == Lifecycle::Commit
+                || include_suspended && state.lifecycle == Lifecycle::Suspend)
+                || state.actor_id != actor
+                || state.case_id != case
+                || state.revision > through_revision
+            {
+                return Err(failure(
+                    "INTEGRITY_FAILURE",
+                    "the indexed committed revision is invalid",
+                ));
+            }
+            if let (Some(bundle), Some(result)) = (state.bundle, state.result)
+                && result.lifecycle == state.lifecycle
+                && accepts(&bundle, &result)?
+                && (!include_suspended
+                    || self
+                        .read_input_result(
+                            &self.connection,
+                            case,
+                            &result.input_id,
+                            result.input_version,
+                        )?
+                        .as_ref()
+                        == Some(&result))
+            {
+                return Ok((Some(result), examined));
+            }
+        }
+        Ok((None, examined))
+    }
+
     /// Locate the original input key for a fingerprint owned by this actor.
     /// Consumers still verify the sealed input and result in its case history.
     pub(crate) fn owned_source_input_key(
@@ -1986,6 +2301,72 @@ impl Store {
         Ok(Some((bundle_sha, bundle)))
     }
 
+    pub(crate) fn create_wasm_scratch(&self, action_id: &str) -> Result<PathBuf> {
+        if !valid_digest(action_id) {
+            return Err(failure(
+                "WASM_SCRATCH_ID",
+                "隔離実行の作業領域IDが不正です。",
+            ));
+        }
+        let root = self.blobs.parent().ok_or_else(|| {
+            failure(
+                "WASM_SCRATCH_ROOT",
+                "実行用の状態ディレクトリがありません。",
+            )
+        })?;
+        let root = std::path::absolute(root)?;
+        for path in crate::durability::local_target_and_ancestors(&root) {
+            let metadata = fs::symlink_metadata(path)?;
+            if !metadata.is_dir() || crate::durability::is_link_or_reparse_point(&metadata) {
+                return Err(failure(
+                    "WASM_SCRATCH_ROOT",
+                    "実行領域の親に安全な実ディレクトリを指定してください。",
+                ));
+            }
+        }
+        let runs = root.join("wasm-runs");
+        match fs::create_dir(&runs) {
+            Ok(()) => {}
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => {}
+            Err(error) => return Err(error.into()),
+        }
+        let metadata = fs::symlink_metadata(&runs)?;
+        if !metadata.is_dir() || crate::durability::is_link_or_reparse_point(&metadata) {
+            return Err(failure(
+                "WASM_SCRATCH_ROOT",
+                "実行領域の配置先を照合できません。",
+            ));
+        }
+        let scratch = runs.join(action_id);
+        fs::create_dir(&scratch)?;
+        Ok(scratch)
+    }
+
+    pub(crate) fn save_live_wasm_phase(
+        &self,
+        actor: &str,
+        action: &ActionRecord,
+        revision: u64,
+        deadline: Instant,
+    ) -> Result<()> {
+        if action.effect_class != crate::wasm_execution::EFFECT
+            || !matches!(
+                action.phase,
+                EffectPhase::Proposed
+                    | EffectPhase::Authorized
+                    | EffectPhase::Prepared
+                    | EffectPhase::Attempted
+            )
+            || action.receipt.is_some()
+        {
+            return Err(failure(
+                "INVALID_EFFECT_TRANSITION",
+                "隔離実行の開始前の状態が不正です。",
+            ));
+        }
+        self.save_action_inner(actor, action, Some((revision, deadline)))
+    }
+
     pub fn save_action(&self, actor: &str, action: &ActionRecord) -> Result<()> {
         self.save_action_inner(actor, action, None)
     }
@@ -2065,6 +2446,21 @@ impl Store {
                 "CONFIRMED requires an actual effect receipt",
             ));
         }
+        if action.effect_class == crate::wasm_execution::EFFECT
+            && live.is_none()
+            && matches!(
+                action.phase,
+                EffectPhase::Proposed
+                    | EffectPhase::Authorized
+                    | EffectPhase::Prepared
+                    | EffectPhase::Attempted
+            )
+        {
+            return Err(failure(
+                "INVALID_EFFECT_TRANSITION",
+                "隔離実行の開始にはアクティブな依頼と権限が必要です。",
+            ));
+        }
         let published = live
             .is_none()
             .then(|| self.publish_blob(action))
@@ -2072,24 +2468,52 @@ impl Store {
         let transaction = self.transaction()?;
         Self::require_case(&transaction, actor, &action.case_id)?;
         if let Some((revision, deadline)) = live {
+            self.verify_memory_use_on(&transaction, actor)?;
             let head = self.latest_case(&action.case_id)?;
-            if !head.is_some_and(|head| {
-                head.revision == revision
-                    && head.lifecycle == Lifecycle::Adopted
+            let matches_head = if action.effect_class == crate::wasm_execution::EFFECT {
+                if let Some(head) = head
+                    && head.revision == revision
+                    && head.lifecycle == Lifecycle::Running
                     && head.input_fingerprint.as_ref() == Some(&action.input_fingerprint)
-                    && head
-                        .result
-                        .as_ref()
-                        .and_then(|record| record.render.as_ref())
-                        .is_some_and(|render| {
-                            render.actual_sha256 == action.exact_request_sha256
-                                && matches!(
-                                    &render.target,
-                                    Some(RenderTarget::LocalFile { path })
-                                        if path.to_str() == Some(action.target.as_str())
-                                )
-                        })
-            }) {
+                    && let (Some(bundle), Some(goal_ref)) =
+                        (head.bundle.as_ref(), head.goal_sha256.as_ref())
+                {
+                    let goal_bytes =
+                        self.read_case_artifact(&transaction, &action.case_id, goal_ref)?;
+                    let goal: minidora_domain::GoalContract = serde_json::from_slice(&goal_bytes)?;
+                    let mut expected = crate::wasm_execution::plan(bundle)?.action;
+                    expected.phase = action.phase;
+                    expected == *action
+                        && goal.input_fingerprint == action.input_fingerprint
+                        && goal.intent == bundle.meaning.intent
+                        && goal.budget == bundle.request.budget
+                        && goal.permissions == bundle.request.permissions
+                        && goal.output_path.is_none()
+                        && goal.required_predicates.first().map(String::as_str)
+                            == Some(crate::core::WASM_EXECUTION_PREDICATE)
+                } else {
+                    false
+                }
+            } else {
+                head.is_some_and(|head| {
+                    head.revision == revision
+                        && head.lifecycle == Lifecycle::Adopted
+                        && head.input_fingerprint.as_ref() == Some(&action.input_fingerprint)
+                        && head
+                            .result
+                            .as_ref()
+                            .and_then(|record| record.render.as_ref())
+                            .is_some_and(|render| {
+                                render.actual_sha256 == action.exact_request_sha256
+                                    && matches!(
+                                        &render.target,
+                                        Some(RenderTarget::LocalFile { path })
+                                            if path.to_str() == Some(action.target.as_str())
+                                    )
+                            })
+                })
+            };
+            if !matches_head {
                 return Err(failure(
                     "EFFECT_GOAL_NOT_ACTIVE",
                     "the adopted input revision for this local effect is no longer active",
@@ -2169,6 +2593,11 @@ impl Store {
         }
         self.read_case_artifact(&transaction, &action.case_id, &action.authorization_sha256)?;
         self.read_case_artifact(&transaction, &action.case_id, &action.exact_request_sha256)?;
+        if action.effect_class == crate::wasm_execution::EFFECT
+            && let Some(receipt) = &action.receipt
+        {
+            self.read_case_artifact(&transaction, &action.case_id, &receipt.content_sha256)?;
+        }
         let (sha, length) = match published {
             Some(blob) => blob,
             None => self.publish_blob(action)?,
@@ -2420,6 +2849,19 @@ impl Store {
         &self,
         actor: &str,
     ) -> Result<(MemoryState, Option<(i64, String)>)> {
+        let scope = self.mark_memory_use(actor)?;
+        self.verify_memory_use(actor)?;
+        let (memory, reference) = self.load_memory_head(actor)?;
+        let memory = match scope {
+            Some(scope) if !scope.policy.enabled => {
+                self.project_memory(actor, &scope.case, &memory)?
+            }
+            _ => memory,
+        };
+        Ok((memory, reference))
+    }
+
+    fn load_memory_head(&self, actor: &str) -> Result<(MemoryState, Option<(i64, String)>)> {
         valid_id(actor)?;
         let reference: Option<(i64, String)> = sql(self.connection.query_row(
             "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1",
@@ -2431,6 +2873,22 @@ impl Store {
             .transpose()?
             .unwrap_or_default();
         self.validate_memory_scope(actor, &memory)?;
+        Ok((memory, reference))
+    }
+
+    pub(crate) fn load_memory_for_source(
+        &self,
+        actor: &str,
+    ) -> Result<(MemoryState, Option<(i64, String)>)> {
+        let scope = self.mark_memory_use(actor)?;
+        self.verify_memory_use(actor)?;
+        let (memory, reference) = self.load_memory_head(actor)?;
+        let memory = match scope {
+            Some(scope) if !scope.policy.enabled => {
+                self.project_memory_with_inactive(actor, &scope.case, &memory)?
+            }
+            _ => memory,
+        };
         Ok((memory, reference))
     }
 
@@ -2449,6 +2907,8 @@ impl Store {
         actor: &str,
         revision: u64,
     ) -> Result<Option<(MemoryState, String)>> {
+        let scope = self.mark_memory_use(actor)?;
+        self.verify_memory_use(actor)?;
         valid_id(actor)?;
         let revision = integer(revision)?;
         let sha: Option<String> = sql(self
@@ -2472,7 +2932,14 @@ impl Store {
             ));
         }
         self.validate_memory_scope(actor, &memory)?;
-        Ok(Some((memory, sha)))
+        match scope {
+            Some(scope) if !scope.policy.enabled => {
+                let projected = self.project_memory(actor, &scope.case, &memory)?;
+                let projected_sha = digest(&canonical(&projected)?);
+                Ok(Some((projected, projected_sha)))
+            }
+            _ => Ok(Some((memory, sha))),
+        }
     }
 
     fn validate_memory_evolution(previous: &MemoryState, next: &MemoryState) -> Result<()> {
@@ -2533,7 +3000,34 @@ impl Store {
     }
 
     pub fn save_memory(&self, actor: &str, memory: &MemoryState) -> Result<()> {
+        let scope = self.mark_memory_use(actor)?;
+        self.verify_memory_use(actor)?;
         valid_id(actor)?;
+        let projected_edit = match scope {
+            Some(scope) if !scope.policy.enabled => {
+                let local_input = scope.input_fingerprint.as_deref().ok_or_else(|| {
+                    failure(
+                        "MEMORY_SCOPE_CONTEXT_REQUIRED",
+                        "保存記憶の操作に会話の入力が必要です。",
+                    )
+                })?;
+                let (raw, head) = self.load_memory_head(actor)?;
+                let baseline = self.project_memory(actor, &scope.case, &raw)?;
+                if memory == &baseline {
+                    return Ok(());
+                }
+                let merged = crate::memory_merge::merge_case_edit(
+                    actor,
+                    &raw,
+                    &baseline,
+                    memory,
+                    local_input,
+                )?;
+                Some((merged, head))
+            }
+            _ => None,
+        };
+        let memory = projected_edit.as_ref().map_or(memory, |(merged, _)| merged);
         self.validate_memory_scope(actor, memory)?;
         let bytes = canonical(memory)?;
         let sha = digest(&bytes);
@@ -2542,6 +3036,15 @@ impl Store {
             [actor],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional())?;
+        if projected_edit
+            .as_ref()
+            .is_some_and(|(_, head)| *head != old)
+        {
+            return Err(failure(
+                "REVISION_CONFLICT",
+                "記憶の保存版が処理中に変わりました。",
+            ));
+        }
         let previous_memory = if let Some((revision, old_sha)) = &old {
             let previous: MemoryState = self.read_blob(old_sha)?;
             let stored_revision = u64::try_from(*revision)
@@ -2574,6 +3077,7 @@ impl Store {
             ));
         }
         let transaction = self.transaction()?;
+        self.verify_memory_use_on(&transaction, actor)?;
         let current: Option<(i64, String)> = sql(transaction.query_row(
             "SELECT revision,record_sha256 FROM memory_revision WHERE actor_id=?1 ORDER BY revision DESC LIMIT 1", [actor], |r| Ok((r.get(0)?,r.get(1)?)),
         ).optional())?;
@@ -2719,12 +3223,22 @@ impl Store {
     fn read_verified_case(
         &self,
         case: &str,
+        observe: impl FnMut(&CaseRevision, &str, bool),
+    ) -> Result<Option<CaseRevision>> {
+        self.read_verified_case_through(case, None, observe)
+    }
+
+    fn read_verified_case_through(
+        &self,
+        case: &str,
+        through: Option<u64>,
         mut observe: impl FnMut(&CaseRevision, &str, bool),
     ) -> Result<Option<CaseRevision>> {
+        let maximum = through.map(integer).transpose()?.unwrap_or(i64::MAX);
         let mut statement = sql(self.connection.prepare(
-            "SELECT revision,state_sha256,parent_hash,event_hash,lifecycle='COMMIT' FROM case_revision WHERE case_id=?1 ORDER BY revision",
+            "SELECT revision,state_sha256,parent_hash,event_hash,lifecycle='COMMIT' FROM case_revision WHERE case_id=?1 AND revision<=?2 ORDER BY revision",
         ))?;
-        let rows = sql(statement.query_map([case], |r| {
+        let rows = sql(statement.query_map(params![case, maximum], |r| {
             Ok((
                 r.get::<_, i64>(0)?,
                 r.get::<_, String>(1)?,

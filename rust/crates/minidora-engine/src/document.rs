@@ -10,8 +10,8 @@ use crate::text_summary::{
     EXTRACTIVE_SUMMARY_LABEL, ExtractiveSummaryCandidates, direct_summary_candidates,
 };
 use minidora_domain::{
-    CaseRevision, Guarantee, InputBundle, Intent, Lifecycle, ResourceBudget, Result, ResultRecord,
-    SourceSpan, canonical, digest, failure, identity,
+    CaseRevision, Guarantee, InputBundle, Intent, Lifecycle, MAX_REQUEST_ATTACHMENTS,
+    ResourceBudget, Result, ResultRecord, SourceSpan, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -4722,6 +4722,10 @@ pub fn parse_csv(document: &str, has_header: bool) -> Result<CsvTable> {
     parse_csv_input(CsvInput::strict(document), has_header)
 }
 
+pub(crate) fn parse_attached_csv(document: &str) -> Result<CsvTable> {
+    parse_csv_input(CsvInput::conversation(document), true)
+}
+
 fn parse_csv_input(input: CsvInput<'_>, has_header: bool) -> Result<CsvTable> {
     parse_csv_section(input, has_header, None).map(|(table, _)| table)
 }
@@ -5948,6 +5952,308 @@ fn csv_group_statistics_input(
         ]),
         spans,
     )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CsvChartData {
+    pub source_sha256: String,
+    pub group_column: String,
+    pub value_column: String,
+    pub filter: Option<CsvChartFilter>,
+    pub total_rows: usize,
+    pub selected_rows: usize,
+    pub missing_rows: usize,
+    pub unit: Option<String>,
+    pub groups: Vec<CsvChartGroup>,
+    pub source_spans: Vec<DocumentSpan>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub sources: Vec<CsvChartFileSource>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CsvChartFileSource {
+    pub name: String,
+    pub sha256: String,
+    /// First row of this file in the aggregate's one-based record numbering.
+    /// Each span instead uses a byte range and row number local to this file.
+    pub first_record_number: usize,
+    pub total_rows: usize,
+    pub source_spans: Vec<DocumentSpan>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CsvChartFilter {
+    pub column: String,
+    pub equals: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct CsvChartGroup {
+    pub label: String,
+    pub source_record_numbers: Vec<usize>,
+    pub statistics: crate::math::Statistics,
+}
+
+#[derive(Default)]
+struct CsvChartObservations {
+    rows: Vec<usize>,
+    values: Vec<String>,
+    units: Vec<String>,
+}
+
+/// Aggregate the original parsed rows so the filter decisions and mean
+/// observations retain their CSV byte positions.
+pub(crate) fn csv_chart_data(
+    document: &str,
+    group: &str,
+    value: &str,
+    filter: Option<(&str, &str)>,
+) -> Result<CsvChartData> {
+    csv_chart_aggregate(&[("", document)], group, value, filter, false)
+}
+
+pub(crate) fn csv_chart_data_from_files(
+    files: &[(&str, &str)],
+    group: &str,
+    value: &str,
+    filter: Option<(&str, &str)>,
+) -> Result<CsvChartData> {
+    if files.is_empty() || files.len() > MAX_REQUEST_ATTACHMENTS {
+        return Err(failure(
+            "CSV_CHART_FILE_COUNT",
+            "集計するCSVファイルの件数が上限を外れています。",
+        ));
+    }
+    let byte_count = files.iter().try_fold(0usize, |total, (_, document)| {
+        total.checked_add(document.len())
+    });
+    if byte_count.is_none_or(|bytes| bytes > MAX_DOCUMENT_BYTES) {
+        return Err(failure(
+            "DOCUMENT_INPUT_LIMIT",
+            "CSVファイルの合計サイズが256000バイトを超えています。",
+        ));
+    }
+    csv_chart_aggregate(files, group, value, filter, true)
+}
+
+fn csv_chart_aggregate(
+    files: &[(&str, &str)],
+    group: &str,
+    value: &str,
+    filter: Option<(&str, &str)>,
+    attached: bool,
+) -> Result<CsvChartData> {
+    let mut group_indices = BTreeMap::<String, usize>::new();
+    let mut grouped = Vec::<(String, CsvChartObservations)>::new();
+    let mut source_spans = Vec::new();
+    let mut sources = Vec::new();
+    let mut total_rows = 0;
+    let mut total_cells = 0;
+    let mut selected_rows = 0;
+    let mut missing_rows = 0;
+    let mut observed_units = BTreeSet::new();
+    for &(filename, document) in files {
+        let csv = if attached {
+            document.strip_prefix('\u{feff}').unwrap_or(document)
+        } else {
+            document
+        };
+        let table = parse_csv_input(CsvInput::conversation(csv), true)?;
+        let header = table.header.as_ref().expect("explicit CSV header");
+        let row_count = table.rows.len();
+        total_cells += header.len() * (row_count + 1);
+        if total_rows + row_count > MAX_ROWS || total_cells > MAX_CELLS {
+            return Err(failure(
+                "CSV_CHART_FILE_SHAPE",
+                "CSVファイルの合計が4096データ行または65536セルを超えています。",
+            ));
+        }
+        let column_index = |name: &str| {
+            header
+                .iter()
+                .position(|cell| cell.value == name)
+                .ok_or_else(|| {
+                    let message = if attached {
+                        format!("「{filename}」に列「{name}」がありません。")
+                    } else {
+                        format!("CSVに列「{name}」がありません。")
+                    };
+                    failure("CSV_COLUMN", message)
+                })
+        };
+        let group_index = column_index(group)?;
+        let value_index = column_index(value)?;
+        if group_index == value_index {
+            return Err(failure(
+                "CSV_CHART_COLUMNS",
+                "グループを表す列と数値の列を別々に指定してください。",
+            ));
+        }
+        let filter_index = filter
+            .map(|(name, equals)| column_index(name).map(|index| (index, equals)))
+            .transpose()?;
+        let column_span =
+            |index, kind| source_span(csv, &header[index], kind, Some(0), index, None);
+        let mut spans = vec![
+            column_span(group_index, "CSV_CHART_GROUP_HEADER"),
+            column_span(value_index, "CSV_CHART_VALUE_HEADER"),
+        ];
+        if let Some((index, _)) = filter_index {
+            spans.push(column_span(index, "CSV_CHART_FILTER_HEADER"));
+        }
+        for (index, row) in table.rows.iter().enumerate() {
+            let record = index + 1;
+            let cell_span =
+                |column, kind| source_span(csv, &row[column], kind, Some(record), column, None);
+            if let Some((column, equals)) = filter_index {
+                spans.push(cell_span(column, "CSV_CHART_FILTER_DECISION"));
+                if row[column].value != equals {
+                    continue;
+                }
+            }
+            selected_rows += 1;
+            let label = &row[group_index].value;
+            let observation_index = *group_indices.entry(label.clone()).or_insert_with(|| {
+                let index = grouped.len();
+                grouped.push((label.clone(), CsvChartObservations::default()));
+                index
+            });
+            spans.push(cell_span(group_index, "CSV_CHART_GROUP"));
+            let raw_value = row[value_index].value.as_str();
+            if raw_value.trim().is_empty() {
+                missing_rows += 1;
+                spans.push(cell_span(value_index, "CSV_CHART_MISSING_VALUE"));
+                continue;
+            }
+
+            let (number, unit) = crate::language::decimal_quantity_parts(raw_value)
+                .or_else(|| {
+                    raw_value
+                        .trim_end()
+                        .strip_suffix('円')
+                        .map(|number| (number.trim(), "円"))
+                })
+                .unwrap_or((raw_value, ""));
+            observed_units.insert(if unit == "円" {
+                "JPY".into()
+            } else {
+                unit.to_owned()
+            });
+            let observations = &mut grouped[observation_index].1;
+            observations.rows.push(total_rows + record);
+            observations.values.push(number.into());
+            observations.units.push(unit.into());
+            spans.push(cell_span(value_index, "CSV_CHART_VALUE"));
+        }
+        if attached {
+            let offset = document.len() - csv.len();
+            for span in &mut spans {
+                span.source_start += offset;
+                span.source_end += offset;
+            }
+            sources.push(CsvChartFileSource {
+                name: filename.into(),
+                sha256: digest(document.as_bytes()),
+                first_record_number: total_rows + 1,
+                total_rows: row_count,
+                source_spans: spans,
+            });
+        } else {
+            source_spans = spans;
+        }
+        total_rows += row_count;
+    }
+    if selected_rows == 0 {
+        return Err(failure(
+            "CSV_CHART_NO_ROWS",
+            "集計条件に一致するデータ行がありません。",
+        ));
+    }
+    if selected_rows == missing_rows {
+        return Err(failure(
+            "CSV_CHART_NO_VALUES",
+            "選択した行の数値列がすべて空欄です。",
+        ));
+    }
+
+    let convert_lengths = observed_units.len() > 1;
+    let unit: Option<String> = if convert_lengths {
+        if !observed_units
+            .iter()
+            .all(|unit| crate::math::exact_length_scale_to_meters(unit).is_some())
+        {
+            return Err(failure(
+                "CSV_CHART_UNIT_MISMATCH",
+                "選択した数値を共通の単位で比較できません。",
+            ));
+        }
+        Some("m".into())
+    } else {
+        observed_units
+            .first()
+            .filter(|unit| !unit.is_empty())
+            .cloned()
+    };
+
+    let mut groups = Vec::with_capacity(grouped.len());
+    for (label, observations) in grouped {
+        if observations.rows.is_empty() {
+            continue;
+        }
+        let mut statistics = if convert_lengths {
+            // Normalize before grouping so an all-cm group shares the axis
+            // with an all-m group. Keep the original inputs in the report.
+            let normalized = observations
+                .values
+                .iter()
+                .zip(&observations.units)
+                .map(|(number, unit)| {
+                    let scale = crate::math::exact_length_scale_to_meters(unit)
+                        .expect("chart units were validated");
+                    Ok((crate::math::scalar(number)? * scale).to_string())
+                })
+                .collect::<Result<Vec<_>>>()?;
+            let meters = vec!["m".to_owned(); normalized.len()];
+            crate::math::summarize(&normalized, Some(&meters))?
+        } else {
+            let units = unit
+                .as_ref()
+                .map(|unit| vec![unit.clone(); observations.values.len()]);
+            crate::math::summarize(&observations.values, units.as_deref())?
+        };
+        statistics.input_values = observations.values;
+        statistics.input_units = unit.is_some().then_some(observations.units);
+        groups.push(CsvChartGroup {
+            label,
+            source_record_numbers: observations.rows,
+            statistics,
+        });
+    }
+    let source_sha256 = if attached {
+        let manifest = sources
+            .iter()
+            .map(|source| (source.name.as_str(), source.sha256.as_str()))
+            .collect::<Vec<_>>();
+        identity(&("minidora.csv-chart.file-manifest.v1", manifest))?
+    } else {
+        digest(files[0].1.as_bytes())
+    };
+    Ok(CsvChartData {
+        source_sha256,
+        group_column: group.into(),
+        value_column: value.into(),
+        filter: filter.map(|(column, equals)| CsvChartFilter {
+            column: column.into(),
+            equals: equals.into(),
+        }),
+        total_rows,
+        selected_rows,
+        missing_rows,
+        unit,
+        groups,
+        source_spans,
+        sources,
+    })
 }
 
 fn csv_pair_tables(input: CsvInput<'_>, delimiter_error: &str) -> Result<(CsvTable, CsvTable)> {
@@ -8183,6 +8489,121 @@ pub fn compose_explicit_text(document: &str) -> Result<TextCompositionResult> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn csv_chart_data_tracks_filtered_missing_and_unit_converted_observations() {
+        let document = concat!(
+            "地区,期間,距離\r\n",
+            "北,前半,1 m\r\n",
+            "南,後半,\"\"\r\n",
+            "北,後半,-50 cm\r\n",
+            "南,後半,3 m\r\n",
+            "西,後半, \r\n",
+            "南,前半,200 cm\r\n",
+        );
+        let all = csv_chart_data(document, "地区", "距離", None).unwrap();
+        assert_eq!(all.total_rows, 6);
+        assert_eq!(all.selected_rows, 6);
+        assert_eq!(all.missing_rows, 2);
+        assert_eq!(all.unit.as_deref(), Some("m"));
+        assert_eq!(all.groups[0].statistics.mean, "1/4");
+        assert_eq!(all.groups[1].statistics.mean, "5/2");
+
+        let filtered = csv_chart_data(document, "地区", "距離", Some(("期間", "後半"))).unwrap();
+        assert_eq!(filtered.source_sha256, all.source_sha256);
+        assert_eq!(filtered.selected_rows, 4);
+        assert_eq!(filtered.missing_rows, 2);
+        assert_eq!(filtered.unit.as_deref(), Some("m"));
+        assert_eq!(filtered.groups.len(), 2);
+        assert_eq!(filtered.groups[0].label, "南");
+        assert_eq!(filtered.groups[0].source_record_numbers, [4]);
+        assert_eq!(filtered.groups[0].statistics.mean, "3");
+        assert_eq!(filtered.groups[1].label, "北");
+        assert_eq!(filtered.groups[1].source_record_numbers, [3]);
+        assert_eq!(filtered.groups[1].statistics.mean, "-1/2");
+        assert_eq!(filtered.groups[1].statistics.input_values, ["-50"]);
+        assert_eq!(
+            filtered.groups[1].statistics.input_units,
+            Some(vec!["cm".into()])
+        );
+
+        for span in &filtered.source_spans {
+            assert_eq!(
+                document.get(span.source_start..span.source_end),
+                Some(span.source_text.as_str())
+            );
+        }
+        let missing = filtered
+            .source_spans
+            .iter()
+            .find(|span| span.row == Some(2) && span.kind == "CSV_CHART_MISSING_VALUE")
+            .unwrap();
+        assert_eq!(missing.source_text, "\"\"");
+        assert_eq!(missing.decoded_value.as_deref(), Some(""));
+        assert_eq!(
+            filtered
+                .source_spans
+                .iter()
+                .filter(|span| span.kind == "CSV_CHART_FILTER_DECISION")
+                .count(),
+            6
+        );
+    }
+
+    #[test]
+    fn csv_chart_data_combines_explicit_yen_labels_without_currency_conversion() {
+        let document = "地区,売上\n東,10 円\n東,20 JPY\n西,5円";
+        let chart = csv_chart_data(document, "地区", "売上", None).unwrap();
+        assert_eq!(chart.unit.as_deref(), Some("JPY"));
+        assert_eq!(chart.groups[0].statistics.mean, "15");
+        assert_eq!(
+            chart.groups[0].statistics.input_units,
+            Some(vec!["円".into(), "JPY".into()])
+        );
+        assert_eq!(chart.groups[1].statistics.mean, "5");
+        assert!(
+            chart
+                .source_spans
+                .iter()
+                .any(|span| span.source_text == "10 円")
+        );
+
+        let error =
+            csv_chart_data("地区,売上\n東,10 円\n西,20 CNY", "地区", "売上", None).unwrap_err();
+        assert!(
+            matches!(error, minidora_domain::Error::Contract { ref code, .. } if code == "CSV_CHART_UNIT_MISMATCH")
+        );
+        assert!(csv_chart_data("地区,売上\n東,10 ¥", "地区", "売上", None).is_err());
+    }
+
+    #[test]
+    fn csv_chart_data_declines_incompatible_units_and_empty_observations() {
+        use minidora_domain::Error;
+        for (document, filter, expected) in [
+            (
+                "地域,金額\n東,20 kg\n西,21 g",
+                None,
+                "CSV_CHART_UNIT_MISMATCH",
+            ),
+            (
+                "地域,金額\n東,20 kg\n西,21",
+                None,
+                "CSV_CHART_UNIT_MISMATCH",
+            ),
+            (
+                "地域,金額\n東,20\n西,21",
+                Some(("地域", "北")),
+                "CSV_CHART_NO_ROWS",
+            ),
+            ("地域,金額\n東, \n西,\"\"", None, "CSV_CHART_NO_VALUES"),
+        ] {
+            let error = csv_chart_data(document, "地域", "金額", filter).unwrap_err();
+            assert!(
+                matches!(error, Error::Contract { ref code, .. } if code == expected),
+                "{error:?}"
+            );
+        }
+    }
 
     #[test]
     fn japanese_csv_inner_join_keeps_quoted_labels_and_original_byte_spans() {

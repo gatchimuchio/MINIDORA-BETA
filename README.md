@@ -12,7 +12,7 @@ This is an independently isolated beta of the public implementation from [NOTNN-
 
 | If you want to… | Read |
 |---|---|
-| Start the **current Rust STANDARD BETA** or use its Native API | [Linux build and Japanese startup guide](rust/README.md#linux-v5-実行版と引渡し) and [Native API](rust/README.md#標準api) |
+| Start the Rust development build or use its Native API | [Windows で Rust 版を起動](#windows-で-rust-版を起動), [Linux build evidence](rust/README.md#linux-v5-実行版と引渡し), and [Native API](rust/README.md#標準api) |
 | Explore the **R2 logical successor design, rejected R1 audit and remaining source/evidence gates** | [Whole-system redesign register](docs/redesign/README.md) |
 | Follow the **current Japanese-base MINIDORA STANDARD BETA BUILD plan** | [2026-11-24 BUILD-v5 requirements, design, implementation schedule and Codex order](rust/audit/construction/MB-BUILD-20261124-V5-STANDARD/README.md), [root AGENTS](AGENTS.md) and [dated implementation history](rust/audit/IMPLEMENTATION_STATUS.md) |
 | Understand the engine without reading Japanese | [English onboarding guide](docs/ENGLISH_ONBOARDING.md) |
@@ -21,6 +21,24 @@ This is an independently isolated beta of the public implementation from [NOTNN-
 | Understand the immutable beta distribution vs. later documentation | [Repository lock](REPOSITORY_LOCK.md) and [Documentation revision](DOCS_REVISION.md) |
 | Contribute without altering the baseline | [Contributing](CONTRIBUTING.md) and [Agent instructions](AGENTS.md) |
 | Review publication and licensing restrictions | [Publication boundary](PUBLICATION_BOUNDARY.md), [LICENSE](LICENSE), [NOTICE](NOTICE) |
+
+## Windows で Rust 版を起動
+
+Rustup、MSVC向けC++ビルドツール、Windows SDKを用意してください。このソースの `rust/rust-toolchain.toml` はRust 1.99.1を指定し、`rust/Cargo.lock` は依存を固定しています。初回はツールチェーンと依存の取得やビルドに時間がかかります。
+
+手元のソースのルートをPowerShellで開き、次を実行します。ローカル会話に外部AIのAPIキーは不要です。
+
+```powershell
+.\start-minidora.cmd
+```
+
+`>` が表示されたら `こんにちは` と入力できます。既定の保存先は `rust/.data/standard-beta` です。保存先や会話を指定する場合は、次のように起動します。
+
+```powershell
+.\start-minidora.cmd --db "C:\MINIDORA Work\State" --actor "local-user" --case "作業メモ"
+```
+
+既存のUTF-8資料を読むには、対話内で `/attach "C:\MINIDORA Work\資料.txt"` のパスを実際のファイルに置き換え、次の発話で「添付資料を出典付きで要約して」と入力します。`/exit` で終了し、同じ保存先・利用者・会話IDで起動すると続きから再開できます。
 
 ## R2 logical design and separate Rust construction
 

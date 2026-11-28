@@ -688,6 +688,7 @@ fn direct_core_observation_two_separates_derived_conflicting_and_unmet_relations
         serde_json::to_string(&evidence).expect("serialize direct Core observation")
     );
 
+    drop(counterfactual_store);
     drop(store);
     drop(engine);
     fs::remove_dir_all(directory).expect("remove isolated Core observation state");

@@ -1,17 +1,20 @@
 //! Thin local frontends: interpretation, execution and judgment remain in Engine.
 #![forbid(unsafe_code)]
 
+mod attachment;
+mod case_http;
 mod chat;
+mod microphone;
 
 use minidora_domain::{
-    ActionRecord, EffectPhase, Lifecycle, RequestEnvelope, ResourceBudget, ResultRecord,
-    SCHEMA_VERSION,
+    ActionRecord, EffectPhase, Lifecycle, MAX_REQUEST_ATTACHMENTS, PurposeUse, RequestAttachment,
+    RequestEnvelope, ResourceBudget, ResultRecord, SCHEMA_VERSION,
 };
 use minidora_engine::{Engine, store::Store};
 use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, BufRead, BufReader, IsTerminal, Read, Write};
 use std::net::{SocketAddr, TcpListener, TcpStream};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -22,7 +25,9 @@ const HELP: &str = concat!(
 
 Usage:
   minidora-rust [run] [OPTIONS] [--] REQUEST...
-  minidora-rust chat [--db DIRECTORY] [--actor ID] [--case ID] [--allow-read-host HOST]... [--allow-write EXACT_PATH]...
+  minidora-rust chat [--db DIRECTORY] [--actor ID] [--case ID] [--allow-read-host HOST]...
+    [--allow-write EXACT_PATH]... [--wasm-node ABSOLUTE_PATH] [--speech-assets ABSOLUTE_DIR]
+    [--asr-assets ABSOLUTE_DIR] [--ocr-assets ABSOLUTE_DIR]
   minidora-rust capabilities [--json]
   minidora-rust inspect [--db DIRECTORY] [--case ID] [--actor ID] [--input ID [--version N]] [--json]
   minidora-rust migrate --db DIRECTORY [--json]
@@ -39,7 +44,14 @@ Options:
   --actor ID                 Trusted local frontend identity
   --json                     Print the full result or case revision as JSON
   --allow-read-host HOST      Permit one exact read destination; repeatable
+  --attach EXACT_PATH        Read one local PDF, XLSX, PNG, JPEG, or UTF-8 .csv, .txt, or .md (Windows run; repeatable)
   --allow-write EXACT_PATH    Permit one exact output path; repeatable
+  --wasm-node ABSOLUTE_PATH   Configure the trusted Node executable for local WebAssembly
+  --speech-assets ABSOLUTE_DIR  Configure local Japanese WAV generation (run, chat, serve)
+                              Include naist-jdic/ and nitech_jp_atr503_m001.htsvoice
+  --asr-assets ABSOLUTE_DIR     Configure local Japanese recognition (chat, serve)
+  --ocr-assets ABSOLUTE_DIR     Configure local image text recognition (run, chat, serve)
+  --allow-wasm-execution      Permit WebAssembly execution for this request (run only)
   --output EXACT_PATH        Request an output file; does not grant write permission
   --max-actions N            Finite action admission budget
   --deadline-ms N            Finite execution deadline
@@ -51,7 +63,10 @@ Without text arguments, run reads bounded UTF-8 text from redirected stdin.
 Use -- before request text beginning with a dash. Retries with an explicit
 (case,input,version) reuse the durable result or report an identity conflict.
 Chat reads one turn at a time from stdin. Type /help inside chat for session,
-multiline input and network controls.
+multiline input and network controls. With --wasm-node configured, enter
+/allow-exec directly before the WebAssembly request to grant that single turn.
+Use /attach EXACT_PATH to select a local file for the next chat request.
+Use /listen EXACT_PATH to submit one spoken turn from a local WAV file.
 Capabilities prints the engine's version and implemented capabilities as JSON.
 
 Inspect emits the latest case revision as JSON. With --input ID it reads the
@@ -83,7 +98,8 @@ Bearer TOKEN and a full RequestEnvelope JSON object. The stream route requires
 Accept: text/event-stream and emits versioned provisional/invalidation/final
 events; only the final Core result carries answer content. The configured server
 actor is the only authenticated identity. Request permissions must be subsets of
---allow-* grants; budgets are capped to server limits. HTTP is local plaintext only.
+--allow-* grants; budgets are capped to server limits. WebAssembly execution is
+available through local run and chat. HTTP is local plaintext only.
 
 Exit: COMMIT 0; SUSPEND 2; REJECT 3; FAIL 4; CANCEL 5; frontend error 1.
 "#,
@@ -114,6 +130,12 @@ struct Options {
     json: bool,
     read_hosts: BTreeSet<String>,
     write_paths: BTreeSet<PathBuf>,
+    wasm_node: Option<PathBuf>,
+    speech_assets: Option<PathBuf>,
+    asr_assets: Option<PathBuf>,
+    ocr_assets: Option<PathBuf>,
+    allow_wasm_execution: bool,
+    attachment_paths: Vec<PathBuf>,
     output: Option<PathBuf>,
     budget: ResourceBudget,
     bind: SocketAddr,
@@ -156,6 +178,12 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
         json: false,
         read_hosts: BTreeSet::new(),
         write_paths: BTreeSet::new(),
+        wasm_node: None,
+        speech_assets: None,
+        asr_assets: None,
+        ocr_assets: None,
+        allow_wasm_execution: false,
+        attachment_paths: Vec::new(),
         output: None,
         budget: ResourceBudget::development(),
         bind: "127.0.0.1:8080".parse().expect("literal socket address"),
@@ -211,6 +239,10 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
                     | "--actor"
                     | "--allow-read-host"
                     | "--allow-write"
+                    | "--wasm-node"
+                    | "--speech-assets"
+                    | "--asr-assets"
+                    | "--ocr-assets"
                     | "--max-actions"
                     | "--deadline-ms"
                     | "--max-input-bytes"
@@ -260,6 +292,67 @@ fn parse(args: impl IntoIterator<Item = String>) -> Result<Options, String> {
                 options
                     .write_paths
                     .insert(next_value(&mut args, &arg)?.into());
+            }
+            "--wasm-node" => {
+                if !matches!(options.mode, Mode::Run | Mode::Chat) {
+                    return Err("--wasm-node is only accepted by local run and chat".into());
+                }
+                let path = PathBuf::from(next_value(&mut args, &arg)?);
+                if !path.is_absolute() || options.wasm_node.is_some() {
+                    return Err("--wasm-node requires one absolute executable path".into());
+                }
+                options.wasm_node = Some(path);
+            }
+            "--speech-assets" => {
+                if !matches!(options.mode, Mode::Run | Mode::Chat | Mode::Serve) {
+                    return Err("--speech-assets is only accepted by run, chat, and serve".into());
+                }
+                let path = PathBuf::from(next_value(&mut args, &arg)?);
+                if !path.is_absolute() || options.speech_assets.is_some() {
+                    return Err("--speech-assets requires one absolute directory path".into());
+                }
+                options.speech_assets = Some(path);
+            }
+            "--asr-assets" => {
+                if !matches!(options.mode, Mode::Chat | Mode::Serve) {
+                    return Err("--asr-assets is only accepted by chat and serve".into());
+                }
+                let path = PathBuf::from(next_value(&mut args, &arg)?);
+                if !path.is_absolute() || options.asr_assets.is_some() {
+                    return Err("--asr-assets requires one absolute directory path".into());
+                }
+                options.asr_assets = Some(path);
+            }
+            "--ocr-assets" => {
+                if !matches!(options.mode, Mode::Run | Mode::Chat | Mode::Serve) {
+                    return Err("--ocr-assets is only accepted by run, chat, and serve".into());
+                }
+                let path = PathBuf::from(next_value(&mut args, &arg)?);
+                if !path.is_absolute() || options.ocr_assets.is_some() {
+                    return Err("--ocr-assets requires one absolute directory path".into());
+                }
+                options.ocr_assets = Some(path);
+            }
+            "--allow-wasm-execution" => {
+                if options.mode != Mode::Run {
+                    return Err("--allow-wasm-execution is only accepted by local run".into());
+                }
+                options.allow_wasm_execution = true;
+            }
+            "--attach" => {
+                if options.mode != Mode::Run {
+                    return Err(
+                        "--attach is only accepted by local run; use /attach in chat".into(),
+                    );
+                }
+                if options.attachment_paths.len() == MAX_REQUEST_ATTACHMENTS {
+                    return Err(format!(
+                        "--attach accepts at most {MAX_REQUEST_ATTACHMENTS} files"
+                    ));
+                }
+                options
+                    .attachment_paths
+                    .push(next_value(&mut args, &arg)?.into());
             }
             "--output" => options.output = Some(next_value(&mut args, &arg)?.into()),
             "--max-actions" => {
@@ -394,7 +487,7 @@ fn run(options: Options) -> Result<u8, String> {
     if options.mode == Mode::Run {
         return run_request(options);
     }
-    let mut engine = Engine::open(&options.db).map_err(|error| error.to_string())?;
+    let mut engine = open_engine(&options)?;
     if options.mode == Mode::Chat {
         return chat::run(&mut engine, options);
     }
@@ -473,17 +566,62 @@ fn run_request(options: Options) -> Result<u8, String> {
     if text.trim().is_empty() {
         return Err("request text is empty".into());
     }
-    let mut engine = Engine::open(&options.db).map_err(|error| error.to_string())?;
-    let result = execute_request(&mut engine, &options, &text, &options.read_hosts)?;
+    let mut attachments = Vec::new();
+    let attachment_budget = options.budget.max_input_bytes.saturating_sub(text.len());
+    for path in &options.attachment_paths {
+        attachment::stage(&mut attachments, path, attachment_budget)?;
+    }
+    let mut engine = open_engine(&options)?;
+    let result = execute_request(
+        &mut engine,
+        &options,
+        RequestInput::Text(&text),
+        &options.read_hosts,
+        options.allow_wasm_execution,
+        attachments,
+        None,
+    )?;
     print_result(&result, options.json)?;
     Ok(terminal_exit(result.lifecycle))
+}
+
+fn open_engine(options: &Options) -> Result<Engine, String> {
+    let mut engine = Engine::open(&options.db).map_err(|error| error.to_string())?;
+    if let Some(path) = &options.wasm_node {
+        engine
+            .configure_wasm_node(path.clone())
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(path) = &options.speech_assets {
+        let dictionary = path.join("naist-jdic");
+        let voice = path.join("nitech_jp_atr503_m001.htsvoice");
+        minidora_engine::configure_japanese_speech(&dictionary, &voice)
+            .map_err(|error| error.to_string())?;
+    }
+    if let Some(path) = &options.asr_assets {
+        minidora_engine::configure_japanese_recognition(path).map_err(|error| error.to_string())?;
+    }
+    if let Some(path) = &options.ocr_assets {
+        minidora_engine::configure_image_ocr(path).map_err(|error| error.to_string())?;
+    }
+    Ok(engine)
+}
+
+#[derive(Clone, Copy)]
+enum RequestInput<'a> {
+    Text(&'a str),
+    Speech(&'a Path),
+    SpeechBytes(&'a [u8]),
 }
 
 fn execute_request(
     engine: &mut Engine,
     options: &Options,
-    text: &str,
+    input: RequestInput<'_>,
     read_hosts: &BTreeSet<String>,
+    allow_wasm_execution: bool,
+    attachments: Vec<RequestAttachment>,
+    purpose: Option<PurposeUse>,
 ) -> Result<ResultRecord, String> {
     let input_id = match &options.input_id {
         Some(id) => id.clone(),
@@ -494,15 +632,40 @@ fn execute_request(
             format!("run-{:x}-{:x}", started.as_nanos(), std::process::id())
         }
     };
-    let mut request = RequestEnvelope::new(&options.case_id, &input_id, &options.actor, text);
+    let mut request = RequestEnvelope::new(
+        &options.case_id,
+        &input_id,
+        &options.actor,
+        match input {
+            RequestInput::Text(text) => text,
+            RequestInput::Speech(_) | RequestInput::SpeechBytes(_) => "",
+        },
+    );
     request.input_version = options.input_version;
     request.context_ref = options.context_ref.clone();
-    request.permissions.read_hosts = read_hosts.clone();
     request.permissions.write_paths = options.write_paths.clone();
     request.output_path = options.output.clone();
     request.budget = options.budget.clone();
-    engine
-        .execute(&options.actor, request)
+    request.purpose = purpose.map(Box::new);
+    let speech = match input {
+        RequestInput::Text(_) => {
+            request.attachments = attachments;
+            request.permissions.read_hosts = read_hosts.clone();
+            request.permissions.wasm_execution = allow_wasm_execution;
+            return engine
+                .execute(&options.actor, request)
+                .map_err(|error| error.to_string());
+        }
+        RequestInput::Speech(path) => engine.execute_wave_file(&options.actor, request, path),
+        RequestInput::SpeechBytes(wave) => engine
+            .execute_wave_bytes(&options.actor, request, wave)
+            .map(|(recognition, result)| (recognition.text, result)),
+    };
+    speech
+        .map(|(transcript, result)| {
+            eprintln!("認識した発話: {transcript}");
+            result
+        })
         .map_err(|error| error.to_string())
 }
 
@@ -544,6 +707,22 @@ fn print_actions(actions: &[ActionRecord], json: bool) -> Result<(), String> {
 }
 
 fn main() -> ExitCode {
+    #[cfg(windows)]
+    {
+        let mut args = std::env::args_os().skip(1);
+        if args.next().as_deref() == Some(std::ffi::OsStr::new("--minidora-internal-pdf-reader-v1"))
+            && args.next().is_none()
+        {
+            if minidora_engine::run_pdf_worker_stdio().is_ok() {
+                return ExitCode::SUCCESS;
+            }
+            eprintln!("minidora-rust: PDF文書の処理を完了できませんでした。");
+            return ExitCode::FAILURE;
+        }
+        if let Ok(executable) = std::env::current_exe() {
+            let _ = minidora_engine::configure_pdf_worker(executable);
+        }
+    }
     match parse(std::env::args().skip(1)).and_then(run) {
         Ok(code) => ExitCode::from(code),
         Err(message) => {
@@ -583,10 +762,29 @@ impl Read for AdmissionReader<'_> {
 struct HttpError(u16, &'static str);
 
 const STREAM_API_VERSION: &str = "minidora-stream/v1";
+const WAVE_STREAM_ROUTE: &str = "/v1/execute/wave/stream";
+const READ_HOSTS_ROUTE: &str = "/v1/read-hosts";
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReadHostsRequest {
+    actor_id: String,
+}
+
+#[derive(serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WaveStreamRequest {
+    actor_id: String,
+    case_id: String,
+    input_id: String,
+    input_version: u64,
+    wave: Vec<u8>,
+    budget: ResourceBudget,
+}
 
 fn static_asset(target: &str) -> Option<(&'static str, &'static [u8])> {
     match target {
-        "/" => Some((
+        "/" | "/index.html" => Some((
             "text/html; charset=utf-8",
             include_bytes!("../web/index.html"),
         )),
@@ -594,6 +792,10 @@ fn static_asset(target: &str) -> Option<(&'static str, &'static [u8])> {
         "/app.js" => Some((
             "application/javascript; charset=utf-8",
             include_bytes!("../web/app.js"),
+        )),
+        "/microphone-worklet.js" => Some((
+            "application/javascript; charset=utf-8",
+            include_bytes!("../web/microphone-worklet.js"),
         )),
         "/styles.css" => Some((
             "text/css; charset=utf-8",
@@ -733,7 +935,12 @@ fn validate_http(request: &HttpRequest, address: SocketAddr, token: &str) -> Res
     if request.method != "POST"
         || !matches!(
             request.target.as_str(),
-            "/v1/execute" | "/v1/execute/stream"
+            "/v1/execute"
+                | "/v1/execute/stream"
+                | WAVE_STREAM_ROUTE
+                | READ_HOSTS_ROUTE
+                | case_http::FORK_ROUTE
+                | case_http::HISTORY_ROUTE
         )
     {
         return Err(HttpError(404, "route not found"));
@@ -744,8 +951,10 @@ fn validate_http(request: &HttpRequest, address: SocketAddr, token: &str) -> Res
     if !request.headers.contains_key("content-length") {
         return Err(HttpError(411, "Content-Length is required"));
     }
-    if request.target == "/v1/execute/stream"
-        && request.headers.get("accept").map(String::as_str) != Some("text/event-stream")
+    if matches!(
+        request.target.as_str(),
+        "/v1/execute/stream" | WAVE_STREAM_ROUTE
+    ) && request.headers.get("accept").map(String::as_str) != Some("text/event-stream")
     {
         return Err(HttpError(406, "Accept must be text/event-stream"));
     }
@@ -760,6 +969,12 @@ fn constrain_request(
         return Err(HttpError(
             403,
             "request actor differs from authenticated server actor",
+        ));
+    }
+    if request.permissions.wasm_execution {
+        return Err(HttpError(
+            403,
+            "WebAssembly execution requires local operator authorization",
         ));
     }
     if !request
@@ -823,10 +1038,16 @@ fn send_http(stream: &mut TcpStream, status: u16, body: &[u8]) -> io::Result<()>
     stream.flush()
 }
 
-fn send_static_http(stream: &mut TcpStream, content_type: &str, body: &[u8]) -> io::Result<()> {
+fn send_static_http(
+    stream: &mut TcpStream,
+    content_type: &str,
+    body: &[u8],
+    allows_microphone: bool,
+) -> io::Result<()> {
+    let microphone = if allows_microphone { "(self)" } else { "()" };
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nPermissions-Policy: camera=(), microphone=(), geolocation=()\r\nContent-Security-Policy: default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'\r\n\r\n",
+        "HTTP/1.1 200 OK\r\nContent-Type: {content_type}\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store, no-transform\r\nX-Content-Type-Options: nosniff\r\nX-Frame-Options: DENY\r\nReferrer-Policy: no-referrer\r\nPermissions-Policy: camera=(), microphone={microphone}, geolocation=()\r\nContent-Security-Policy: default-src 'self'; base-uri 'none'; frame-ancestors 'none'; form-action 'self'; object-src 'none'; script-src 'self'; style-src 'self'; connect-src 'self'; img-src 'self' blob:; media-src 'self' blob:\r\n\r\n",
         body.len()
     )?;
     stream.write_all(body)?;
@@ -857,6 +1078,7 @@ fn handle_sse(
     actor: &str,
     request: RequestEnvelope,
     stream: &mut TcpStream,
+    wave: Option<&[u8]>,
 ) -> Result<(), HttpError> {
     let input_id = request.input_id.clone();
     let stream_id = format!("{}:{input_id}", request.case_id);
@@ -875,8 +1097,14 @@ fn handle_sse(
     )
     .map_err(|_| HttpError(500, "cannot write provisional stream event"))?;
 
-    match engine.execute(actor, request) {
-        Ok(result) => {
+    let execution = match wave {
+        Some(wave) => engine
+            .execute_wave_bytes(actor, request, wave)
+            .map(|(recognition, result)| (result, Some(recognition))),
+        None => engine.execute(actor, request).map(|result| (result, None)),
+    };
+    match execution {
+        Ok((result, recognition)) => {
             if result.lifecycle != Lifecycle::Commit {
                 send_sse_event(
                     stream,
@@ -893,19 +1121,20 @@ fn handle_sse(
             }
             let result = serde_json::to_value(result)
                 .map_err(|_| HttpError(500, "cannot encode stream result"))?;
-            send_sse_event(
-                stream,
-                "final",
-                &serde_json::json!({
-                    "api_version": STREAM_API_VERSION,
-                    "stream_id": stream_id,
-                    "phase": "FINAL",
-                    "result": result
-                }),
-            )
-            .map_err(|_| HttpError(500, "cannot write final stream event"))?;
+            let mut frame = serde_json::json!({
+                "api_version": STREAM_API_VERSION,
+                "stream_id": stream_id,
+                "phase": "FINAL",
+                "result": result
+            });
+            if let Some(recognition) = recognition {
+                frame["recognition"] = serde_json::to_value(recognition)
+                    .map_err(|_| HttpError(500, "cannot encode speech recognition"))?;
+            }
+            send_sse_event(stream, "final", &frame)
+                .map_err(|_| HttpError(500, "cannot write final stream event"))?;
         }
-        Err(_) => {
+        Err(error) => {
             send_sse_event(
                 stream,
                 "invalidated",
@@ -918,21 +1147,77 @@ fn handle_sse(
                 }),
             )
             .map_err(|_| HttpError(500, "cannot write invalidation stream event"))?;
-            send_sse_event(
-                stream,
-                "error",
-                &serde_json::json!({
+            let mut frame = serde_json::json!({
                     "api_version": STREAM_API_VERSION,
                     "stream_id": stream_id,
                     "phase": "ERROR",
                     "status": 409,
                     "error": "engine rejected request; inspect durable state with the trusted local CLI"
-                }),
-            )
-            .map_err(|_| HttpError(500, "cannot write stream error event"))?;
+            });
+            if wave.is_some() {
+                let (code, message) = wave_stream_error(&error);
+                frame["code"] = serde_json::json!(code);
+                frame["error"] = serde_json::json!(message);
+            }
+            send_sse_event(stream, "error", &frame)
+                .map_err(|_| HttpError(500, "cannot write stream error event"))?;
         }
     }
     Ok(())
+}
+
+fn wave_stream_error(error: &minidora_domain::Error) -> (&'static str, &'static str) {
+    let code = match error {
+        minidora_domain::Error::Contract { code, .. } => code.as_str(),
+        _ => "",
+    };
+    match code {
+        "INVALID_WAVE_PCM" => (
+            "INVALID_WAVE_PCM",
+            "選んだWAVをPCM音声として読み取れません。",
+        ),
+        "SPEECH_INPUT_FORMAT" => (
+            "SPEECH_INPUT_FORMAT",
+            "16 kHz・16 bit・モノラルPCMのWAVを指定してください。",
+        ),
+        "SPEECH_INPUT_LIMIT" => (
+            "SPEECH_INPUT_LIMIT",
+            "WAVまたは認識文が依頼の入力上限を超えました。",
+        ),
+        "SPEECH_INPUT_UNCONFIGURED" => (
+            "SPEECH_INPUT_UNCONFIGURED",
+            "サーバー起動時に --asr-assets で音声認識資産を指定してください。",
+        ),
+        "SPEECH_INPUT_UNAVAILABLE" => (
+            "SPEECH_INPUT_UNAVAILABLE",
+            "この実行環境ではローカル日本語音声認識を利用できません。",
+        ),
+        "SPEECH_INPUT_DEADLINE" => (
+            "SPEECH_INPUT_DEADLINE",
+            "期限内に音声を認識できませんでした。",
+        ),
+        "SPEECH_INPUT_NO_RESULT" => (
+            "SPEECH_INPUT_NO_RESULT",
+            "WAVの発話を認識できませんでした。",
+        ),
+        "SPEECH_INPUT_MULTIPLE_UTTERANCES" => (
+            "SPEECH_INPUT_MULTIPLE_UTTERANCES",
+            "一つの発話に分けたWAVを選んでください。",
+        ),
+        "ACCESS_DENIED" => (
+            "ACCESS_DENIED",
+            "現在の利用者から指定の会話にはアクセスできません。",
+        ),
+        "INPUT_IDENTITY_CONFLICT" => (
+            "INPUT_IDENTITY_CONFLICT",
+            "この入力IDには異なる依頼が記録されています。",
+        ),
+        "INVALID_IDENTITY" => ("INVALID_IDENTITY", "会話IDまたは入力IDが無効です。"),
+        _ => (
+            "SPEECH_INPUT_FAILED",
+            "音声を処理できませんでした。ファイルと音声認識の設定を確認してください。",
+        ),
+    }
 }
 
 fn handle_http(
@@ -957,7 +1242,8 @@ fn handle_http(
     if request.method == "GET"
         && let Some((content_type, body)) = static_asset(&request.target)
     {
-        send_static_http(stream, content_type, body)
+        let allows_microphone = matches!(request.target.as_str(), "/" | "/index.html");
+        send_static_http(stream, content_type, body, allows_microphone)
             .map_err(|_| HttpError(500, "cannot write response"))?;
         return Ok(());
     }
@@ -965,22 +1251,49 @@ fn handle_http(
         let envelope = serde_json::from_slice::<RequestEnvelope>(&request.body)
             .map_err(|_| HttpError(400, "invalid RequestEnvelope JSON"))?;
         let envelope = constrain_request(envelope, options)?;
-        return handle_sse(engine, &options.actor, envelope, stream);
+        return handle_sse(engine, &options.actor, envelope, stream, None);
     }
-    let body = if request.method == "GET" {
-        serde_json::to_vec(&serde_json::json!({ "status": "ok", "schema_version": SCHEMA_VERSION }))
-            .map_err(|_| HttpError(500, "cannot encode response"))?
-    } else {
-        let envelope = serde_json::from_slice::<RequestEnvelope>(&request.body)
-            .map_err(|_| HttpError(400, "invalid RequestEnvelope JSON"))?;
+    if request.method == "POST" && request.target == WAVE_STREAM_ROUTE {
+        let input = serde_json::from_slice::<WaveStreamRequest>(&request.body)
+            .map_err(|_| HttpError(400, "WAV入力のJSONが無効です。"))?;
+        if input.input_version == 0 {
+            return Err(HttpError(400, "入力版には1以上を指定してください。"));
+        }
+        let mut envelope =
+            RequestEnvelope::new(&input.case_id, &input.input_id, &input.actor_id, "");
+        envelope.input_version = input.input_version;
+        envelope.budget = input.budget;
         let envelope = constrain_request(envelope, options)?;
-        let result = engine.execute(&options.actor, envelope).map_err(|_| {
-            HttpError(
-                409,
-                "engine rejected request; inspect durable state with the trusted local CLI",
-            )
-        })?;
-        serde_json::to_vec(&result).map_err(|_| HttpError(500, "cannot encode response"))?
+        return handle_sse(engine, &options.actor, envelope, stream, Some(&input.wave));
+    }
+    let body = match request.target.as_str() {
+        "/health" => serde_json::to_vec(
+            &serde_json::json!({ "status": "ok", "schema_version": SCHEMA_VERSION }),
+        )
+        .map_err(|_| HttpError(500, "cannot encode response"))?,
+        READ_HOSTS_ROUTE => {
+            let input = serde_json::from_slice::<ReadHostsRequest>(&request.body)
+                .map_err(|_| HttpError(400, "通信先の確認に必要な入力が無効です。"))?;
+            if input.actor_id != options.actor {
+                return Err(HttpError(403, "指定した利用者が認証先と一致しません。"));
+            }
+            serde_json::to_vec(&serde_json::json!({ "read_hosts": &options.read_hosts }))
+                .map_err(|_| HttpError(500, "cannot encode response"))?
+        }
+        case_http::FORK_ROUTE => case_http::fork(engine, &options.actor, &request.body)?,
+        case_http::HISTORY_ROUTE => case_http::history(engine, &options.actor, &request.body)?,
+        _ => {
+            let envelope = serde_json::from_slice::<RequestEnvelope>(&request.body)
+                .map_err(|_| HttpError(400, "invalid RequestEnvelope JSON"))?;
+            let envelope = constrain_request(envelope, options)?;
+            let result = engine.execute(&options.actor, envelope).map_err(|_| {
+                HttpError(
+                    409,
+                    "engine rejected request; inspect durable state with the trusted local CLI",
+                )
+            })?;
+            serde_json::to_vec(&result).map_err(|_| HttpError(500, "cannot encode response"))?
+        }
     };
     send_http(stream, 200, &body).map_err(|_| HttpError(500, "cannot write response"))
 }
@@ -1033,6 +1346,25 @@ mod tests {
         let options = args(&["--output", "/tmp/result", "2+3"]).unwrap();
         assert!(options.write_paths.is_empty());
         assert_eq!(options.output, Some(PathBuf::from("/tmp/result")));
+    }
+
+    #[test]
+    fn wasm_configuration_and_grants_have_separate_local_scope() {
+        let absolute = std::env::current_dir().unwrap().join("node");
+        let path = absolute.to_str().unwrap();
+        let configured = args(&["chat", "--wasm-node", path]).unwrap();
+        assert_eq!(configured.wasm_node, Some(absolute.clone()));
+        assert!(!configured.allow_wasm_execution);
+
+        let requested = args(&["run", "--allow-wasm-execution", "2+3"]).unwrap();
+        assert!(requested.allow_wasm_execution);
+        assert!(requested.wasm_node.is_none());
+        assert!(args(&["chat", "--allow-wasm-execution"]).is_err());
+        assert!(args(&["serve", "--allow-wasm-execution"]).is_err());
+        assert!(args(&["serve", "--wasm-node", path]).is_err());
+        assert!(args(&["reconcile", "--wasm-node", path]).is_err());
+        assert!(args(&["run", "--wasm-node", "relative/path"]).is_err());
+        assert!(args(&["run", "--wasm-node", path, "--wasm-node", path]).is_err());
     }
 
     #[test]
@@ -1161,6 +1493,12 @@ mod tests {
         let forged = RequestEnvelope::new("case", "input", "untrusted", "2+3");
         assert!(matches!(
             constrain_request(forged, &options),
+            Err(HttpError(403, _))
+        ));
+        let mut remote_execution = RequestEnvelope::new("case", "input", "trusted", "2+3");
+        remote_execution.permissions.wasm_execution = true;
+        assert!(matches!(
+            constrain_request(remote_execution, &options),
             Err(HttpError(403, _))
         ));
         let mut request = RequestEnvelope::new("case", "input", "trusted", "2+3");

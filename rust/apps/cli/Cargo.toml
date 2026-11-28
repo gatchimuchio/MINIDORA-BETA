@@ -14,3 +14,6 @@ minidora-domain.workspace = true
 minidora-engine.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+wasapi = "=0.27.0"

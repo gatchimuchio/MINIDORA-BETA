@@ -560,6 +560,59 @@ pub(crate) fn convert_exact_length(prior: &Calculation, target: &str) -> Result<
     })
 }
 
+/// Scale a verified retained scalar or exact SI length without reinterpreting
+/// its source expression. The caller retains that source as a dependency.
+pub(crate) fn scale_previous_calculation(
+    value: &Calculation,
+    numerator: i64,
+    denominator: u64,
+) -> Result<Calculation> {
+    if denominator == 0 {
+        return Err(failure(
+            "DIVISION_BY_ZERO",
+            "倍率の分母はゼロにできません。",
+        ));
+    }
+
+    let (number, unit) = match value.exact_value.rsplit_once(' ') {
+        Some((number, unit)) => {
+            if crate::math::exact_length_scale_to_meters(unit).is_none() {
+                return Err(failure(
+                    "CALCULATION_SCALE_UNIT_UNSUPPORTED",
+                    "倍率を適用できる長さの単位は mm、cm、m、km です。",
+                ));
+            }
+            (number, Some(unit))
+        }
+        None => (value.exact_value.as_str(), None),
+    };
+    let prior = BigRational::from_str(number)
+        .ok()
+        .filter(|prior| rational_text(prior) == number)
+        .ok_or_else(|| {
+            failure(
+                "CALCULATION_SCALE_VALUE_INVALID",
+                "前の計算結果から正確な数値を読み取れません。",
+            )
+        })?;
+    ExpressionParser::check(&prior)?;
+    let factor = BigRational::new(BigInt::from(numerator), BigInt::from(denominator));
+    let scaled = prior * &factor;
+    ExpressionParser::check(&scaled)?;
+
+    let mut exact_value = rational_text(&scaled);
+    if let Some(unit) = unit {
+        exact_value.push(' ');
+        exact_value.push_str(unit);
+    }
+    let expression = format!("({}) × ({})", value.exact_value, rational_text(&factor));
+    Ok(Calculation {
+        steps: vec![format!("{expression} = {exact_value}")],
+        expression,
+        exact_value,
+    })
+}
+
 /// Return a new exact result after replacing one literal operand in a saved
 /// binary calculation. Unit-bearing corrections are restricted to addition
 /// and subtraction; the caller retains the prior result as a dependency.

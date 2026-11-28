@@ -10,6 +10,12 @@ rust-version = "1.99"
 
 [workspace.dependencies]
 aho-corasick = "1.1"
+base64 = "=0.22.1"
+lopdf = { version = "=0.47.0", default-features = false }
+jbonsai = "=0.4.2"
+jpreprocess = "=0.16.0"
+roxmltree = "=0.21.2"
+zip = { version = "=9.8.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 minidora-domain = { path = "crates/minidora-domain" }
 minidora-engine = { path = "crates/minidora-engine" }
 serde = { version = "1.0", features = ["derive"] }

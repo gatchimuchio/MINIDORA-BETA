@@ -1,5 +1,9 @@
 //! Bounded reader and interpreter for the inherited Python-function subset.
 //! This module never invokes a host Python process, compiler, `exec`, or `eval`.
+mod repair;
+
+pub(crate) use repair::{repair_lines, repair_source};
+
 use crate::ports::{JsonKind, JsonNode, strict_json_document};
 use minidora_domain::{Error, Result, digest, failure};
 use num_bigint::BigInt;
@@ -3717,6 +3721,22 @@ fn verify(
     max_steps: usize,
     deadline: Option<Instant>,
 ) -> Result<CodeVerificationReport> {
+    verify_observing(function, source, cases, max_steps, deadline, None)
+}
+
+struct VerificationTrace {
+    remaining_steps: usize,
+    branches: Vec<Vec<BranchObservation>>,
+}
+
+fn verify_observing(
+    function: &Function,
+    source: &str,
+    cases: &[(CodeValue, CodeValue)],
+    max_steps: usize,
+    deadline: Option<Instant>,
+    mut trace: Option<&mut VerificationTrace>,
+) -> Result<CodeVerificationReport> {
     let case_value = CodeValue::List(
         cases
             .iter()
@@ -3745,7 +3765,14 @@ fn verify(
             });
             continue;
         }
-        let evaluated = evaluate(function, source, arguments, max_steps, deadline)?;
+        let steps = trace
+            .as_ref()
+            .map_or(max_steps, |trace| max_steps.min(trace.remaining_steps));
+        let evaluated = evaluate(function, source, arguments, steps, deadline)?;
+        if let Some(trace) = trace.as_mut() {
+            trace.remaining_steps = trace.remaining_steps.saturating_sub(evaluated.steps);
+            trace.branches.push(evaluated.branches);
+        }
         let expected_json = expected.to_json(false)?;
         let expected_canonical = expected.to_json(true)?;
         let actual = evaluated.actual_json.clone();

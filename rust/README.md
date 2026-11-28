@@ -70,6 +70,8 @@ Windowsではクローンのルートから、PowerShellでは `.\start-minidora
 
 例えば `こんにちは`、`もしXは鳥ならXは動物`、`ルリは鳥です`、`どうしてルリは動物なのですか` と順に入力する。表やコードなどの複数行の依頼は `/paste` で始め、本文の後の独立した行に `/end` と入力する。
 
+`どういうこと？` や `それはどういう意味ですか？` と聞くと、同じ会話の直前にある回答を参照します。計算なら式と計算過程を説明し、直前の依頼が保留なら保存された理由を説明します。
+
 `ミナは鳥です`、`ミナは鳥ですか`、`それは動物です` と続けた後、`詳しく説明して` と頼むと、主語を参照した結果と、保存した前提が現在も有効かを確認できる。
 
 `それは動物です` の直後に `それは動物ですか` と聞くと、今追加した有効な前提から主語と範囲を引き継いで答える。別の発話を挟んだ後は、前提を追加したときの結果IDを `/context` で指定する。前提が後の訂正で失効していれば、その前提を使う新しい質問は保留する。
@@ -89,6 +91,8 @@ Windowsではクローンのルートから、PowerShellでは `.\start-minidora
 同じ例では、`ミナは動物ですか` の後に `それは動物ですか` と尋ね、その確定回答を受けて `それは鳥ですか` と続けられる。直前の回答が参照した前提から同じ主語と範囲を引き継ぎ、根拠を再確認する。
 
 `1 km + 500 m` と計算した後、`前回の計算結果をキロメートルに換算して` と入力すると `3/2 km` を返す。確定済みの長さの結果を照合し、`mm`、`cm`、`m`、`km` の間で正確に換算する。
+
+計算後に「なんでそうなるの？」と聞くと、保存された式と値から計算過程を示します。「その答えを半分にして」「前の結果を3倍にして」のような依頼では、確定した数値や長さに倍率を適用した別の計算を保存します。参照する計算と元の値は履歴から照合できます。別の用件を挟んだ後は、同じ会話の元の計算を `/context 結果ID` で指定できます。倍率の適用に対応する単位は `mm`、`cm`、`m`、`km` です。
 
 未編集の計算手順の最終結果も換算できる。`計算手順を実行して:` に続けて `base: 1 km + 250 m` と `final: @{base} + 250 m` を別々の行に貼り付け、同じ換算を頼むと `3/2 km` を返す。各段を保存済みの結果と照合してから換算する。編集済みの手順や、個別の段だけを説明した結果はこの換算の対象に含めない。
 
@@ -187,6 +191,19 @@ record_id,kind
 「富士山について教えてください。」のような対応する説明質問では、同じ利用者の保存知識で答えられるかを確認します。根拠が足りないときは許可済みの日本語Wikipediaで候補と本文を取得します。通信がオフなら取得せずに理由を返します。「富士山について分かっていることを教えてください」は保存知識を参照する依頼として扱います。
 
 ローカル会話に外部LLMのキーは不要。Webを使うセッションは `./start-minidora.sh --allow-read-host ja.wikipedia.org` と明示し、`富士山について、出典を付けて教えてください。` と入力する。Windowsの起動方法でも同じオプションを使える。`/net` で現在の通信設定を確認し、`/net off` で通信を停止する。`/net` と識別できる設定行に誤った引数、長さの上限超過、不正なUTF-8がある場合も、次の発話から通信はオフになる。ローカル対話は続けられ、`/net on` で起動時に許可したホストだけを再び有効にできる。本文は選んだ記事の観測範囲で使用する。記事の取得時刻で最新性や更新日時を確認できない場合は、回答を保留する。
+
+### 複数のWeb本文を比べる
+
+起動時に `--allow-read-host ja.wikipedia.org` で接続先を許可して、通常チャットで次のように頼めます。
+
+```text
+/net on
+キャッシュメモリについて複数の資料を調べて比較して。別件で17×23を計算して
+```
+
+検索候補を最大4件調べ、対象を明記した二つの異なる本文から引用を選びます。引用の共通語句と記述差に加え、出典URL、取得時刻、原文バイト範囲とハッシュを表示します。候補一覧の抜粋は本文の証拠に含めません。取得時刻と掲載・改訂時点は別で、二つの記事は日本語Wikipediaの中から選びます。引用箇所の違いから資料間の矛盾や記述の正しさを確定する機能はありません。
+
+`/net off` のときも、別件として頼んだ計算は結果を返します。資料が不足したときは確認できた箇所を示し、比較を保留します。比較結果を保存するには起動時の `--allow-write` と `/output PATH` が必要です。
 
 質問語が本文にそのまま見つからず、取得した記事名との違いが英字の大文字・小文字だけなら、同じ本文を記事名で照合する。たとえば `pythonについて出典付きで教えて` では、選んだ記事名が `Python` のときにこの照合を使える。
 
@@ -789,7 +806,224 @@ A quantity reference must occupy a complete number-and-unit operand of the exist
 
 `code-generate:` (ASCII case insensitive) and `コードを生成して:` accept the original JSON body with exactly `仕様` and `定数`. This ports the existing explicit algorithm-generation contract. The specification has exactly `名前`, `引数` and `手順`; it supplies the algorithm. The function receives the declared arguments followed by the separate `定数` dictionary. Changing constant values preserves the generated source. The output is Python source; an exact `--output` / `--allow-write` grant can save those same bytes as a file.
 
-In the same actor and case, `詳しく説明して` after code generation reads its stored report and reconstructs the explanation from that exact algorithm IR. It describes assignments, branches, loops, expressions and returns, keeps the generated report/prior-result dependencies, and states the stored Python parse/execution/test status. The v52 route still does not execute the generated code for an explanation; see [the v52 code-context route evidence](audit/bb-content-code-context-explanation-v52-route-validation.json).
+通常チャットでは「Pythonで、xが0未満なら0、それ以外なら元の数を返す関数 nonnegative(x) を作って。」のように、比較と戻り値を日本語で指定できます。「Pythonで、文字列が前から読んでも後ろから読んでも同じかどうかを判定する関数を作ってください。」では、名前の指定がなければ `is_palindrome(text)` を生成します。大文字と小文字、空白、句読点を区別し、空文字列では `True` を返します。
+
+生成した関数は、同じ会話で `生成コードを検証して: {"試験":[{"引数":{"text":"たけやぶやけた"},"期待値":true},{"引数":{"text":"abc"},"期待値":false}]}` と入力すると、対応する有限評価で入出力を確認できます。ファイルに保存する場合は、起動時に `--allow-write` でその絶対パスを許可し、発話の直前に `/output PATH` を入力します。
+
+### 添付した資料を読む
+
+Windowsの通常チャットで、UTF-8のTXT、Markdown、文字PDFを `/attach PATH` で選びます。複数の資料を添える場合は、資料ごとに選んでから発話を送ります。
+
+```text
+/attach C:\資料\計画.md
+/attach C:\資料\連絡.txt
+添付資料を出典付きで要約して
+同じ添付資料から「締切」が書かれた箇所を抜き出して
+```
+
+要約は資料ごとの原文抜粋です。箇所抽出は、指定した語句を含む原文の行を探します。引用にはファイル名、行番号と原本のUTF-8バイト範囲を表示します。追問では保存済みの添付を使います。結果をファイルに保存するには、起動時に `--allow-write` で絶対パスを許可し、頼む直前に `/output PATH` で選びます。
+
+ブラウザーでは「次の依頼に添付するファイル」で選び、送信前に一覧で確認できます。UTF-8のCSV・TXT・Markdown、PDF・XLSX・PNG・JPEGを合計8件まで選べます。依頼、ファイル名、添付の合計は最大256,000バイトです。バイナリはBase64変換後の長さがこの上限に入り、変換前も1件192,000バイト以内です。サーバー起動時に上限を下げている場合はその値を使います。画像や文字層のないPDFの文字認識には、サーバー側のOCR設定が必要です。
+
+選んだファイルは送信した依頼に付き、会話切替・分岐・取り消しで選択が解除されます。保存済みの資料への追問は同じ会話で依頼できます。確定したテキスト回答の「回答をテキストで保存」は、Coreが表示用に採用したバイトのSHA-256を照合し、ブラウザーのダウンロードに渡します。
+
+PDFの引用にはページ番号と、そのページから抽出したテキストの位置を表示します。画像が描かれていて文字を抽出できないページは画像として案内します。OCRは未対応です。暗号化されたPDFは保留します。PDFは1ファイル64ページまでで、入力上限は発話・ファイル名・Base64化したPDFを合わせた256,000バイトです。
+
+### 添付画像の文字と位置を確認する
+
+Windowsの `chat --ocr-assets ABSOLUTE_DIR` に、固定したTesseract実行物と日本語辞書のディレクトリを指定します。PNGまたはJPEGを `/attach PATH` で選び、画像内の文字だけを検索・引用できます。 [Tesseractの認識モードとTSV](https://tesseract-ocr.github.io/tessdoc/Command-Line-Usage.html)
+
+```text
+/attach C:\作業\案内.png
+添付画像の文字を読んで
+前の添付画像から「受付」を探して
+```
+
+表示する行には、元画像のSHA-256と左上を原点とするピクセル座標が付きます。確からしさの低い部分は `［不明］` と表示します。画像は幅・高さとも2,048ピクセル以内で、添付バイト数の上限も適用します。
+
+### 走査PDFの文字と位置を確認する
+
+`--ocr-assets` を指定してPDFを `/attach PATH` で選び、`添付した資料から「受付」が書かれた箇所を探して` と入力します。文字を抽出できないページはWindowsでページ全体を描画してOCRに渡します。結果にページ番号と描画画像上のピクセル範囲が付きます。文字層を使った引用には抽出テキスト内の位置が付きます。 [Windowsのページ描画API](https://learn.microsoft.com/en-us/uwp/api/windows.data.pdf.pdfpage.rendertostreamasync)
+
+OCRは1ファイルにつき先頭から最大8対象ページで、時間と証拠の予算が適用されます。同じ会話の `同じ添付資料から「受付」が書かれた箇所を探して` では保存した認識結果を参照します。
+
+### ブラウザーでPNGを生成・編集する
+
+`幅120、高さ80の白い背景に、左上(10,10)から幅30、高さ30の赤い円と左上(65,20)から幅35、高さ40の青い三角形を描いて` のように、画像と図形のサイズ、色、位置を指定します。添付したPNGまたはJPEGは、`添付画像の左上(2,3)から幅10、高さ8の範囲を緑で塗りつぶして。ほかはそのまま` のように長方形を指定して編集できます。表示されたPNGは「画像をPNGで保存」でダウンロードできます。
+
+図形は円・四角形・三角形を扱います。編集結果は指定範囲外の画素を保持します。Coreから受け取る表示用レンダリングの版は `png-image-display-v1` です。
+
+### 会話を途中から分岐する
+
+`/history` に表示された確定結果から、別の案を試せます。結果IDを省くと、現在の確定結果から分岐します。
+
+```text
+/fork 別案 RESULT_ID
+/history inherited
+分岐元の回答の「木曜10時」を「月曜15時」に置き換えて
+分岐元の回答を2行で要約して
+```
+
+分岐は新しい会話IDを使い、選択した結果までの確定履歴を固定します。`/history inherited page 2` で引き継いだ履歴の続きを表示し、`/history` で現在の会話の結果を表示します。`/status` には分岐元の会話、結果ID、保存版が出ます。再起動後は `/case 別案` で再開できます。
+
+要約と置換は、分岐元が保存した回答本文を読みます。添付資料の回答を要約するときは、その回答で引用した本文から選びます。要約は指定行数を満たせない場合に保留し、置換は指定語句が一箇所に一致した場合に実行します。分岐で回答を使うときも現在の記憶設定が適用されます。
+
+元会話の続きは `/case` で戻れます。分岐時に添付の指定、通信、参照先、用途設定、保存先は解除されます。分岐先の成果を保存する場合も、起動時に許可した別の保存先を選んでください。
+
+ブラウザーでは、会話IDを入力して開き、履歴の確定結果から分岐元を選びます。新しい会話IDで分岐すると、その会話に切り替わります。元の会話はIDを指定して開き直せます。分岐を送信して応答が途切れた場合は、指定した新しい会話IDを開くと保存状態を確認できます。
+
+IPv6ループバックを使う場合は、ローカルサーバーの起動時に `--bind "[::1]:8080"` を指定し、ブラウザーで `http://[::1]:8080/` を開きます。認証と利用者の指定は同じです。
+
+認証済みのループバックHTTPからも、同じ保存履歴と分岐を扱えます。どちらも `Content-Type: application/json` と起動時の利用者・Bearerトークンを使うPOSTです。
+
+- `/v1/cases/history` に `actor_id` と `case_id` を指定します。自身の履歴と継承履歴は `page`、`inherited_page` で別々に1始まりのページを指定でき、省略時は1ページ目の最大20件です。自身の結果IDを `result_id` に指定すると、保存済みの `ResultRecord` が `result` に入ります。分岐済みの会話では `branch` で固定点が確認できます。
+- `/v1/cases/fork` に `actor_id`、`source_case_id`、新しい `case_id`、必要なら `source_result_id` を指定します。結果IDを省略すると最新の確定結果を使います。応答は `api_version: "minidora-cases/v1"` と `branch` を返します。分岐で権限や保存作用は引き継がれません。
+
+### 用途を保存して切り替える
+
+用途には、資料を要約する指示または語句を探す指示、登録時の資料、使ってよい道具の範囲をまとめて保存します。通常チャットで次のように登録・選択します。
+
+```text
+/attach "C:\作業\週報.md"
+/profile save 週報 summarize
+/attach "C:\作業\引継ぎ.txt"
+/profile save 引継ぎ find 締切 +save
+/profile use 週報
+用途の資料を確認して
+/profile use 引継ぎ
+用途の資料を確認して
+/profile off
+```
+
+`/profile` で選択中の用途と保存版を確認できます。用途は同じ利用者の別会話でも使用でき、再起動後は `/profile use NAME` で選び直せます。元ファイルの変更後も登録時の内容を使います。別の指示や資料で保存する場合は新しい用途名を使ってください。新しい資料をその場で読む場合は、従来の添付コマンドと読取りの依頼を使います。
+
+`+save`、`+web=ja.wikipedia.org`、`+wasm` は、選択中の用途で使える道具の範囲を指定します。実際に使うには、その回の保存・通信・実行の許可も必要です。道具を指定しない用途では、保存・通信・WebAssembly実行を許容しません。通常の計算や会話も同じCoreで処理します。
+
+### 図形のPNGを作る・添付画像の一部を塗り替える
+
+起動時に保存先を `--allow-write "C:\作業\図版.png"` で許可します。通常チャットで次のように入力します。
+
+```text
+/output "C:\作業\図版.png"
+幅120、高さ80の白い背景に、左上(10,10)から幅30、高さ30の赤い円と左上(65,20)から幅35、高さ40の青い三角形を描いて
+```
+
+編集するときはPNGまたはJPEGを1点添付し、別のPNG保存先を起動時に許可します。
+
+```text
+/attach "C:\作業\図版.png"
+/output "C:\作業\編集後.png"
+添付画像の左上(10,8)から幅16、高さ12の範囲を赤で塗りつぶして。ほかはそのまま
+```
+
+描画に使える図形は円・四角形・三角形です。図形を指定順に重ねます。座標の原点は画像左上の (0, 0) です。編集は指定範囲内だけを塗り替え、範囲外の復号画素を保持します。JPEGの向き情報やカラープロファイルなどのメタデータは引き継ぎません。画像は幅・高さとも2,048 px以内で、図形数、添付と出力の容量、期限、証拠予算にも上限があります。通常のローカル保存と同じく、異なる内容の既存ファイルは上書きせず、受領には実ファイルのハッシュが付きます。
+
+### 資料の項目でCSVを絞って合計する
+
+`集計対象: 西` のような項目がある資料と、集計するCSVを添付します。次の依頼では、資料から読み取った値とCSVの「区分」が一致する行の「金額」を合計します。
+
+```text
+/attach C:\資料\集計条件.pdf
+/attach C:\資料\実績.csv
+添付資料の「集計対象」で添付CSVの「区分」を絞り、「金額」を合計して
+```
+
+資料名と引用箇所、対象行数と合計を表示します。項目が見つからない場合や資料の値が食い違う場合は、その理由を表示し、計算できるときは絞り込みを適用していない全行の合計を示します。ファイルへの保存は、その依頼の前に `/output PATH` で指定します。
+
+Excelブック（.xlsx）はCSVに変換せず添付できます。複数シートが入ったブックでは、`添付資料の「集計対象」で添付Excelの「上期売上」シートの「区分」を絞り、「金額」を合計して` のようにシートを指定します。CSVとXLSXをまとめて集計する場合は「添付表」と指定します。
+
+集計の根拠はブックのシート名とセル番地に残ります。Excelの表示書式による単位の推定や数式の再計算は行いません。計算に使う列に数式がある場合は、保存時のキャッシュ値を採用せず保留します。
+
+### CSVの平均をグラフにする
+
+通常チャットで `/paste` を入力し、依頼とCSVをまとめて送ります。
+
+```text
+CSVの「拠点」ごとの「費用」の平均をグラフにして:
+拠点,期間,費用
+北店,前半,10 JPY
+北店,後半,30 JPY
+南店,前半,-15 JPY
+南店,後半,-5 JPY
+```
+
+貼り付けを `/end` で送信すると、平均・件数・欠損を表示します。続けて `「期間」が「後半」の行に絞ってグラフを更新して` と入力すると、元のCSVを使って再集計します。各回の絞り込みは元のCSVに適用されます。
+
+SVGを保存するには、起動時にその絶対パスを `--allow-write` で許可し、発話の直前に `/output PATH` を入力します。初回と絞り込み後を両方保存する場合は、別々のファイルを指定します。空欄の数値は件数を示して除外し、互換性のある長さ単位が混在する場合はmに揃えます。
+
+Windowsでは、UTF-8のCSVファイルを `/attach PATH` で選べます。別のファイルも使う場合は同じ操作を繰り返してから依頼を送ります。
+
+```text
+/attach C:\資料\4月.csv
+/attach C:\資料\5月.csv
+添付したCSVをまとめて「店舗」ごとに「売上」の平均をグラフにして
+```
+
+各ファイルの見出しを名前で照合し、同じ店舗の明細を合わせて集計します。最大8件で、ファイル名と内容は発話の入力上限に含まれます。選んだ時点のCSVを次の一発話に添付するため、追問では保管済みのCSVを使います。`/attach off` で送信前の添付を解除できます。コマンドから1回だけ実行する場合は `minidora-rust run --attach PATH --attach PATH "依頼"` を使います。
+
+隔離実行が成功してCSVを生成したら、同じ会話でその実行結果を選び、`前の隔離実行で生成した「result.csv」を「地域」ごとに「売上」の平均をグラフにして` と頼めます。集計には実行結果に保存した生成物のバイトを使います。あとから条件を変更すると、同じ生成CSVから再集計します。SVGの保存先はその発話の `/output PATH` で指定します。
+
+### 日本語の音声で会話する
+
+Windowsの `chat --asr-assets ABSOLUTE_DIR` に、Julius Dictation Kit 4.5 の固定資産を含む絶対ディレクトリを指定します。設定と実行物のSHA-256を起動時に照合します。GMM-HMMの日本語認識をローカルで実行します。 [Julius Dictation Kit](https://github.com/julius-speech/dictation-kit/tree/1ceb4dec245ef482918ca33c55c71d383dce145e)
+
+```text
+/listen C:\作業\発話.wav
+```
+
+Windowsの対話端末では、同じ `chat --asr-assets ABSOLUTE_DIR` で `/record` と入力すると、Windowsで選ばれている既定のマイクから録音します。`/record 4` のように秒数を指定できます。省略時は入力上限の範囲で最大5秒、指定時は最大10秒です。録音が止まったら `/record send` で今の会話に送信します。`/record off` で録音を破棄できます。送信待ちの録音はメモリに置き、会話の切り替えや終了で破棄します。録音にはWindowsのデスクトップアプリに対するマイクへのアクセス許可が必要です。
+
+録音済みのファイルも使用できます。16 kHz・16 bit・モノラルのPCM WAVを読み込みます。最長10秒で、実バイトと認識した文の合計に実行時の入力上限が適用されます。認識した文が画面に表示され、同じ会話の発話として処理されます。元のWAVと入力区間は会話の保存記録に含まれます。ファイルを選ぶ操作を繰り返して追問できます。Juliusに一時WAVを渡すため、Windowsの一時フォルダーの絶対パスはASCIIで指定します。
+
+採用された回答を音声で受け取る場合は、次の説明に従ってWAV保存先を選んだあと、読み上げの依頼を録音したWAVを `/listen` で送ることもできます。
+
+ブラウザーで録音済みWAVを使う場合は、ローカルサーバーを `serve --asr-assets ABSOLUTE_DIR` で起動します。「日本語の発話をWAVで送る」から1件選び、「WAVの発話を送信」を押します。認識した発話と処理した原音の範囲が、Coreの回答と分けて表示されます。次のWAVを同じ会話で送ると、直前の回答への追問ができます。音声の回答も生成するには、起動時に `--speech-assets ABSOLUTE_DIR` を指定します。
+
+同じ画面の「マイクで録音」から、その場で話すこともできます。ブラウザーでマイクを許可し、録音を止めてから「録音した発話を送信」を押します。録音は入力上限に合わせて最大約7.9秒です。送信前の録音は「録音を破棄」で取り消せます。会話IDなどの変更やページからの移動でも破棄されます。マイクの入力はブラウザー内で16 kHz・16 bit・モノラルのPCM WAVに変換し、ファイル選択と同じCoreの会話に渡します。ブラウザーの画面に外部のスクリプトや通信が加わった場合、またはローカル画面の配信ポリシーを確認できない場合は、マイクを開きません。
+
+認証済みHTTPでは `POST /v1/execute/wave/stream` に `Content-Type: application/json` と `Accept: text/event-stream` を指定します。JSONのフィールドは `actor_id`、`case_id`、`input_id`、`input_version`、`wave`（WAVの各バイトを0〜255の数値で並べた配列）、`budget` です。正常に認識すると、最後のイベントには従来の `result` と、認識文・認識器・原音のSHA-256・サンプルレート・フレーム範囲を持つ `recognition` が入ります。Rustからは `Engine::execute_wave_bytes` が同じ認識とCore処理を提供します。
+
+### 直前の回答を音声ファイルに保存する
+
+`--speech-assets` に絶対パスで指定したディレクトリから、jpreprocess 0.16.0 向けのコンパイル済み `naist-jdic` と、音声モデル `nitech_jp_atr503_m001.htsvoice` を読み込みます。実行時に辞書と音声モデルの固定ハッシュを確認します。配布元のライセンスと著作者表示も保管してください。 [jpreprocess辞書](https://github.com/jpreprocess/jpreprocess/releases/tag/v0.16.0) [Open JTalk音声モデル](https://open-jtalk.sourceforge.net/)
+
+```powershell
+minidora-rust chat --speech-assets C:\作業\speech-assets --allow-write C:\作業\回答.wav
+```
+
+```text
+こんにちは
+/output C:\作業\回答.wav
+前の回答を音声ファイルにして
+```
+
+同じ会話で採用済みの日本語回答を、48 kHz・16 bit・モノラルのPCM WAVとして許可されたパスに保存します。本文は最大300文字かつ1,024 UTF-8バイト、音声は最大15秒です。証拠の保持に必要な実行予算も適用します。日本語テキストからWAVを生成し、再生は利用者のプレーヤーで行います。
+
+ブラウザーで使う場合は、ローカルサーバーを `serve --speech-assets ABSOLUTE_DIR` で起動します。同じ会話でテキスト回答を受け取ったあと、`前の回答を音声ファイルにして` と頼むと音声プレーヤーが表示されます。再生とWAV保存は表示されたボタンで操作します。Coreから受け取る表示用レンダリングの版は `wav-pcm16-mono-display-v1` です。
+
+### WebAssemblyを隔離実行する
+
+Windowsで信頼する互換Node実行ファイルを絶対パスで選び、`minidora-rust chat --wasm-node PATH` で起動します。`/allow-exec` を入力してから、次の一発話に実行対象を指定します。単発実行では `--allow-wasm-execution` が同じ役割を持ちます。
+
+```text
+WebAssemblyを隔離実行して: {"module_hex":"小文字16進形式のWasmバイト列","stdin_hex":"任意の標準入力の小文字16進形式","files":["result.csv"]}
+```
+
+標準入力と生成物名は省略できます。実行対象はメモリ上限を宣言し、`memory` と `_start` を公開するWasmモジュールです。利用できるWASI関数は標準入出力と宣言済みファイルを扱う範囲です。ハッシュで照合した実行記録から、ゲストとプロセスの終了コード、標準出力・標準エラー、生成物の実ファイルとハッシュを確認できます。生成物は状態ディレクトリの `wasm-runs` 内に保存し、同じ入力IDの照会や再照合は保存した観測を使います。
+
+モジュールと標準入力は各64 KiB、ゲストの線形メモリは8 MiB、実行は要求期限内で最大4秒です。生成物は4件まで、名前は同一ディレクトリ直下の明示指定に限ります。隔離境界はWebAssemblyのメモリ・命令と限定したホスト関数です。互換Nodeの読み替えは起動時に行います。
+
+### 貼り付けた関数の修正
+
+通常チャットでは、元のPythonコードと期待値を一行の依頼で渡せます。複数行で整形したJSONは `/paste` と `/end` で囲んで送ります。
+
+```text
+コードを修正して: {"情報源":"def eligible(age):\n    if age > 18:\n        return True\n    return False\n","試験":[{"引数":{"age":17},"期待値":false},{"引数":{"age":18},"期待値":true},{"引数":{"age":19},"期待値":true}]}
+```
+
+整数の境界比較が原因で、境界とその両側の試験から変更を一つに絞れる場合に、該当行、変更差分、修正したコード、再試験の観測値を返します。原因を絞れない場合は保留し、追加で必要な観測を示します。ファイルに残す場合は許可済みの出力先に修正レポートを保存できます。元のコードは入力として保持します。
+
+In the same actor and case, \`詳しく説明して\` after code generation reads its stored report and reconstructs the explanation from that exact algorithm IR. It describes assignments, branches, loops, expressions and returns, keeps the generated report/prior-result dependencies, and states the stored Python parse/execution/test status. The v52 route still does not execute the generated code for an explanation; see [the v52 code-context route evidence](audit/bb-content-code-context-explanation-v52-route-validation.json).
 
 To check generated output, send `生成コードを検証して:` as the next request in that same actor and case after a committed code-generation result. The JSON body accepts only `試験` and optional `最大手数`; each case supplies `引数` and `期待値`. Core reloads and revalidates the previous generation report, then uses the existing restricted Python AST reader and bounded Rust interpreter on the stored source. It records the source result, generation-report reference, verification-report reference and case-level actual values. For example, the `generated-function-verify` commands above produce two finite checks. This does not invoke host Python, `exec`, `eval`, a compiler or external effects, and matching finite cases do not prove general program correctness. The generator's Python execution and I/O test statuses remain `NOT_RUN`; see [the v52 generated-code verification route evidence](audit/bb-content-generated-code-verification-v52-route-validation.json). General code creation, editing, unrestricted validation and full B07 acceptance remain `UNVERIFIED`.
 
@@ -944,6 +1178,8 @@ A bounded profile request such as `ココについて保存されている情報
 The same profile can be requested through the authenticated loopback `POST /v1/execute` consumer. It uses the configured actor and the same Engine/Core result; a following CLI request in that case can summarize the exact HTTP result. The scoped local observation is recorded in [the HTTP consumer route evidence](audit/bb-content-known-relation-profile-v69-http-consumer-route-validation.json).
 
 `minidora-rust serve` also serves a same-origin browser workspace at `/` and fixed `/app.js`, `/styles.css` and `/favicon.svg` assets. Its form sends the full request envelope to the authenticated API, then shows lifecycle, guarantee, answer, reason, result identity and the exact dependency IDs returned by Core. The bearer token stays in tab memory and is sent only to the loopback API; the page makes no external asset requests and receives a restrictive same-origin CSP. `POST /v1/execute/stream` requires `Accept: text/event-stream` and uses the `minidora-stream/v1` contract: `provisional` announces processing with no answer content and no authority, `invalidated` discards that status for any non-`COMMIT` Core result, and `final` carries the actual `ResultRecord`. The browser enforces this order before rendering. Disconnecting a stream does not cancel synchronous Core execution. A separate case-cancel action sends Core's native `キャンセル` intent in the same actor/case and retains prior result history; it does not reverse already committed work. [The browser route evidence](audit/bb-content-known-relation-profile-v69-browser-ui-route-validation.json) records Chromium handling of committed, suspended and cancelled streams, rendered proof dependencies, retained prior result after cancellation, and the wrong-token stop. Undo, public deployment, broad browser compatibility and complete B08/general writing acceptance remain unverified.
+
+ブラウザーでニュースや調査を依頼するときは、`serve` 起動時に接続先ごとに `--allow-read-host HOST` を指定します。画面にActor IDとローカルAPI tokenを入力し、「オンライン調査」で設定済みの接続先を表示して、今回使うものを選んでください。選択した接続先が次のテキスト依頼に渡り、送信後は選択が解除されます。接続先の一覧は、認証済みの `POST /v1/read-hosts` にJSONで `actor_id` を渡すと、`read_hosts` の文字列配列として取得できます。本文の通信可否は、依頼とサーバー設定の両方をもとに従来の実行APIが判定します。
 
 The v52 [declared-rule follow-up replay](audit/bb-learn-declared-rule-follow-up-v52-route-validation.json) uses one explicit rule and premise across fresh CLI processes, verifies the derived answer's premise/rule dependencies, suspends when a counterexample conflicts, then preserves the original records after explicit rule invalidation so the counterexample is the only remaining answer dependency. This is bounded user-directed proof reuse, not empirical or autonomous rule learning; full BB-LEARN remains `UNVERIFIED`.
 

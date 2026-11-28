@@ -3428,12 +3428,17 @@ impl Drop for Server {
 }
 
 fn http(address: SocketAddr, token: &str, body: &[u8]) -> (u16, Value) {
+    http_json_post(address, token, "/v1/execute", body)
+}
+
+fn http_json_post(address: SocketAddr, token: &str, route: &str, body: &[u8]) -> (u16, Value) {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
-    write!(stream, "POST /v1/execute HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).unwrap();
-    stream.write_all(body).unwrap();
+    let mut request = format!("POST {route} HTTP/1.1\r\nHost: {address}\r\nAuthorization: Bearer {token}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n", body.len()).into_bytes();
+    request.extend_from_slice(body);
+    stream.write_all(&request).unwrap();
     let mut response = String::new();
     stream.read_to_string(&mut response).unwrap();
     let (headers, body) = response.split_once("\r\n\r\n").unwrap();
@@ -3441,14 +3446,128 @@ fn http(address: SocketAddr, token: &str, body: &[u8]) -> (u16, Value) {
     (status, serde_json::from_str(body).unwrap())
 }
 
+#[test]
+fn authenticated_case_routes_reopen_native_results_and_preserve_the_fork_anchor() {
+    use minidora_domain::{Lifecycle, RequestEnvelope};
+    use minidora_engine::Engine;
+
+    let scratch = Scratch::new();
+    let mut engine = Engine::open(&scratch.0).unwrap();
+    let actor = "owner";
+    let source = "http-fork-source";
+    let child_case = "http-fork-child";
+    let anchor = engine
+        .execute(actor, RequestEnvelope::new(source, "older", actor, "14*2"))
+        .unwrap();
+    let later = engine
+        .execute(actor, RequestEnvelope::new(source, "later", actor, "17*3"))
+        .unwrap();
+    assert_eq!(anchor.lifecycle, Lifecycle::Commit);
+    assert_eq!(later.lifecycle, Lifecycle::Commit);
+    let source_before = engine.case_with_history_order(actor, source).unwrap();
+    drop(engine);
+
+    let token = "test-only-constant-not-a-secret-0123456789";
+    let bind = if std::net::TcpListener::bind("[::1]:0").is_ok() {
+        "[::1]:0"
+    } else {
+        "127.0.0.1:0"
+    };
+    let child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["serve", "--db"])
+        .arg(&scratch.0)
+        .args(["--actor", actor, "--bind", bind])
+        .env("MINIDORA_API_TOKEN", token)
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut server = Server(child);
+    let mut ready = String::new();
+    BufReader::new(server.0.stderr.take().unwrap())
+        .read_line(&mut ready)
+        .unwrap();
+    let address: SocketAddr = ready
+        .split_once("listening on ")
+        .unwrap()
+        .1
+        .split_once(';')
+        .unwrap()
+        .0
+        .parse()
+        .unwrap();
+    let post = |route, body: Value| {
+        http_json_post(address, token, route, &serde_json::to_vec(&body).unwrap())
+    };
+    let history = "/v1/cases/history";
+    let fork = "/v1/cases/fork";
+    let source_query =
+        serde_json::json!({"case_id": source, "actor_id": actor, "result_id": &anchor.id});
+    let (status, reopened) = post(history, source_query);
+    assert_eq!(status, 200);
+    assert_eq!(reopened["result"], serde_json::to_value(&anchor).unwrap());
+    assert_eq!(reopened["entries"][0]["id"], later.id);
+
+    let mut request = serde_json::json!({"source_case_id": source, "case_id": child_case, "actor_id": "foreign", "source_result_id": &anchor.id});
+    assert_eq!(post(fork, request.clone()).0, 403);
+    request["actor_id"] = actor.into();
+    let (status, created) = post(fork, request.clone());
+    assert_eq!(status, 200);
+    assert_eq!(created["branch"]["source_result_id"], anchor.id);
+    assert_eq!(post(fork, request).0, 409);
+
+    let (status, inherited) = post(
+        history,
+        serde_json::json!({"case_id": child_case, "actor_id": actor}),
+    );
+    assert_eq!(status, 200);
+    assert_eq!(inherited["registered"], true);
+    assert_eq!(inherited["branch"], created["branch"]);
+    assert_eq!(inherited["entries"], serde_json::json!([]));
+    assert_eq!(inherited["inherited"].as_array().unwrap().len(), 1);
+    assert_eq!(inherited["inherited"][0]["result_id"], anchor.id);
+    assert_eq!(
+        post(
+            history,
+            serde_json::json!({"case_id": child_case, "actor_id": actor, "result_id": &anchor.id})
+        )
+        .0,
+        404
+    );
+
+    drop(server);
+    let engine = Engine::open(&scratch.0).unwrap();
+    assert_eq!(
+        engine.case_with_history_order(actor, source).unwrap(),
+        source_before
+    );
+    assert_eq!(
+        engine
+            .case_branch(actor, child_case)
+            .unwrap()
+            .unwrap()
+            .source_result_id,
+        anchor.id
+    );
+}
+
 fn http_get(address: SocketAddr, target: &str) -> (u16, String, String) {
+    http_get_with_identity(address, target, &address.to_string(), None)
+}
+
+fn http_get_with_identity(
+    address: SocketAddr,
+    target: &str,
+    host: &str,
+    origin: Option<&str>,
+) -> (u16, String, String) {
     let mut stream = TcpStream::connect_timeout(&address, Duration::from_secs(3)).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(5)))
         .unwrap();
+    let origin = origin.map_or(String::new(), |value| format!("Origin: {value}\r\n"));
     write!(
         stream,
-        "GET {target} HTTP/1.1\r\nHost: {address}\r\nConnection: close\r\n\r\n"
+        "GET {target} HTTP/1.1\r\nHost: {host}\r\n{origin}Connection: close\r\n\r\n"
     )
     .unwrap();
     let mut response = String::new();
@@ -3545,7 +3664,10 @@ fn loopback_browser_assets_are_fixed_and_security_headered() {
 
     let (status, headers, page) = http_get(address, "/");
     assert_eq!(status, 200);
+    let microphone_page_policy = "permissions-policy: camera=(), microphone=(self), geolocation=()";
+    let microphone_denied_policy = "permissions-policy: camera=(), microphone=(), geolocation=()";
     assert!(headers.contains("content-type: text/html; charset=utf-8"));
+    assert!(headers.contains(microphone_page_policy));
     assert!(headers.contains("content-security-policy: default-src 'self'"));
     assert!(headers.contains("script-src 'self'; style-src 'self'; connect-src 'self'"));
     assert!(headers.contains("x-content-type-options: nosniff"));
@@ -3557,24 +3679,54 @@ fn loopback_browser_assets_are_fixed_and_security_headered() {
     assert!(page.contains("id=\"cancel-case-button\""));
     assert!(page.contains("記録済みの結果や外部作用は元に戻しません"));
 
+    let (status, headers, index) = http_get(address, "/index.html");
+    assert_eq!(status, 200);
+    assert!(headers.contains(microphone_page_policy));
+    assert_eq!(index, page);
+
     let (status, headers, script) = http_get(address, "/app.js");
     assert_eq!(status, 200);
     assert!(headers.contains("content-type: application/javascript; charset=utf-8"));
+    assert!(headers.contains(microphone_denied_policy));
     assert!(script.contains("fetch(\"/v1/execute/stream\""));
     assert!(!script.contains("localStorage"));
     assert!(!script.contains("innerHTML"));
 
+    let (status, headers, worklet) = http_get(address, "/microphone-worklet.js");
+    assert_eq!(status, 200);
+    assert!(headers.contains("content-type: application/javascript; charset=utf-8"));
+    assert!(headers.contains(microphone_denied_policy));
+    assert_eq!(worklet, include_str!("../web/microphone-worklet.js"));
+
     let (status, headers, stylesheet) = http_get(address, "/styles.css");
     assert_eq!(status, 200);
     assert!(headers.contains("content-type: text/css; charset=utf-8"));
+    assert!(headers.contains(microphone_denied_policy));
     assert!(stylesheet.contains("@media (max-width: 540px)"));
 
     let (status, headers, favicon) = http_get(address, "/favicon.svg");
     assert_eq!(status, 200);
     assert!(headers.contains("content-type: image/svg+xml"));
+    assert!(headers.contains(microphone_denied_policy));
     assert!(favicon.contains("<svg"));
 
     assert_eq!(http_get(address, "/../Cargo.toml").0, 401);
+    assert_eq!(http_get(address, "/files/microphone-worklet.js").0, 401);
+    assert_eq!(http_get(address, "/v1/execute/wave/stream").0, 401);
+    assert_eq!(
+        http_get_with_identity(
+            address,
+            "/",
+            &address.to_string(),
+            Some("https://foreign.invalid")
+        )
+        .0,
+        403
+    );
+    assert_eq!(
+        http_get_with_identity(address, "/microphone-worklet.js", "foreign.invalid", None).0,
+        403
+    );
 }
 
 #[test]
@@ -4143,6 +4295,1686 @@ fn math_chat(directory: &Path, input: &str) -> String {
     let output = process.wait_with_output().unwrap();
     assert!(output.status.success(), "{output:?}");
     String::from_utf8(output.stdout).unwrap()
+}
+
+#[test]
+fn v6_contextual_clarification_explains_the_immediate_calculation_in_chat() {
+    for question in ["どういうこと？", "それはどういう意味ですか？"] {
+        let scratch = Scratch::new();
+        let transcript = math_chat(&scratch.0, "8 + 5を計算して\n/exit\n");
+        assert!(transcript.contains("8 + 5 = 13"), "{transcript}");
+        let original = inspect_normal_case(&scratch.0, "owner");
+        let prior = &original["result"];
+        assert_eq!(prior["lifecycle"], "COMMIT", "{prior}");
+        let prior_id = prior["id"].as_str().unwrap();
+
+        let transcript = math_chat(&scratch.0, &format!("{question}\n/exit\n"));
+        assert!(
+            transcript.contains("8 + 5 = 13") && transcript.contains("計算結果は13"),
+            "{transcript}"
+        );
+        let observed = inspect_normal_case(&scratch.0, "owner");
+        let meaning = &observed["bundle"]["meaning"];
+        assert_eq!(observed["bundle"]["request"]["text"], question);
+        assert_eq!(meaning["intent"]["kind"], "EXPLAIN_PREVIOUS", "{meaning}");
+        assert_eq!(meaning["context_result_ref"], prior_id, "{meaning}");
+        let result = &observed["result"];
+        assert_eq!(result["lifecycle"], "COMMIT", "{result}");
+        assert_eq!(result["dependencies"], serde_json::json!([prior_id]));
+        assert_eq!(&observed["prior_results"][prior_id], prior);
+    }
+}
+
+#[test]
+fn v6_contextual_clarification_explains_the_latest_stop_without_reusing_an_older_answer() {
+    let scratch = Scratch::new();
+    let unsupported = "青い立方体から三次元アニメーションを作って";
+    let transcript = math_chat(
+        &scratch.0,
+        &format!("7 * 6を計算して\n{unsupported}\n/exit\n"),
+    );
+    assert!(transcript.contains("7 * 6 = 42"), "{transcript}");
+    let original = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(original["bundle"]["request"]["text"], unsupported);
+    let stopped = &original["result"];
+    let stopped_id = stopped["id"].as_str().unwrap();
+    assert_eq!(stopped["lifecycle"], "SUSPEND", "{stopped}");
+    let calculation = original["prior_results"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|prior| prior["lifecycle"] == "COMMIT" && prior["calculation"].is_object())
+        .expect("the original calculation is retained behind the stopped turn");
+    let calculation_id = calculation["id"].as_str().unwrap();
+
+    let question = "どういうこと？";
+    let transcript = math_chat(&scratch.0, &format!("{question}\n/exit\n"));
+    assert!(transcript.contains("保留"), "{transcript}");
+    assert!(!transcript.contains("7 * 6 = 42"), "{transcript}");
+    assert!(
+        !transcript.contains("no unambiguous interpretation")
+            && !transcript.contains("the wh-question"),
+        "{transcript}"
+    );
+    let observed = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(observed["bundle"]["request"]["text"], question);
+    assert_eq!(
+        observed["bundle"]["meaning"]["intent"]["kind"],
+        "EXPLAIN_PREVIOUS_STOP"
+    );
+    let explanation = &observed["result"];
+    assert_eq!(explanation["lifecycle"], "COMMIT", "{explanation}");
+    assert_eq!(explanation["guarantee"], "DERIVED", "{explanation}");
+    assert_eq!(explanation["receipts"], serde_json::json!([]));
+    let dependencies = explanation["dependencies"].as_array().unwrap();
+    assert!(dependencies.iter().any(|reference| reference == stopped_id));
+    assert!(
+        !dependencies
+            .iter()
+            .any(|reference| reference == calculation_id)
+    );
+    assert_eq!(&observed["prior_results"][stopped_id], stopped);
+    assert_eq!(&observed["prior_results"][calculation_id], calculation);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn v6_message_drafts_preserve_question_condition_and_negation_in_normal_chat() {
+    let scratch = Scratch::new();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let original_memory = store.load_memory("owner").unwrap();
+    for (request, purpose, recipient, sentence_count, required_text) in [
+        (
+            "岩木さんへ、訪問を木曜10時から金曜14時に変更できるか尋ねる丁寧なメール本文を2文で。理由は書かないで。",
+            "ASK",
+            Some("岩木さん"),
+            Some(2),
+            &["訪問", "木曜10時", "金曜14時", "変更"][..],
+        ),
+        (
+            "打ち合わせの日程変更をお願いする丁寧なメールを書いて",
+            "REQUEST",
+            None,
+            None,
+            &["打ち合わせ", "日程変更"],
+        ),
+        (
+            "佐藤さんへ、雨なら見学を延期することを伝えるメッセージを1文で書いて",
+            "INFORM",
+            Some("佐藤さん"),
+            Some(1),
+            &["雨", "見学", "延期"],
+        ),
+        (
+            "岩木さんへ、訪問を変更できないことを伝えるメール本文を1文で",
+            "INFORM",
+            Some("岩木さん"),
+            Some(1),
+            &["訪問", "変更"],
+        ),
+    ] {
+        let display = math_chat(&scratch.0, &format!("{request}\n/exit\n"));
+        let state = inspect_normal_case(&scratch.0, "owner");
+        let result = &state["result"];
+        assert_eq!(result["lifecycle"], "COMMIT", "{request}: {result}");
+        assert_eq!(state["bundle"]["request"]["text"], request);
+        let intent = &state["bundle"]["meaning"]["intent"];
+        assert_eq!(intent["kind"], "DRAFT_MESSAGE");
+        let draft = &intent["draft"];
+        assert_eq!(draft["purpose"]["kind"], purpose);
+        if let Some(recipient) = recipient {
+            let span = &draft["recipient"];
+            let start = span["start"].as_u64().unwrap() as usize;
+            let end = span["end"].as_u64().unwrap() as usize;
+            assert_eq!(span["text"], recipient);
+            assert_eq!(request.get(start..end), Some(recipient));
+        } else {
+            assert!(draft["recipient"].is_null());
+        }
+
+        let body = result["text"].as_str().unwrap();
+        assert_eq!(display.trim_end_matches(['\r', '\n']), body);
+        assert_eq!(result["render"]["target"]["kind"], "DISPLAY");
+        assert_eq!(
+            result["render"]["bytes"],
+            serde_json::json!(body.as_bytes())
+        );
+        assert_eq!(
+            result["render"]["actual_sha256"],
+            minidora_domain::digest(body.as_bytes())
+        );
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        for &fragment in required_text {
+            assert!(body.contains(fragment), "missing {fragment:?}: {body}");
+        }
+        if let Some(count) = sentence_count {
+            assert_eq!(
+                body.matches(['。', '？', '！', '?', '!']).count(),
+                count,
+                "{body}"
+            );
+        }
+        if purpose == "ASK" {
+            let original_time = body.find("木曜10時").unwrap();
+            let requested_time = body.find("金曜14時").unwrap();
+            assert!(original_time < requested_time, "{body}");
+            assert!(
+                body.contains("か。") || body.contains(['？', '?']) || body.contains("かどうか"),
+                "{body}"
+            );
+            assert!(body.contains("ます") || body.contains("です"), "{body}");
+            assert!(!body.contains("件名"), "{body}");
+            assert!(
+                !body.contains("理由") && !body.contains("都合により"),
+                "{body}"
+            );
+        } else if recipient == Some("佐藤さん") {
+            assert!(
+                body.contains("雨なら")
+                    || body.contains("雨の場合")
+                    || body.contains("雨が降ったら"),
+                "{body}"
+            );
+        } else if recipient == Some("岩木さん") {
+            assert_eq!(draft["purpose"]["clause"]["ending"], "CANNOT");
+            assert!(
+                body.contains("できない")
+                    || body.contains("できません")
+                    || body.contains("できかね"),
+                "{body}"
+            );
+        }
+    }
+    assert_eq!(store.load_memory("owner").unwrap(), original_memory);
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn v6_message_drafts_keep_deadline_and_recipient_separate_from_output_options() {
+    let scratch = Scratch::new();
+    for (prompt, required, excluded) in [
+        (
+            "6日までに、資料の共有を依頼する丁寧なメールを書いて",
+            &["6日までに、資料の共有"][..],
+            &["6日まで 様"][..],
+        ),
+        (
+            "田中さんへ、理由には触れないで、資料の共有を依頼するメールを書いて、件名は不要",
+            &["田中さん", "資料の共有"][..],
+            &["件名：", "理由には触れないで"][..],
+        ),
+        (
+            "田中さんへ、会議を延期することを伝えるメールを書いて、理由は一切書かないで",
+            &["会議を延期します。"][..],
+            &["理由", "一切"][..],
+        ),
+        (
+            "取引先の田中さんへ、明日の打ち合わせを木曜日15時に変更したい旨を、丁寧なメールにして。",
+            &["田中さん", "木曜日15時", "変更したい"][..],
+            &["変更しました"][..],
+        ),
+        (
+            "吉野さんへ、展示品の点検を依頼するカジュアルなメッセージを二文以内にして。理由は開館準備。",
+            &["吉野さん", "展示品の点検", "お願いできる？", "開館準備"][..],
+            &["いたします", "件名："][..],
+        ),
+    ] {
+        math_chat(&scratch.0, &format!("{prompt}\n/exit\n"));
+        let state = inspect_normal_case(&scratch.0, "owner");
+        let result = &state["result"];
+        assert_eq!(result["lifecycle"], "COMMIT", "{prompt}: {result}");
+        assert_eq!(
+            state["bundle"]["meaning"]["intent"]["kind"],
+            "DRAFT_MESSAGE"
+        );
+        let text = result["text"].as_str().unwrap();
+        for phrase in required {
+            assert!(text.contains(phrase), "{phrase:?} missing from {text}");
+        }
+        for phrase in excluded {
+            assert!(!text.contains(phrase), "{phrase:?} present in {text}");
+        }
+        assert_eq!(result["receipts"], serde_json::json!([]));
+    }
+}
+
+fn assert_v6_message_revision_parent(state: &Value, parent: &Value) {
+    const PARSER: &str = "declarative-ja-v220-message-revision";
+    let result = &state["result"];
+    let bundle = &state["bundle"];
+    assert_eq!(result["lifecycle"], "COMMIT", "{result}");
+    assert_eq!(bundle["meaning"]["intent"]["kind"], "REVISE_MESSAGE");
+    assert_eq!(bundle["meaning"]["parser_version"], PARSER);
+    assert_eq!(bundle["meaning"]["context_result_ref"], parent["id"]);
+    assert_eq!(
+        bundle["context_sha256"],
+        minidora_domain::identity(&Some(parent)).unwrap()
+    );
+    let prior_compute = parent["content_plan"]["dependencies"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap();
+    let prior_render =
+        minidora_domain::digest(&minidora_domain::canonical(&parent["render"]).unwrap());
+    assert_eq!(
+        result["dependencies"],
+        serde_json::json!([
+            bundle["fingerprint"],
+            parent["id"],
+            prior_compute,
+            prior_render
+        ])
+    );
+    assert_eq!(
+        state["prior_results"][parent["id"].as_str().unwrap()],
+        *parent
+    );
+    let text = result["text"].as_str().unwrap();
+    assert_eq!(
+        result["render"]["bytes"],
+        serde_json::json!(text.as_bytes())
+    );
+    assert_eq!(result["render"]["target"]["kind"], "DISPLAY");
+    assert_eq!(
+        result["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+    assert_eq!(result["receipts"], serde_json::json!([]));
+}
+
+#[test]
+fn v6_message_revision_chains_across_turns_without_losing_constraints_or_reusing_delivery() {
+    let scratch = Scratch::new();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let original_memory = store.load_memory("owner").unwrap();
+    let target = scratch.0.join("original-draft.txt");
+    let path = target.to_str().unwrap();
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--input",
+            "revision-source",
+            "--allow-write",
+            path,
+            "--output",
+            path,
+            "岩木さんへ、訪問を木曜10時から金曜14時に変更できるか尋ねる丁寧なメールを書いて。理由は書かないで。",
+        ],
+    ));
+    assert_eq!(original["receipts"][0]["phase"], "CONFIRMED");
+    assert!(original["text"].as_str().unwrap().contains("件名："));
+    let original_file = std::fs::read(&target).unwrap();
+    let original_actions = store.actions("owner", "normal-route").unwrap();
+    assert_eq!(original_actions.len(), 1);
+
+    let display = math_chat(&scratch.0, "2+3\n前のメールを件名なしで\n/exit\n");
+    assert!(display.contains("2+3 = 5"), "{display}");
+    let first = inspect_normal_case(&scratch.0, "owner");
+    assert_v6_message_revision_parent(&first, &original);
+    let first = first["result"].clone();
+    assert!(!first["text"].as_str().unwrap().contains("件名："));
+
+    math_chat(&scratch.0, "さっきのメールを2文にして\n/exit\n");
+    let second = inspect_normal_case(&scratch.0, "owner");
+    assert_v6_message_revision_parent(&second, &first);
+    let second = second["result"].clone();
+    let second_body = second["text"]
+        .as_str()
+        .unwrap()
+        .rsplit('\n')
+        .next()
+        .unwrap();
+
+    let display = math_chat(&scratch.0, "前のメールをもう少し短くして\n/exit\n");
+    let shortened = inspect_normal_case(&scratch.0, "owner");
+    assert_v6_message_revision_parent(&shortened, &second);
+    let text = shortened["result"]["text"].as_str().unwrap();
+    assert_eq!(display.trim_end_matches(['\r', '\n']), text);
+    let body = text.rsplit('\n').next().unwrap();
+    assert!(body.chars().count() < second_body.chars().count(), "{text}");
+    assert_eq!(body.matches(['。', '？']).count(), 2, "{text}");
+    assert!(text.contains("岩木さん"), "{text}");
+    assert!(body.contains("木曜10時から金曜14時"), "{text}");
+    assert!(body.contains("変更"), "{text}");
+    assert!(
+        ["でしょうか", "ますか", "ですか", "ませんか"]
+            .into_iter()
+            .any(|question| body.contains(question)),
+        "{text}"
+    );
+    for omitted in ["件名：", "理由", "都合により"] {
+        assert!(!text.contains(omitted), "{text}");
+    }
+    assert_eq!(std::fs::read(&target).unwrap(), original_file);
+    assert_eq!(
+        store.actions("owner", "normal-route").unwrap(),
+        original_actions
+    );
+    assert_eq!(store.load_memory("owner").unwrap(), original_memory);
+}
+
+#[test]
+fn v6_message_revision_explicit_history_and_bare_followup_resolve_the_right_draft() {
+    let scratch = Scratch::new();
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &["田中さんへ、会議を延期することを伝えるメールを書いて、理由は一切書かないで"],
+    ));
+    let latest = record(&execute(
+        &scratch.0,
+        "owner",
+        &["岩木さんへ、訪問を変更できないことを伝えるメール本文を1文で"],
+    ));
+    let original_id = original["id"].as_str().unwrap();
+    math_chat(
+        &scratch.0,
+        &format!("/context {original_id}\n前のメールを2文にして\n/exit\n"),
+    );
+    let selected = inspect_normal_case(&scratch.0, "owner");
+    assert_v6_message_revision_parent(&selected, &original);
+    assert_eq!(selected["bundle"]["request"]["context_ref"], original_id);
+    assert_eq!(
+        selected["prior_results"][latest["id"].as_str().unwrap()],
+        latest
+    );
+    let selected = selected["result"].clone();
+    assert!(selected["text"].as_str().unwrap().contains("件名："));
+
+    math_chat(&scratch.0, "件名なしで\n/exit\n");
+    let next = inspect_normal_case(&scratch.0, "owner");
+    assert_v6_message_revision_parent(&next, &selected);
+    assert!(next["bundle"]["request"]["context_ref"].is_null());
+    let text = next["result"]["text"].as_str().unwrap();
+    assert!(
+        text.contains("田中さん") && text.contains("会議を延期します"),
+        "{text}"
+    );
+    assert!(!text.contains("件名：") && !text.contains("訪問"), "{text}");
+    assert_eq!(text.matches(['。', '？']).count(), 2, "{text}");
+}
+
+#[test]
+fn v6_message_revision_stops_for_missing_context_foreign_context_and_unshortenable_body() {
+    let scratch = Scratch::new();
+    const NO_SUBJECT: &str = "前のメールを件名なしで";
+    const SHORTEN: &str = "前のメールをもう少し短くして";
+    let missing = stopped(&execute(&scratch.0, "owner", &[NO_SUBJECT]), 2, "SUSPEND");
+    assert!(
+        missing["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MESSAGE_CONTEXT_INVALID:")
+    );
+
+    let compact = record(&execute(
+        &scratch.0,
+        "owner",
+        &["岩木さんへ、訪問を変更できないことを伝えるメール本文を1文で"],
+    ));
+    let target = scratch.0.join("do-not-write.txt");
+    let path = target.to_str().unwrap();
+    let unchanged = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--allow-write", path, "--output", path, SHORTEN],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        unchanged["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MESSAGE_CAN_NOT_SHORTEN:")
+    );
+    assert_eq!(unchanged["receipts"], serde_json::json!([]));
+    assert!(!target.exists());
+
+    let compact_id = compact["id"].as_str().unwrap();
+    let foreign = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "foreign-draft-case",
+            &["--context", compact_id, NO_SUBJECT],
+        ),
+        4,
+        "FAIL",
+    );
+    assert!(
+        foreign["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONTEXT_MISMATCH")
+    );
+    let unrelated = record(&execute(&scratch.0, "owner", &["17*23"]));
+    let unrelated_id = unrelated["id"].as_str().unwrap();
+    let wrong = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--context", unrelated_id, NO_SUBJECT],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        wrong["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("MESSAGE_CONTEXT_INVALID:")
+    );
+
+    let send = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--context",
+                compact_id,
+                "--allow-write",
+                path,
+                "--output",
+                path,
+                "前のメールを2文にして、そのまま送信して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert_eq!(send["receipts"], serde_json::json!([]));
+    assert!(!target.exists());
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn v6_message_revision_history_search_reports_the_action_limit() {
+    let scratch = Scratch::new();
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &["相原さんへ、説明会の開催を変更できないことを伝えるメールを書いて"],
+    ));
+    for value in ["1+1", "2+2", "3+3", "4+4", "5+5"] {
+        record(&execute(&scratch.0, "owner", &[value]));
+    }
+    let revised = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--max-actions", "4", "前のメールを1文にして"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        revised["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("ACTION_BUDGET_EXHAUSTED:")
+    );
+    assert!(revised["receipts"].as_array().unwrap().is_empty());
+    let state = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        state["prior_results"][original["id"].as_str().unwrap()],
+        original
+    );
+}
+
+#[test]
+fn v6_message_drafting_neither_executes_an_extra_send_nor_uses_bare_quoted_text() {
+    let scratch = Scratch::new();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let original_memory = store.load_memory("owner").unwrap();
+    let path = scratch.0.join("unexpected-draft.txt");
+    let target = path.to_str().unwrap();
+    for (id, request, bare_quote) in [
+        (
+            "explicit-send",
+            "打ち合わせの日程変更をお願いする丁寧なメールを書いて。そして送信して。",
+            false,
+        ),
+        (
+            "bare-quote",
+            "「岩木さんへ、訪問を変更できないことを伝えるメール本文を1文で」",
+            true,
+        ),
+    ] {
+        let result = stopped(
+            &execute(
+                &scratch.0,
+                "owner",
+                &[
+                    "--input",
+                    id,
+                    "--output",
+                    target,
+                    "--allow-write",
+                    target,
+                    request,
+                ],
+            ),
+            2,
+            "SUSPEND",
+        );
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert!(!path.exists());
+        let state = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(state["bundle"]["request"]["text"], request);
+        if bare_quote {
+            assert_eq!(state["bundle"]["meaning"]["intent"]["kind"], "UNKNOWN");
+            assert!(result["content_plan"].is_null());
+        }
+    }
+    assert_eq!(store.load_memory("owner").unwrap(), original_memory);
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn v6_current_news_is_sealed_and_denied_without_a_read_grant() {
+    let scratch = Scratch::new();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    for (prompt, expected_period, source_time, expected_topic) in [
+        ("今日のニュースは？", "TODAY", "今日", None),
+        ("今日の経済ニュースを教えて", "TODAY", "今日", Some("経済")),
+        ("最新のニュースを出典付きでまとめて", "LATEST", "最新", None),
+        ("今ニュースで何が起きている？", "LATEST", "今", None),
+    ] {
+        let display = math_chat(&scratch.0, &format!("/net off\n/net on\n{prompt}\n/exit\n"));
+        assert!(display.contains("ニュース"), "{display}");
+        let state = inspect_normal_case(&scratch.0, "owner");
+        let bundle = &state["bundle"];
+        assert_eq!(bundle["request"]["text"], prompt);
+        assert_eq!(
+            bundle["request"]["permissions"]["read_hosts"],
+            serde_json::json!([])
+        );
+        let meaning = &bundle["meaning"];
+        assert_eq!(
+            meaning["parser_version"], "declarative-ja-v222-current-news",
+            "{meaning}"
+        );
+        let intent = &meaning["intent"];
+        assert_eq!(intent["kind"], "ASK_CURRENT_NEWS", "{intent}");
+        assert_eq!(intent["period"], expected_period, "{intent}");
+        assert_eq!(intent["topic"].as_str(), expected_topic, "{intent}");
+        let roles = &meaning["source_roles"];
+        assert_eq!(roles["/AskCurrentNews/period"][0]["text"], source_time);
+        assert_eq!(
+            roles["/AskCurrentNews/topic"][0]["text"].as_str(),
+            expected_topic
+        );
+        for spans in roles.as_object().unwrap().values() {
+            for span in spans.as_array().unwrap() {
+                let start = span["start"].as_u64().unwrap() as usize;
+                let end = span["end"].as_u64().unwrap() as usize;
+                assert!(start < end, "{span}");
+                assert_eq!(prompt.get(start..end), span["text"].as_str(), "{span}");
+            }
+        }
+        let result = &state["result"];
+        assert_eq!(result["lifecycle"], "SUSPEND", "{result}");
+        assert_ne!(result["guarantee"], "SOURCE_REPORT", "{result}");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("READ_PERMISSION_REQUIRED:"),
+            "{result}"
+        );
+        assert_eq!(result["evidence"], serde_json::json!([]));
+        assert_eq!(result["receipts"], serde_json::json!([]));
+    }
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn v6_current_news_followups_explain_without_reading_again() {
+    let scratch = Scratch::new();
+    math_chat(&scratch.0, "今日のニュースは？\n/exit\n");
+    let first = inspect_normal_case(&scratch.0, "owner");
+    let original = &first["result"];
+    let origin = original["id"].as_str().unwrap();
+    assert_eq!(original["lifecycle"], "SUSPEND", "{original}");
+    assert!(
+        original["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("READ_PERMISSION_REQUIRED:"),
+        "{original}"
+    );
+    assert_eq!(original["evidence"], serde_json::json!([]));
+    assert_eq!(original["receipts"], serde_json::json!([]));
+
+    for question in ["？", "どういうこと？"] {
+        let display = math_chat(&scratch.0, &format!("{question}\n/exit\n"));
+        assert!(
+            display.contains("許可") && display.contains("ニュース"),
+            "{display}"
+        );
+        assert!(!display.contains("CAPABILITY_UNAVAILABLE"), "{display}");
+        let state = inspect_normal_case(&scratch.0, "owner");
+        let bundle = &state["bundle"];
+        assert_eq!(bundle["request"]["text"], question);
+        assert_eq!(
+            bundle["request"]["permissions"]["read_hosts"],
+            serde_json::json!([])
+        );
+        let intent = &bundle["meaning"]["intent"];
+        assert_eq!(intent["kind"], "EXPLAIN_CURRENT_NEWS", "{intent}");
+        assert_eq!(intent["origin"], origin, "{intent}");
+        let result = &state["result"];
+        assert_eq!(result["lifecycle"], "COMMIT", "{result}");
+        assert_eq!(result["evidence"], serde_json::json!([]));
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert_eq!(&state["prior_results"][origin], original);
+    }
+
+    let display = math_chat(&scratch.0, "2+3\n/exit\n");
+    assert!(display.contains("2+3 = 5"), "{display}");
+    let last = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(last["bundle"]["meaning"]["intent"]["kind"], "CALCULATE");
+    assert_eq!(last["result"]["lifecycle"], "COMMIT", "{last}");
+    assert_eq!(&last["prior_results"][origin], original);
+
+    let unrelated = execute_in_case(&scratch.0, "owner", "no-news-context", &["？"]);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let unrelated = store
+        .load_case("owner", "no-news-context")
+        .unwrap()
+        .unwrap_or_else(|| panic!("no case recorded: {unrelated:?}"));
+    let intent = serde_json::to_value(unrelated.bundle.unwrap().meaning.intent).unwrap();
+    assert_ne!(intent["kind"], "EXPLAIN_CURRENT_NEWS", "{intent}");
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+    assert!(
+        store
+            .actions("owner", "no-news-context")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn v6_current_news_keeps_other_intents_and_the_actor_boundary() {
+    let scratch = Scratch::new();
+    for prompt in [
+        "ニュース記事を書いて",
+        "今日のニュースを英訳して",
+        "「今日のニュースを教えて」",
+        "今日のニュースは要らない。",
+        "昨日のニュースを教えて",
+        "今日の政治以外のニュースを教えて",
+        "今日のニュースを出典付きで教えて、そのまま送信して。",
+    ] {
+        math_chat(&scratch.0, &format!("{prompt}\n/exit\n"));
+        let state = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(state["bundle"]["request"]["text"], prompt);
+        assert_ne!(
+            state["bundle"]["meaning"]["intent"]["kind"], "ASK_CURRENT_NEWS",
+            "{state}"
+        );
+        assert_eq!(state["result"]["receipts"], serde_json::json!([]));
+    }
+
+    math_chat(&scratch.0, "富士山について出典付きで教えて\n/exit\n");
+    let owner = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(owner["bundle"]["meaning"]["intent"]["kind"], "ASK_WEB");
+    let other = execute(&scratch.0, "other", &["今日のニュースは？"]);
+    assert!(!other.status.success(), "{other:?}");
+    assert_eq!(inspect_normal_case(&scratch.0, "owner"), owner);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+fn assert_v6_decision_input(state: &Value, prompt: &str) {
+    assert_eq!(state["bundle"]["request"]["text"], prompt);
+    let meaning = &state["bundle"]["meaning"];
+    assert_eq!(meaning["intent"]["kind"], "COMPARE_OPTIONS", "{state}");
+    assert_eq!(
+        meaning["parser_version"],
+        "declarative-ja-v221-compare-options"
+    );
+    let roles = meaning["source_roles"].as_object().unwrap();
+    assert!(roles.len() >= 3, "{roles:?}");
+    for spans in roles.values() {
+        let spans = spans.as_array().unwrap();
+        assert!(!spans.is_empty(), "{roles:?}");
+        for span in spans {
+            let start = span["start"].as_u64().unwrap() as usize;
+            let end = span["end"].as_u64().unwrap() as usize;
+            assert!(start < end, "{span}");
+            assert_eq!(prompt.get(start..end), span["text"].as_str(), "{span}");
+        }
+    }
+}
+
+#[test]
+fn v6_decision_selects_with_hard_constraints_and_recomputes_after_a_change() {
+    let scratch = Scratch::new();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let original_memory = store.load_memory("owner").unwrap();
+    let original = "候補を比較して。Aは定員6人、距離400m。Bは定員12人、距離1km。定員8人以上が必須。距離が短い方を選んで。";
+    let output = math_chat(&scratch.0, &format!("17*23\n{original}\n/exit\n"));
+    assert!(output.contains("17*23 = 391"), "{output}");
+    assert!(output.contains("おすすめは「B」です。"), "{output}");
+    for criterion in ["定員", "距離"] {
+        assert!(output.contains(criterion), "{output}");
+    }
+    let first = inspect_normal_case(&scratch.0, "owner");
+    assert_v6_decision_input(&first, original);
+    assert_eq!(first["result"]["lifecycle"], "COMMIT", "{first}");
+
+    let changed = original.replace("定員8人以上", "定員6人以上");
+    let output = math_chat(&scratch.0, &format!("{changed}\n/exit\n"));
+    assert!(output.contains("おすすめは「A」です。"), "{output}");
+    let second = inspect_normal_case(&scratch.0, "owner");
+    assert_v6_decision_input(&second, &changed);
+    assert_eq!(second["result"]["lifecycle"], "COMMIT", "{second}");
+    let first_id = first["result"]["id"].as_str().unwrap();
+    assert_eq!(second["prior_results"][first_id], first["result"]);
+
+    let workflow = "手作業は費用25円、時間60分、ログあり。ツールは費用25.0円、時間15分、ログあり。外注は費用10円、時間5分、ログなし。費用25円以下とログありが必須。費用が安い方、同額なら時間が短い方を選んで。";
+    let output = math_chat(&scratch.0, &format!("{workflow}\n/exit\n"));
+    assert!(output.contains("おすすめは「ツール」です。"), "{output}");
+    for criterion in ["費用", "時間", "ログ"] {
+        assert!(output.contains(criterion), "{output}");
+    }
+    let third = inspect_normal_case(&scratch.0, "owner");
+    assert_v6_decision_input(&third, workflow);
+    assert_eq!(third["result"]["lifecycle"], "COMMIT", "{third}");
+    assert_eq!(third["result"]["receipts"], serde_json::json!([]));
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+    assert_eq!(store.load_memory("owner").unwrap(), original_memory);
+}
+
+#[test]
+fn v6_decision_distinguishes_exact_ties_and_ineligible_candidates() {
+    let scratch = Scratch::new();
+    let tied =
+        "Aは距離1km、階段なし。Bは距離1000m、階段なし。階段なしが必須。距離が短い方を選んで。";
+    let dropped = tied.replace("Bは距離1000m、階段なし", "Bは距離1000m、階段あり");
+    let none = dropped.replace("Aは距離1km、階段なし", "Aは距離1km、階段あり");
+    for (prompt, expected) in [
+        (tied, "同順位の候補は"),
+        (dropped.as_str(), "おすすめは「A」です。"),
+        (none.as_str(), "必須条件を満たす候補はありません。"),
+    ] {
+        let output = math_chat(&scratch.0, &format!("{prompt}\n/exit\n"));
+        assert!(output.contains(expected), "{output}");
+        let state = inspect_normal_case(&scratch.0, "owner");
+        assert_v6_decision_input(&state, prompt);
+        assert_eq!(state["result"]["lifecycle"], "COMMIT", "{state}");
+        assert_eq!(state["result"]["receipts"], serde_json::json!([]));
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn v6_decision_with_missing_criteria_or_an_extra_reservation_creates_no_files() {
+    let scratch = Scratch::new();
+    let target = scratch.0.join("unexpected-decision.txt");
+    let path = target.to_str().unwrap();
+    let missing = "Aは距離1km、階段なし。Bは距離1000m。階段なしが必須。距離が短い方を選んで。";
+    let extra = "Aは距離1km、階段なし。Bは距離1000m、階段あり。階段なしが必須。距離が短い方を選んで。選んだ候補を予約して。";
+    for (input, prompt, unresolved) in [
+        ("decision-missing", missing, true),
+        ("decision-reserve", extra, false),
+    ] {
+        let result = stopped(
+            &execute(
+                &scratch.0,
+                "owner",
+                &[
+                    "--input",
+                    input,
+                    "--output",
+                    path,
+                    "--allow-write",
+                    path,
+                    prompt,
+                ],
+            ),
+            2,
+            "SUSPEND",
+        );
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert!(!target.exists(), "{result}");
+        let state = inspect_normal_case(&scratch.0, "owner");
+        assert_eq!(state["bundle"]["request"]["text"], prompt);
+        if unresolved {
+            assert_v6_decision_input(&state, prompt);
+            let text = result["text"].as_str().unwrap();
+            assert!(text.contains("候補を確定できません。"), "{result}");
+            assert!(text.contains("階段") && text.contains("B"), "{result}");
+            assert!(
+                result["reason"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with("DECISION_UNDETERMINED"),
+                "{result}"
+            );
+        }
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+const V6_REVISION_VENUE_INPUT: &str = "候補を比較して。青葉会館は定員40人、駅からの距離400m、費用1200円、階段なし。桜ホールは定員60人、駅からの距離1km、費用1000円、階段なし。定員40人以上と階段なしが必須。駅からの距離が短い方、同じなら費用が安い方を選んで。";
+
+fn assert_v6_decision_revision(
+    store: &minidora_engine::store::Store,
+    state: &Value,
+    parent: &Value,
+    change: &str,
+    named: bool,
+) -> Value {
+    let bundle = &state["bundle"];
+    let meaning = &bundle["meaning"];
+    assert_eq!(
+        meaning["parser_version"], "declarative-ja-v223-decision-revision",
+        "{meaning}"
+    );
+    let intent = &meaning["intent"];
+    assert_eq!(intent["kind"], "REVISE_DECISION", "{intent}");
+    assert_eq!(intent["revision"]["named"], named, "{intent}");
+    assert_eq!(intent["revision"]["change"]["kind"], change, "{intent}");
+    let parent_id = parent["id"].as_str().unwrap();
+    assert_eq!(meaning["context_result_ref"], parent_id);
+    assert_eq!(&state["prior_results"][parent_id], parent);
+
+    let prompt = bundle["request"]["text"].as_str().unwrap();
+    let roles = meaning["source_roles"].as_object().unwrap();
+    assert!(!roles.is_empty(), "{meaning}");
+    for spans in roles.values() {
+        for span in spans.as_array().unwrap() {
+            let start = span["start"].as_u64().unwrap() as usize;
+            let end = span["end"].as_u64().unwrap() as usize;
+            assert!(start < end, "{span}");
+            assert_eq!(prompt.get(start..end), span["text"].as_str(), "{span}");
+        }
+    }
+
+    let result = &state["result"];
+    assert_eq!(result["lifecycle"], "COMMIT", "{result}");
+    let dependencies = result["content_plan"]["dependencies"].as_array().unwrap();
+    let artifact_ref = dependencies.last().unwrap().as_str().unwrap();
+    let artifact: Value = serde_json::from_slice(
+        &store
+            .get_bytes("owner", "normal-route", artifact_ref)
+            .unwrap(),
+    )
+    .unwrap();
+    assert_eq!(artifact["content_generation"]["text"], result["text"]);
+    let plan = &artifact["decision_plan"];
+    let proof = &plan["revision"];
+    assert_eq!(proof["prior_result"], parent_id, "{proof}");
+    assert_eq!(
+        &proof["prior_compute"],
+        parent["content_plan"]["dependencies"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap(),
+        "{proof}"
+    );
+    let input_ref = proof["prior_bundle"].as_str().unwrap();
+    assert_eq!(input_ref.len(), 64, "{proof}");
+    assert!(
+        input_ref.bytes().all(|byte| byte.is_ascii_hexdigit()),
+        "{proof}"
+    );
+    assert_eq!(proof["change"]["kind"], change, "{proof}");
+    assert!(proof["reuse"]["assessments"].is_array(), "{proof}");
+    assert!(proof["reuse"]["comparisons"].is_array(), "{proof}");
+    plan.clone()
+}
+
+#[test]
+fn v6_decision_revision_updates_bound_fact_and_preference_across_restart() {
+    let scratch = Scratch::new();
+    let target = scratch.0.join("original-comparison.txt");
+    let path = target.to_str().unwrap();
+    let original = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--allow-write",
+            path,
+            "--output",
+            path,
+            V6_REVISION_VENUE_INPUT,
+        ],
+    ));
+    assert!(
+        original["text"]
+            .as_str()
+            .unwrap()
+            .contains("おすすめは「青葉会館」です。"),
+        "{original}"
+    );
+    assert_eq!(original["receipts"][0]["phase"], "CONFIRMED");
+    let original_bytes = std::fs::read(&target).unwrap();
+    let original_modified = std::fs::metadata(&target).unwrap().modified().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let original_actions = store.actions("owner", "normal-route").unwrap();
+
+    let display = math_chat(&scratch.0, "定員は45人に変更して。\n/exit\n");
+    assert!(
+        display.contains("おすすめは「桜ホール」です。"),
+        "{display}"
+    );
+    let changed = inspect_normal_case(&scratch.0, "owner");
+    let bound = assert_v6_decision_revision(&store, &changed, &original, "REQUIREMENT", false);
+    assert!(
+        !bound["revision"]["reuse"]["assessments"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "{bound}"
+    );
+    assert_eq!(changed["result"]["receipts"], serde_json::json!([]));
+    assert_eq!(
+        changed["bundle"]["request"]["permissions"]["write_paths"],
+        serde_json::json!([])
+    );
+
+    let math = math_chat(&scratch.0, "17*23\n/exit\n");
+    assert!(math.contains("17*23 = 391"), "{math}");
+    let display = math_chat(
+        &scratch.0,
+        "前の比較で、青葉会館の定員は55人に訂正して。\n/exit\n",
+    );
+    assert!(
+        display.contains("おすすめは「青葉会館」です。"),
+        "{display}"
+    );
+    assert!(
+        display.contains("45人") && display.contains("55人"),
+        "{display}"
+    );
+    let corrected = inspect_normal_case(&scratch.0, "owner");
+    let fact = assert_v6_decision_revision(&store, &corrected, &changed["result"], "FACT", true);
+    assert_eq!(
+        fact["decision"]["requirements"],
+        bound["decision"]["requirements"]
+    );
+    assert_eq!(corrected["result"]["receipts"], serde_json::json!([]));
+
+    math_chat(&scratch.0, "駅からの距離だけ重視して\n/exit\n");
+    let preferred = inspect_normal_case(&scratch.0, "owner");
+    let plan = assert_v6_decision_revision(
+        &store,
+        &preferred,
+        &corrected["result"],
+        "PREFERENCE",
+        false,
+    );
+    assert_eq!(plan["decision"]["preferences"].as_array().unwrap().len(), 1);
+    assert_eq!(
+        plan["decision"]["requirements"],
+        fact["decision"]["requirements"]
+    );
+    assert_eq!(preferred["result"]["receipts"], serde_json::json!([]));
+    assert_eq!(
+        preferred["prior_results"][original["id"].as_str().unwrap()],
+        original
+    );
+    assert_eq!(std::fs::read(&target).unwrap(), original_bytes);
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().modified().unwrap(),
+        original_modified
+    );
+    assert_eq!(
+        store.actions("owner", "normal-route").unwrap(),
+        original_actions
+    );
+}
+
+#[test]
+fn v6_decision_revision_respects_explicit_context_actor_and_case() {
+    let scratch = Scratch::new();
+    let first = record(&execute(&scratch.0, "owner", &[V6_REVISION_VENUE_INPUT]));
+    let first_id = first["id"].as_str().unwrap();
+    let second_prompt = V6_REVISION_VENUE_INPUT.replace("定員40人以上", "定員50人以上");
+    let second = record(&execute(&scratch.0, "owner", &[&second_prompt]));
+    assert!(
+        second["text"]
+            .as_str()
+            .unwrap()
+            .contains("おすすめは「桜ホール」です。"),
+        "{second}"
+    );
+    let edit = "青葉会館の定員は45人に訂正して。";
+    let target = scratch.0.join("requested-revision.txt");
+    let path = target.to_str().unwrap();
+    let result = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--context",
+            first_id,
+            "--allow-write",
+            path,
+            "--output",
+            path,
+            edit,
+        ],
+    ));
+    assert!(
+        result["text"]
+            .as_str()
+            .unwrap()
+            .contains("おすすめは「青葉会館」です。"),
+        "{result}"
+    );
+    assert_eq!(result["receipts"][0]["phase"], "CONFIRMED");
+    let state = inspect_normal_case(&scratch.0, "owner");
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_v6_decision_revision(&store, &state, &first, "FACT", false);
+    assert_eq!(state["bundle"]["request"]["context_ref"], first_id);
+    assert_eq!(
+        state["prior_results"][second["id"].as_str().unwrap()],
+        second
+    );
+    assert_eq!(
+        std::fs::read(&target).unwrap(),
+        result["text"].as_str().unwrap().as_bytes()
+    );
+
+    let wrong_case = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            "unrelated-comparison",
+            &["--context", first_id, edit],
+        ),
+        4,
+        "FAIL",
+    );
+    assert!(
+        wrong_case["reason"]
+            .as_str()
+            .unwrap()
+            .contains("CONTEXT_MISMATCH"),
+        "{wrong_case}"
+    );
+    let wrong_actor = execute(&scratch.0, "other", &["--context", first_id, edit]);
+    assert!(!wrong_actor.status.success(), "{wrong_actor:?}");
+    assert_eq!(inspect_normal_case(&scratch.0, "owner"), state);
+    assert_eq!(store.actions("owner", "normal-route").unwrap().len(), 1);
+    assert!(
+        store
+            .actions("owner", "unrelated-comparison")
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[test]
+fn v6_decision_revision_revisits_a_partial_comparison_with_the_missing_fact() {
+    let scratch = Scratch::new();
+    let target = scratch.0.join("unresolved-comparison.txt");
+    let path = target.to_str().unwrap();
+    let prompt = "青葉会館は定員40人、距離700m。桜ホールは距離400m。定員40人以上が必須。距離が短い方を選んで。";
+    let partial = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &["--allow-write", path, "--output", path, prompt],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        partial["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("DECISION_UNDETERMINED:"),
+        "{partial}"
+    );
+    assert!(!partial["render"].is_null(), "{partial}");
+    assert!(!target.exists());
+    let display = math_chat(&scratch.0, "桜ホールの定員は55人に訂正して。\n/exit\n");
+    assert!(
+        display.contains("おすすめは「桜ホール」です。"),
+        "{display}"
+    );
+    let state = inspect_normal_case(&scratch.0, "owner");
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_v6_decision_revision(&store, &state, &partial, "FACT", false);
+    assert_eq!(state["result"]["receipts"], serde_json::json!([]));
+    assert!(!target.exists());
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+const V6_MEMORY_SHARING_OFF: &str = "会話をまたぐ記憶をオフにして";
+const V6_MEMORY_SHARING_ON: &str = "会話をまたぐ記憶をオンにして";
+const V6_MEMORY_SETTINGS: &str = "記憶の設定を確認して";
+
+fn v6_memory_policy_state(store: &minidora_engine::store::Store, actor: &str, case: &str) -> Value {
+    serde_json::to_value(store.load_case(actor, case).unwrap().unwrap()).unwrap()
+}
+
+fn v6_memory_policy_condition_proof(
+    store: &minidora_engine::store::Store,
+    case: &str,
+    result: &Value,
+) -> Value {
+    let reference = result["dependencies"]
+        .as_array()
+        .unwrap()
+        .last()
+        .unwrap()
+        .as_str()
+        .unwrap();
+    let proof: Value =
+        serde_json::from_slice(&store.get_bytes("owner", case, reference).unwrap()).unwrap();
+    assert_eq!(proof[0], "minidora-condition-evaluation-v1", "{proof}");
+    proof[2].clone()
+}
+
+#[test]
+fn v6_memory_policy_gates_cross_case_facts_definitions_and_old_proofs() {
+    let scratch = Scratch::new();
+    const SOURCE: &str = "normal-route";
+    const PEER: &str = "memory-peer";
+    const ASK: &str = "[scope=実験室]ユリは点検済みですか";
+    const EVALUATE: &str = "条件評価: [condition=点検][subject=ユリ][scope=実験室]";
+
+    let alice_fact = record(&execute(
+        &scratch.0,
+        "owner",
+        &["[scope=実験室]ユリは点検済み"],
+    ));
+    let definition = record(&execute(
+        &scratch.0,
+        "owner",
+        &["条件定義: [scope=実験室][condition=点検] ユリは点検済み"],
+    ));
+    let fact_id = &alice_fact["dependencies"][0];
+    let definition_id = &definition["dependencies"][0];
+    let former_answer = record(&execute_in_case(&scratch.0, "owner", PEER, &[ASK]));
+    assert!(
+        former_answer["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(fact_id)
+    );
+    let former_id = former_answer["id"].as_str().unwrap();
+    let original = record(&execute_in_case(&scratch.0, "owner", PEER, &[EVALUATE]));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let known = v6_memory_policy_condition_proof(&store, PEER, &original);
+    assert_eq!(known["status"], "TRUE");
+    assert!(
+        known["definition_record_ids"]
+            .as_array()
+            .unwrap()
+            .contains(definition_id)
+    );
+    assert!(
+        known["evidence_fact_ids"]
+            .as_array()
+            .unwrap()
+            .contains(fact_id)
+    );
+
+    math_chat(&scratch.0, &format!("{V6_MEMORY_SHARING_OFF}\n/exit\n"));
+    let off = v6_memory_policy_state(&store, "owner", SOURCE);
+    assert_eq!(off["result"]["lifecycle"], "COMMIT", "{off}");
+    assert_eq!(
+        off["bundle"]["meaning"]["intent"]["kind"],
+        "SET_MEMORY_SHARING"
+    );
+    assert_eq!(off["bundle"]["meaning"]["intent"]["enabled"], false);
+    assert_eq!(off["result"]["receipts"], serde_json::json!([]));
+    let status = math_chat(
+        &scratch.0,
+        &format!("/case {PEER}\n{V6_MEMORY_SETTINGS}\n/exit\n"),
+    );
+    assert!(
+        status.contains("オフ") || status.contains("無効"),
+        "{status}"
+    );
+    let state = v6_memory_policy_state(&store, "owner", PEER);
+    assert_eq!(state["result"]["lifecycle"], "COMMIT", "{state}");
+    assert_eq!(
+        state["bundle"]["meaning"]["intent"]["kind"],
+        "INSPECT_MEMORY_SETTINGS"
+    );
+
+    let local = record(&execute(&scratch.0, "owner", &[EVALUATE]));
+    let allowed = v6_memory_policy_condition_proof(&store, SOURCE, &local);
+    assert_eq!(allowed["status"], "TRUE");
+    assert!(
+        allowed["definition_record_ids"]
+            .as_array()
+            .unwrap()
+            .contains(definition_id)
+    );
+    assert!(
+        allowed["evidence_fact_ids"]
+            .as_array()
+            .unwrap()
+            .contains(fact_id)
+    );
+    let foreign = execute_in_case(&scratch.0, "owner", PEER, &[EVALUATE]);
+    let unavailable = if foreign.status.success() {
+        let result = record(&foreign);
+        let proof = v6_memory_policy_condition_proof(&store, PEER, &result);
+        assert_eq!(proof["status"], "UNKNOWN", "{proof}");
+        assert_eq!(proof["definition_record_ids"], serde_json::json!([]));
+        assert_eq!(proof["evidence_fact_ids"], serde_json::json!([]));
+        result
+    } else {
+        stopped(&foreign, 2, "SUSPEND")
+    };
+    let remaining = unavailable["dependencies"].as_array().unwrap();
+    assert!(!remaining.contains(fact_id) && !remaining.contains(definition_id));
+
+    let archived = math_chat(
+        &scratch.0,
+        &format!("/case {PEER}\n/history {former_id}\n/exit\n"),
+    );
+    assert!(
+        archived.contains(former_answer["text"].as_str().unwrap()),
+        "{archived}"
+    );
+    let blocked = stopped(
+        &execute_in_case(
+            &scratch.0,
+            "owner",
+            PEER,
+            &["--context", former_id, "詳しく説明して"],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        !blocked["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(fact_id)
+    );
+    assert_eq!(blocked["receipts"], serde_json::json!([]));
+    let archived_state = v6_memory_policy_state(&store, "owner", PEER);
+    assert_eq!(archived_state["prior_results"][former_id], former_answer);
+
+    const B_ASK: &str = "[scope=実験室]ノゾミは点検済みですか";
+    let local_fact = record(&execute_in_case(
+        &scratch.0,
+        "owner",
+        PEER,
+        &["[scope=実験室]ノゾミは点検済み"],
+    ));
+    let local_id = &local_fact["dependencies"][0];
+    let b_answer = record(&execute_in_case(&scratch.0, "owner", PEER, &[B_ASK]));
+    assert!(
+        b_answer["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(local_id)
+    );
+    let a_answer = stopped(&execute(&scratch.0, "owner", &[B_ASK]), 2, "SUSPEND");
+    assert!(
+        !a_answer["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(local_id)
+    );
+
+    let z_fact = record(&execute_in_case(
+        &scratch.0,
+        "z",
+        "z-source",
+        &["[scope=実験室]カエデは点検済み"],
+    ));
+    let z_query = record(&execute_in_case(
+        &scratch.0,
+        "z",
+        "z-peer",
+        &["[scope=実験室]カエデは点検済みですか"],
+    ));
+    assert!(
+        z_query["dependencies"]
+            .as_array()
+            .unwrap()
+            .contains(&z_fact["dependencies"][0])
+    );
+
+    math_chat(
+        &scratch.0,
+        &format!("/case {PEER}\n{V6_MEMORY_SHARING_ON}\n/exit\n"),
+    );
+    let on = v6_memory_policy_state(&store, "owner", PEER);
+    assert_eq!(on["result"]["lifecycle"], "COMMIT", "{on}");
+    assert_eq!(
+        on["bundle"]["meaning"]["intent"]["kind"],
+        "SET_MEMORY_SHARING"
+    );
+    assert_eq!(on["bundle"]["meaning"]["intent"]["enabled"], true);
+    let reused = record(&execute_in_case(&scratch.0, "owner", PEER, &[EVALUATE]));
+    let restored = v6_memory_policy_condition_proof(&store, PEER, &reused);
+    assert_eq!(restored["status"], "TRUE");
+    assert!(
+        restored["definition_record_ids"]
+            .as_array()
+            .unwrap()
+            .contains(definition_id)
+    );
+    assert!(
+        restored["evidence_fact_ids"]
+            .as_array()
+            .unwrap()
+            .contains(fact_id)
+    );
+    assert!(store.actions("owner", SOURCE).unwrap().is_empty());
+    assert!(store.actions("owner", PEER).unwrap().is_empty());
+}
+
+#[test]
+fn v6_memory_policy_off_preserves_ordinary_output_and_same_case_context() {
+    let scratch = Scratch::new();
+    math_chat(&scratch.0, &format!("{V6_MEMORY_SHARING_OFF}\n/exit\n"));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let setting = v6_memory_policy_state(&store, "owner", "normal-route");
+    assert_eq!(setting["result"]["lifecycle"], "COMMIT", "{setting}");
+    assert_eq!(
+        setting["bundle"]["meaning"]["intent"]["kind"],
+        "SET_MEMORY_SHARING"
+    );
+    assert_eq!(setting["bundle"]["meaning"]["intent"]["enabled"], false);
+    for (prompt, kind) in [
+        ("17*23", "CALCULATE"),
+        (
+            "岩木さんへ、訪問を木曜10時から金曜14時に変更できるか尋ねる丁寧なメール本文を2文で。",
+            "DRAFT_MESSAGE",
+        ),
+        (V6_REVISION_VENUE_INPUT, "COMPARE_OPTIONS"),
+        ("編み物の話をしよう", "OPEN_CONVERSATION_TOPIC"),
+        ("緑のマフラーを編みました", "RESPOND_ON_CONVERSATION_TOPIC"),
+    ] {
+        let display = math_chat(&scratch.0, &format!("{prompt}\n/exit\n"));
+        let state = v6_memory_policy_state(&store, "owner", "normal-route");
+        assert_eq!(
+            state["bundle"]["meaning"]["intent"]["kind"], kind,
+            "{state}"
+        );
+        assert_eq!(state["result"]["lifecycle"], "COMMIT", "{state}");
+        assert!(!display.trim().is_empty(), "{state}");
+        assert_eq!(state["result"]["receipts"], serde_json::json!([]));
+        if kind == "CALCULATE" {
+            assert_eq!(state["result"]["calculation"]["exact_value"], "391");
+        }
+        if kind == "RESPOND_ON_CONVERSATION_TOPIC" {
+            let id = state["bundle"]["meaning"]["context_result_ref"]
+                .as_str()
+                .unwrap();
+            assert_eq!(state["prior_results"][id]["lifecycle"], "COMMIT");
+        }
+    }
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn v6_branch_text_respects_cross_case_memory_policy() {
+    const SOURCE: &str = "branch-memory-source";
+    const CHILD: &str = "branch-memory-child";
+    const SETTINGS: &str = "branch-memory-settings";
+    const EDIT: &str = "分岐元の回答の「多年草」を「草本」に置き換えて";
+    let scratch = Scratch::new();
+    let directory = &scratch.0;
+    record(&execute_in_case(
+        directory,
+        "owner",
+        SETTINGS,
+        &[V6_MEMORY_SHARING_ON],
+    ));
+    record(&execute(directory, "owner", &["ヨモギは多年草です"]));
+    let source = record(&execute_in_case(
+        directory,
+        "owner",
+        SOURCE,
+        &["ヨモギについて教えてください。"],
+    ));
+    assert!(source["actor_memory_revision"].as_u64().is_some());
+    assert!(source["text"].as_str().unwrap().contains("多年草"));
+
+    let display = math_chat(
+        directory,
+        &format!("/case {SOURCE}\n/fork {CHILD}\n{EDIT}\n/exit\n"),
+    );
+    assert!(display.contains("草本"), "{display}");
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let child = v6_memory_policy_state(&store, "owner", CHILD);
+    assert_eq!(child["result"]["lifecycle"], "COMMIT");
+    assert_eq!(
+        child["bundle"]["meaning"]["intent"]["kind"],
+        "REPLACE_BRANCH_SOURCE"
+    );
+    let child_result = child["result"]["id"].as_str().unwrap();
+
+    record(&execute_in_case(
+        directory,
+        "owner",
+        SETTINGS,
+        &[V6_MEMORY_SHARING_OFF],
+    ));
+    let export = directory.join("blocked-branch-memory.txt");
+    let export_path = export.to_str().unwrap();
+    let blocked = execute_in_case(
+        directory,
+        "owner",
+        CHILD,
+        &["--allow-write", export_path, "--output", export_path, EDIT],
+    );
+    let inherited: Value = serde_json::from_slice(&blocked.stdout).unwrap();
+    assert_eq!(blocked.status.code(), Some(2), "{inherited}");
+    let reuse = execute_in_case(
+        directory,
+        "owner",
+        CHILD,
+        &["--context", child_result, "前の回答を説明して"],
+    );
+    let same_case: Value = serde_json::from_slice(&reuse.stdout).unwrap();
+    assert_eq!(reuse.status.code(), Some(2), "{same_case}");
+    for result in [inherited, same_case] {
+        assert_eq!(result["lifecycle"], "SUSPEND", "{result}");
+        assert!(
+            result["reason"]
+                .as_str()
+                .unwrap()
+                .starts_with("MEMORY_CONTEXT_UNAVAILABLE"),
+            "{result}"
+        );
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert!(!result["text"].as_str().unwrap().contains("草本"));
+    }
+    assert!(!export.exists());
+    assert!(store.actions("owner", CHILD).unwrap().is_empty());
+    let parent = v6_memory_policy_state(&store, "owner", SOURCE);
+    assert_eq!(parent["result"], source);
+}
+
+#[test]
+fn v6_statistics_paraphrases_preserve_meaning_and_metric_scope() {
+    let original = Scratch::new();
+    let paraphrase = Scratch::new();
+    let query = "1、2、3の平均と分散を求めて";
+    let alias = "1、2、3の平均値と分散を教えて";
+    math_chat(&original.0, &format!("{query}\n/exit\n"));
+    math_chat(&paraphrase.0, &format!("{alias}\n/exit\n"));
+    let original_state = inspect_normal_case(&original.0, "owner");
+    let alias_state = inspect_normal_case(&paraphrase.0, "owner");
+    assert_eq!(original_state["result"]["lifecycle"], "COMMIT");
+    assert_eq!(alias_state["result"]["lifecycle"], "COMMIT");
+    assert_eq!(
+        original_state["result"]["text"],
+        alias_state["result"]["text"]
+    );
+    assert_eq!(
+        original_state["result"]["dependencies"],
+        alias_state["result"]["dependencies"]
+    );
+    assert_eq!(
+        alias_state["bundle"]["meaning"]["source_roles"]["/Statistics/values/1"][0]["text"],
+        "2"
+    );
+
+    let reordered = math_chat(
+        &paraphrase.0,
+        "分散と平均値を、4と7と10から計算してください\n/exit\n",
+    );
+    assert!(reordered.contains("平均は 7"), "{reordered}");
+    assert!(reordered.contains("母分散は 6"), "{reordered}");
+
+    let excluded = math_chat(
+        &paraphrase.0,
+        "4、7、10の統計量を求めて、分散は不要\n/exit\n",
+    );
+    let projected = inspect_normal_case(&paraphrase.0, "owner");
+    assert_eq!(projected["result"]["lifecycle"], "COMMIT");
+    assert!(excluded.contains("平均は 7"), "{excluded}");
+    assert!(!excluded.contains("分散"), "{excluded}");
+}
+
+#[test]
+fn v6_statistics_explanation_consumes_exact_values_and_preserves_visibility() {
+    let scratch = Scratch::new();
+    let described = math_chat(
+        &scratch.0,
+        "[2,6,10]の平均と分散を求めて、小学生向けに説明して\n/exit\n",
+    );
+    assert!(described.contains("平均は 6"), "{described}");
+    assert!(described.contains("母分散は 32/3"), "{described}");
+    assert!(described.contains("ときに 6 ずつ"), "{described}");
+    let described = inspect_normal_case(&scratch.0, "owner");
+    let result = &described["result"];
+    assert_eq!(result["lifecycle"], "COMMIT");
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let graph_bytes = store
+        .get_bytes(
+            "owner",
+            "normal-route",
+            result["execution_graph_ref"].as_str().unwrap(),
+        )
+        .unwrap();
+    let graph: Value = serde_json::from_slice(&graph_bytes).unwrap();
+    assert_eq!(graph[1]["statistics-values"], result["dependencies"][0]);
+    let values_ref = result["dependencies"][0].as_str().unwrap();
+    let explanation_ref = graph[1]["statistics-explanation"].as_str().unwrap();
+    let explanation = store
+        .get_bytes("owner", "normal-route", explanation_ref)
+        .unwrap();
+    assert!(
+        String::from_utf8(explanation)
+            .unwrap()
+            .contains("ときに 6 ずつ")
+    );
+    assert!(graph[5]["statistics-explanation"]["statistics-values"] == values_ref);
+    drop(store);
+
+    for request in [
+        "13、17、21の平均と分散を求めて、小学生向けに説明だけ",
+        "13、17、21の平均と分散を求めて、数値なしで小学生向けに説明して",
+        "13、17、21の平均と分散を求めて、数値は出さず説明だけ",
+    ] {
+        math_chat(&scratch.0, &format!("{request}\n/exit\n"));
+        let state = inspect_normal_case(&scratch.0, "owner");
+        let hidden = &state["result"];
+        assert_eq!(hidden["lifecycle"], "COMMIT", "{request}: {hidden}");
+        let text = hidden["text"].as_str().unwrap();
+        assert!(
+            !text.chars().any(|character| character.is_ascii_digit()),
+            "{text}"
+        );
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        let reference = hidden["dependencies"][0].as_str().unwrap();
+        let computed = store.get_bytes("owner", "normal-route", reference).unwrap();
+        let computed: minidora_engine::math::Statistics =
+            serde_json::from_slice(&computed).unwrap();
+        assert_eq!(computed.mean, "17");
+        assert_eq!(computed.population_variance, "32/3");
+    }
+}
+
+#[test]
+fn v6_statistics_blocked_explanation_preserves_permitted_result_and_skips_file() {
+    use minidora_domain::{Guarantee, Lifecycle, RequestEnvelope};
+    use minidora_engine::Engine;
+
+    let scratch = Scratch::new();
+    let output = scratch.0.join("requested-output.txt");
+    let mut engine = Engine::open(&scratch.0).unwrap();
+    let mut request = RequestEnvelope::new(
+        "normal-route",
+        "stats-partial",
+        "owner",
+        "4、7、10の平均と分散を求めて、新人司書向けに説明して",
+    );
+    request.permissions.write_paths.insert(output.clone());
+    request.output_path = Some(output.clone());
+    let result = engine.execute("owner", request).unwrap();
+    assert_eq!(result.lifecycle, Lifecycle::Suspend);
+    assert_eq!(result.guarantee, Guarantee::Computed);
+    assert!(
+        result
+            .reason
+            .unwrap()
+            .starts_with("STATISTICS_EXPLANATION_UNAVAILABLE:")
+    );
+    assert!(result.text.contains("平均は 7"));
+    assert!(result.text.contains("母分散は 6"));
+    assert!(result.execution_graph_ref.is_some());
+    assert!(result.receipts.is_empty());
+    assert!(!output.exists());
+}
+
+#[test]
+fn v6_statistics_action_budget_stops_explanation_before_hiding_or_saving_values() {
+    use minidora_domain::{Lifecycle, RequestEnvelope};
+    use minidora_engine::Engine;
+
+    let scratch = Scratch::new();
+    let output = scratch.0.join("budget-output.txt");
+    let mut engine = Engine::open(&scratch.0).unwrap();
+    for (id, input, numbers_visible) in [
+        (
+            "visible",
+            "4、7、10の平均値と分散を求めて、初心者に分かるように説明して",
+            true,
+        ),
+        (
+            "hidden",
+            "4、7、10の平均と分散を求めて、数値なしで小学生向けに説明して",
+            false,
+        ),
+    ] {
+        let mut request = RequestEnvelope::new("normal-route", id, "owner", input);
+        request.budget.max_actions = 4;
+        request.permissions.write_paths.insert(output.clone());
+        request.output_path = Some(output.clone());
+        let result = engine.execute("owner", request).unwrap();
+        assert_eq!(result.lifecycle, Lifecycle::Suspend);
+        assert!(
+            result
+                .reason
+                .unwrap()
+                .starts_with("ACTION_BUDGET_EXHAUSTED:")
+        );
+        assert_eq!(result.text.contains("平均は 7"), numbers_visible);
+        assert_eq!(result.text.contains("母分散は 6"), numbers_visible);
+        assert!(result.execution_graph_ref.is_some());
+        assert_eq!(result.dependencies.len(), 1);
+        assert!(result.receipts.is_empty());
+        assert!(!output.exists());
+    }
 }
 
 #[test]
@@ -23045,6 +24877,1418 @@ fn generated_code_is_consumed_by_finite_native_verification_and_keeps_lineage() 
     );
 }
 
+fn assert_v6_functional_spec_generation(
+    store: &minidora_engine::store::Store,
+    state: &Value,
+    prompt: &str,
+    name: &str,
+    parameters: &[&str],
+) {
+    let bundle = &state["bundle"];
+    assert_eq!(bundle["request"]["text"], prompt);
+    let meaning = &bundle["meaning"];
+    assert_eq!(
+        meaning["parser_version"], "declarative-ja-v225-python-functional-spec",
+        "{meaning}"
+    );
+    assert_eq!(
+        meaning["intent"]["kind"], "GENERATE_FUNCTION_FROM_SPEC",
+        "{meaning}"
+    );
+    let roles = meaning["source_roles"].as_object().unwrap();
+    assert!(!roles.is_empty(), "{meaning}");
+    for spans in roles.values() {
+        for span in spans.as_array().unwrap() {
+            let start = span["start"].as_u64().unwrap() as usize;
+            let end = span["end"].as_u64().unwrap() as usize;
+            assert!(start < end, "{span}");
+            assert_eq!(prompt.get(start..end), span["text"].as_str(), "{span}");
+        }
+    }
+
+    let result = &state["result"];
+    assert_eq!(result["lifecycle"], "COMMIT", "{result}");
+    assert_eq!(result["guarantee"], "COMPUTED", "{result}");
+    let reference = result["dependencies"][0].as_str().unwrap();
+    let report_bytes = store.get_bytes("owner", "normal-route", reference).unwrap();
+    assert_eq!(minidora_domain::digest(&report_bytes), reference);
+    let report: Value = serde_json::from_slice(&report_bytes).unwrap();
+    assert_eq!(
+        report["version"], "structured-python-functional-spec-v1-ucd15",
+        "{report}"
+    );
+    assert_eq!(
+        report["validation"],
+        "TYPED_SPECIFICATION_LOWERING_AND_CONSTRUCTED_AST_BOUNDS"
+    );
+    assert_eq!(report["source"], result["text"]);
+    assert_eq!(report["source_sha256"], result["render"]["actual_sha256"]);
+    for claim in ["python_parse", "execution", "input_output_tests"] {
+        assert_eq!(report[claim], "NOT_RUN", "{report}");
+    }
+    let source = report["source"].as_str().unwrap();
+    assert!(
+        source.starts_with("# Python 3.12; execution and input/output tests: NOT_RUN.\n"),
+        "{source}"
+    );
+    let document = report["source_document"].as_str().unwrap();
+    assert_eq!(
+        report["source_document_sha256"],
+        minidora_domain::digest(document.as_bytes())
+    );
+    let ir: Value = serde_json::from_str(document).unwrap();
+    assert_eq!(ir["仕様"]["名前"], name);
+    assert_eq!(ir["仕様"]["引数"], serde_json::json!(parameters));
+    assert!(!ir["仕様"]["手順"].as_array().unwrap().is_empty());
+    assert_eq!(ir["定数"], serde_json::json!({}));
+}
+
+fn assert_v6_functional_spec_verification(
+    directory: &Path,
+    store: &minidora_engine::store::Store,
+    generated: &Value,
+    cases: &Value,
+    actual: &[Value],
+) {
+    let request = format!(
+        "生成コードを検証して: {}",
+        serde_json::json!({"試験": cases})
+    );
+    let generated_id = generated["id"].as_str().unwrap();
+    let verified = record(&execute(
+        directory,
+        "owner",
+        &["--context", generated_id, &request],
+    ));
+    assert_eq!(verified["lifecycle"], "COMMIT", "{verified}");
+    assert_eq!(verified["receipts"], serde_json::json!([]));
+    let dependencies = verified["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies[0], generated["id"]);
+    assert_eq!(dependencies[1], generated["dependencies"][0]);
+    let reference = dependencies.last().unwrap().as_str().unwrap();
+    let report_bytes = store.get_bytes("owner", "normal-route", reference).unwrap();
+    assert_eq!(minidora_domain::digest(&report_bytes), reference);
+    let report: Value = serde_json::from_slice(&report_bytes).unwrap();
+    assert_eq!(report["operation"], "VERIFY");
+    assert_eq!(report["source"], generated["text"]);
+    assert_eq!(
+        report["source_sha256"],
+        generated["render"]["actual_sha256"]
+    );
+    let requested_cases = cases.as_array().unwrap();
+    let observations = report["verification"]["cases"].as_array().unwrap();
+    assert_eq!(report["verification"]["case_count"], actual.len());
+    assert_eq!(observations.len(), actual.len());
+    assert_eq!(requested_cases.len(), actual.len());
+    let mut all_matched = true;
+    for ((observation, requested), actual) in observations.iter().zip(requested_cases).zip(actual) {
+        let expected = &requested["期待値"];
+        let matched = expected == actual;
+        all_matched &= matched;
+        assert_eq!(
+            observation["evaluation_status"], "COMPUTED",
+            "{observation}"
+        );
+        assert_eq!(
+            observation["actual_json"],
+            actual.to_string(),
+            "{observation}"
+        );
+        assert_eq!(
+            observation["expected_json"],
+            expected.to_string(),
+            "{observation}"
+        );
+        assert_eq!(observation["matched"], matched, "{observation}");
+    }
+    assert_eq!(report["verification"]["all_matched"], all_matched);
+    assert!(
+        report["assurance"]
+            .as_str()
+            .unwrap()
+            .contains("ホストPython")
+    );
+    let saved = inspect_normal_case(directory, "owner");
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "VERIFY_PREVIOUS_CODE"
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["context_result_ref"],
+        generated_id
+    );
+    assert_eq!(saved["prior_results"][generated_id], *generated);
+}
+
+#[test]
+fn v6_functional_spec_saves_and_rechecks_exact_numeric_source() {
+    let scratch = Scratch::new();
+    let target = scratch.0.join("nonnegative.py");
+    let path = target.to_str().unwrap();
+    let prompt = "Pythonで、xが0未満なら0、それ以外なら元の数を返す関数 nonnegative(x) を作って。";
+    let generated = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--allow-write", path, "--output", path, prompt],
+    ));
+    let state = inspect_normal_case(&scratch.0, "owner");
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_v6_functional_spec_generation(&store, &state, prompt, "nonnegative", &["x"]);
+    let original = std::fs::read(&target).unwrap();
+    assert_eq!(original, generated["text"].as_str().unwrap().as_bytes());
+    let file_sha = minidora_domain::digest(&original);
+    assert_eq!(generated["render"]["actual_sha256"], file_sha);
+    assert_eq!(generated["receipts"][0]["phase"], "CONFIRMED");
+    assert_eq!(generated["receipts"][0]["content_sha256"], file_sha);
+    let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
+    let actions = store.actions("owner", "normal-route").unwrap();
+    assert_eq!(actions.len(), 1);
+
+    assert_v6_functional_spec_verification(
+        &scratch.0,
+        &store,
+        &generated,
+        &serde_json::json!([
+            {"引数":{"x":-3},"期待値":0},
+            {"引数":{"x":0},"期待値":0},
+            {"引数":{"x":5},"期待値":5}
+        ]),
+        &[
+            serde_json::json!(0),
+            serde_json::json!(0),
+            serde_json::json!(5),
+        ],
+    );
+    assert_v6_functional_spec_verification(
+        &scratch.0,
+        &store,
+        &generated,
+        &serde_json::json!([{"引数":{"x":-9},"期待値":-9}]),
+        &[serde_json::json!(0)],
+    );
+
+    assert_eq!(std::fs::read(&target).unwrap(), original);
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().modified().unwrap(),
+        modified
+    );
+    assert_eq!(store.actions("owner", "normal-route").unwrap(), actions);
+}
+
+#[test]
+fn v6_functional_spec_checks_priority_bounds_and_unicode_palindromes() {
+    for (prompt, name, parameters, cases) in [
+        (
+            "Pythonで、scoreが80以上なら値の2倍、scoreが50以上ならscoreに5を足した数、それ以外は0を返す関数 grade(score) を作って。",
+            "grade",
+            &["score"][..],
+            serde_json::json!([
+                {"引数":{"score":90},"期待値":180},
+                {"引数":{"score":80},"期待値":160},
+                {"引数":{"score":79},"期待値":84},
+                {"引数":{"score":50},"期待値":55},
+                {"引数":{"score":49},"期待値":0}
+            ]),
+        ),
+        (
+            "下限より小さければ下限、上限を超えれば上限、そのほかは元の数を返すPython関数を作って。関数名はclamp、引数はvalue, low, high。",
+            "clamp",
+            &["value", "low", "high"][..],
+            serde_json::json!([
+                {"引数":{"value":-3,"low":0,"high":10},"期待値":0},
+                {"引数":{"value":8,"low":0,"high":10},"期待値":8},
+                {"引数":{"value":15,"low":0,"high":10},"期待値":10}
+            ]),
+        ),
+        (
+            "Pythonで、metersの100倍を返す関数 centimeters(meters) を作って。",
+            "centimeters",
+            &["meters"][..],
+            serde_json::json!([
+                {"引数":{"meters":0},"期待値":0},
+                {"引数":{"meters":23},"期待値":2300}
+            ]),
+        ),
+        (
+            "Pythonで、文字列が回文かどうかを判定する関数 is_palindrome(text) を作って。",
+            "is_palindrome",
+            &["text"][..],
+            serde_json::json!([
+                {"引数":{"text":"たけやぶやけた"},"期待値":true},
+                {"引数":{"text":"たけやぶ"},"期待値":false},
+                {"引数":{"text":""},"期待値":true}
+            ]),
+        ),
+        (
+            "Pythonで、文字列が前から読んでも後ろから読んでも同じかどうかを判定する関数を作ってください。",
+            "is_palindrome",
+            &["text"][..],
+            serde_json::json!([
+                {"引数":{"text":"abcba"},"期待値":true},
+                {"引数":{"text":"あAあ"},"期待値":true},
+                {"引数":{"text":"Aa"},"期待値":false},
+                {"引数":{"text":"aあ!"},"期待値":false}
+            ]),
+        ),
+    ] {
+        let scratch = Scratch::new();
+        let output = math_chat(&scratch.0, &format!("{prompt}\n/exit\n"));
+        let state = inspect_normal_case(&scratch.0, "owner");
+        let generated = &state["result"];
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        assert_v6_functional_spec_generation(&store, &state, prompt, name, parameters);
+        assert!(output.contains(&format!("def {name}(")), "{output}");
+        assert_eq!(generated["receipts"], serde_json::json!([]));
+        let expected: Vec<_> = cases
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|case| case["期待値"].clone())
+            .collect();
+        assert_v6_functional_spec_verification(&scratch.0, &store, generated, &cases, &expected);
+        assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+    }
+}
+
+#[test]
+fn v6_functional_spec_refuses_undeclared_inputs_and_additional_effects() {
+    let scratch = Scratch::new();
+    let target = scratch.0.join("unexpected.py");
+    let path = target.to_str().unwrap();
+    for prompt in [
+        "Pythonで、yが0未満なら0、それ以外なら元の数を返す関数 nonnegative(x) を作って。",
+        "Pythonで、xが0未満なら0、それ以外なら元の数を返す関数 nonnegative(x) を作って。そのまま送信して。",
+        "Pythonで、入力の大小や空白を無視して、文字列が回文かどうかを判定する関数を作って。",
+    ] {
+        let rejected = stopped(
+            &execute(
+                &scratch.0,
+                "owner",
+                &["--allow-write", path, "--output", path, prompt],
+            ),
+            2,
+            "SUSPEND",
+        );
+        assert_eq!(rejected["receipts"], serde_json::json!([]));
+        assert!(rejected["render"].is_null(), "{rejected}");
+        assert!(!target.exists());
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+fn code_repair_cases(source: &str, parameter: &str, cases: &[(i64, i64)]) -> Value {
+    let cases: Vec<_> = cases
+        .iter()
+        .map(|(input, expected)| {
+            serde_json::json!({"引数": {(parameter): input}, "期待値": expected})
+        })
+        .collect();
+    serde_json::json!({"情報源": source, "試験": cases})
+}
+
+struct CodeRepairExpectation<'a> {
+    source: &'a str,
+    parameter: &'a str,
+    before: &'a str,
+    after: &'a str,
+    baseline: [i64; 3],
+    expected: [i64; 3],
+}
+
+fn assert_code_repair(
+    directory: &Path,
+    saved: &Value,
+    prompt: &str,
+    expectation: &CodeRepairExpectation<'_>,
+) {
+    let CodeRepairExpectation {
+        source,
+        parameter,
+        before,
+        after,
+        baseline,
+        expected,
+    } = *expectation;
+    assert_eq!(saved["bundle"]["request"]["text"], prompt);
+    let result = &saved["result"];
+    assert_eq!(result["lifecycle"], "COMMIT", "{result}");
+    assert_eq!(result["guarantee"], "COMPUTED");
+    let meaning = &saved["bundle"]["meaning"];
+    assert_eq!(meaning["intent"]["kind"], "REPAIR_CODE");
+    assert_eq!(meaning["parser_version"], "declarative-ja-v226-code-repair");
+
+    let reference = result["dependencies"][0].as_str().unwrap();
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let artifact = store.get_bytes("owner", "normal-route", reference).unwrap();
+    assert_eq!(minidora_domain::digest(&artifact), reference);
+    let repair: Value = serde_json::from_slice(&artifact).unwrap();
+    let start = source.find(before).unwrap();
+    let end = start + before.len();
+    let corrected = format!("{}{after}{}", &source[..start], &source[end..]);
+    assert_eq!(repair["status"], "REVERIFIED");
+    assert_eq!(repair["original_source"], source);
+    assert_eq!(repair["corrected_source"], corrected);
+    assert_eq!(
+        repair["original_source_sha256"],
+        minidora_domain::digest(source.as_bytes())
+    );
+    assert_eq!(
+        repair["corrected_source_sha256"],
+        minidora_domain::digest(corrected.as_bytes())
+    );
+    let edit = &repair["edit"];
+    assert_eq!(edit["start"], start);
+    assert_eq!(edit["end"], end);
+    assert_eq!(edit["line"], 2);
+    assert_eq!(
+        edit["utf8_column"],
+        start - (source.find('\n').unwrap() + 1)
+    );
+    assert_eq!(edit["parameter"], parameter);
+    assert_eq!(edit["before"], before);
+    assert_eq!(edit["after"], after);
+    assert_eq!(repair["before"]["all_matched"], false);
+    assert_eq!(repair["after"]["all_matched"], true);
+    assert_eq!(
+        repair["before"]["cases_sha256"],
+        repair["after"]["cases_sha256"]
+    );
+    assert_eq!(repair["before"]["case_count"], expected.len());
+    assert_eq!(repair["after"]["case_count"], expected.len());
+
+    for (index, (&old_value, &expected_value)) in baseline.iter().zip(&expected).enumerate() {
+        let baseline_case = &repair["before"]["cases"][index];
+        let corrected_case = &repair["after"]["cases"][index];
+        assert_eq!(baseline_case["actual_json"], old_value.to_string());
+        assert_eq!(baseline_case["expected_json"], expected_value.to_string());
+        assert_eq!(baseline_case["matched"], old_value == expected_value);
+        assert_eq!(baseline_case["evaluation_status"], "COMPUTED");
+        assert_eq!(corrected_case["actual_json"], expected_value.to_string());
+        assert_eq!(corrected_case["expected_json"], expected_value.to_string());
+        assert_eq!(corrected_case["matched"], true);
+        assert_eq!(corrected_case["evaluation_status"], "COMPUTED");
+    }
+
+    let text = result["text"].as_str().unwrap();
+    assert!(text.contains("境界"), "{text}");
+    assert!(text.contains("再検証"), "{text}");
+    assert!(text.contains(corrected.lines().next().unwrap()), "{text}");
+    assert!(text.contains(corrected.lines().nth(1).unwrap()), "{text}");
+    assert_eq!(
+        result["render"]["actual_sha256"],
+        minidora_domain::digest(text.as_bytes())
+    );
+}
+
+#[test]
+fn v6_code_repair_rechecks_japanese_source_in_normal_chat() {
+    let scratch = Scratch::new();
+    let source =
+        "def 小口料金(数量):\r\n    if 数量 > 10:\r\n        return 20\r\n    return 4\r\n";
+    let document = code_repair_cases(source, "数量", &[(9, 4), (10, 20), (11, 20)]);
+    let prompt = format!("コードを修正して: {document}");
+    let stdout = math_chat(&scratch.0, &format!("{prompt}\n/exit\n"));
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    let result = &saved["result"];
+    assert_eq!(stdout, format!("{}\n", result["text"].as_str().unwrap()));
+    assert_code_repair(
+        &scratch.0,
+        &saved,
+        &prompt,
+        &CodeRepairExpectation {
+            source,
+            parameter: "数量",
+            before: ">",
+            after: ">=",
+            baseline: [4, 4, 20],
+            expected: [4, 20, 20],
+        },
+    );
+    assert_eq!(result["receipts"], serde_json::json!([]));
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[test]
+fn v6_code_repair_saves_report_once_and_keeps_original_file_bytes() {
+    let scratch = Scratch::new();
+    let source = "def bonus(score):\n    if score <= 60:\n        return 8\n    return 18\n";
+    let document = code_repair_cases(source, "score", &[(59, 8), (60, 18), (61, 18)]);
+    let prompt = format!(
+        "コードを修正して:\n{}",
+        serde_json::to_string_pretty(&document).unwrap()
+    );
+    let original = scratch.0.join("bonus.py");
+    std::fs::write(&original, source).unwrap();
+    let target = scratch.0.join("repair.txt");
+    let path = target.to_str().unwrap();
+    let mut process = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["chat", "--db"])
+        .arg(&scratch.0)
+        .args([
+            "--case",
+            "normal-route",
+            "--actor",
+            "owner",
+            "--allow-write",
+            path,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    process
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("/output {path}\n/paste\n{prompt}\n/end\n/exit\n").as_bytes())
+        .unwrap();
+    let output = process.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    let result = &saved["result"];
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap(),
+        format!("{}\n", result["text"].as_str().unwrap())
+    );
+    assert_code_repair(
+        &scratch.0,
+        &saved,
+        &prompt,
+        &CodeRepairExpectation {
+            source,
+            parameter: "score",
+            before: "<=",
+            after: "<",
+            baseline: [8, 8, 18],
+            expected: [8, 18, 18],
+        },
+    );
+    assert_eq!(std::fs::read(&original).unwrap(), source.as_bytes());
+    let bytes = std::fs::read(&target).unwrap();
+    assert_eq!(bytes, result["text"].as_str().unwrap().as_bytes());
+    let receipt = &result["receipts"][0];
+    assert_eq!(receipt["phase"], "CONFIRMED");
+    assert_eq!(receipt["target"], path);
+    assert_eq!(receipt["content_sha256"], minidora_domain::digest(&bytes));
+    assert_eq!(receipt["observed_bytes"], bytes.len());
+
+    let modified = std::fs::metadata(&target).unwrap().modified().unwrap();
+    let replay = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["reconcile", "--db"])
+        .arg(&scratch.0)
+        .args(["--case", "normal-route", "--actor", "owner", "--json"])
+        .output()
+        .unwrap();
+    assert_eq!(record(&replay), *result);
+    assert_eq!(std::fs::read(&target).unwrap(), bytes);
+    assert_eq!(
+        std::fs::metadata(&target).unwrap().modified().unwrap(),
+        modified
+    );
+}
+
+#[test]
+fn v6_code_repair_declines_unjustified_changes_and_compound_requests() {
+    let scratch = Scratch::new();
+    let target = scratch.0.join("unexpected.txt");
+    let path = target.to_str().unwrap();
+    let simple = "def fee(x):\n    if x > 3:\n        return 8\n    return 0\n";
+    let ambiguous = concat!(
+        "def fee(x):\n",
+        "    fee = 0\n",
+        "    if x > 3:\n",
+        "        fee = 8\n",
+        "    if x > 3:\n",
+        "        fee = 8\n",
+        "    return fee\n"
+    );
+    let unchanged = code_repair_cases(simple, "x", &[(2, 0), (3, 0), (4, 8)]);
+    let ambiguous = code_repair_cases(ambiguous, "x", &[(2, 0), (3, 8), (4, 8)]);
+    let missing_neighbor = code_repair_cases(simple, "x", &[(2, 0), (3, 8)]);
+    let actionable = code_repair_cases(simple, "x", &[(2, 0), (3, 8), (4, 8)]);
+    for (prompt, expected_reason) in [
+        (
+            format!("コードを修正して: {unchanged}"),
+            Some("CODE_REPAIR_NO_MISMATCH"),
+        ),
+        (
+            format!("コードを修正して: {ambiguous}"),
+            Some("CODE_REPAIR_AMBIGUOUS"),
+        ),
+        (
+            format!("コードを修正して: {missing_neighbor}"),
+            Some("CODE_REPAIR_NO_JUSTIFIED_EDIT"),
+        ),
+        (
+            format!("コードを修正して: {actionable}。そのあと送信して。"),
+            None,
+        ),
+    ] {
+        let result = stopped(
+            &execute(
+                &scratch.0,
+                "owner",
+                &["--allow-write", path, "--output", path, &prompt],
+            ),
+            2,
+            "SUSPEND",
+        );
+        if let Some(code) = expected_reason {
+            let reason = result["reason"].as_str().unwrap();
+            assert!(reason.starts_with(&format!("{code}:")), "{reason}");
+        }
+        assert!(result["render"].is_null(), "{result}");
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert!(!target.exists());
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+const V6_CHART_REQUEST: &str = "CSVの「拠点」ごとの「費用」の平均をグラフにして:";
+const V6_CHART_FILTER: &str = "「期間」が「後半」の行に絞ってグラフを更新して";
+const V6_CHART_DOCUMENT: &str = concat!(
+    "拠点,期間,費用\n",
+    "北,前半,10 JPY\n",
+    "北,後半,30 JPY\n",
+    "北,後半,\n",
+    "南,前半,-10 JPY\n",
+    "南,後半,-30 JPY\n",
+    "<script>&,後半,0 JPY"
+);
+
+fn csv_chart_report(directory: &Path, result: &Value, document: &str) -> Value {
+    assert_eq!(result["lifecycle"], "COMMIT", "{result}");
+    assert_eq!(result["guarantee"], "COMPUTED");
+    let reference = result["dependencies"].as_array().unwrap().last().unwrap();
+    let reference = reference.as_str().unwrap();
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let artifact = store.get_bytes("owner", "normal-route", reference).unwrap();
+    assert_eq!(minidora_domain::digest(&artifact), reference);
+    let report: Value = serde_json::from_slice(&artifact).unwrap();
+    assert_eq!(report["version"], "csv-grouped-mean-chart-v1");
+    assert_eq!(
+        report["data"]["source_sha256"],
+        minidora_domain::digest(document.as_bytes())
+    );
+    let svg = report["svg"].as_str().unwrap();
+    assert!(svg.starts_with("<svg xmlns=\"http://www.w3.org/2000/svg\""));
+    assert!(svg.trim_end().ends_with("</svg>"));
+    assert!(svg.contains("<desc id=\"chart-desc\">"));
+    assert_eq!(
+        report["svg_sha256"],
+        minidora_domain::digest(svg.as_bytes())
+    );
+    assert!(report["summary"].as_str().unwrap().contains("平均"));
+
+    let spans = report["data"]["source_spans"].as_array().unwrap();
+    assert!(!spans.is_empty());
+    for span in spans {
+        let start = span["source_start"].as_u64().unwrap() as usize;
+        let end = span["source_end"].as_u64().unwrap() as usize;
+        assert_eq!(document.get(start..end), span["source_text"].as_str());
+    }
+    report
+}
+
+fn assert_csv_chart_groups(report: &Value, expected: &[(&str, &str, &[usize])]) {
+    let groups = report["data"]["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), expected.len());
+    for (group, (label, mean, row_numbers)) in groups.iter().zip(expected) {
+        assert_eq!(group["label"], *label);
+        assert_eq!(group["statistics"]["mean"], *mean);
+        assert_eq!(group["statistics"]["count"], row_numbers.len());
+        assert_eq!(
+            group["source_record_numbers"],
+            serde_json::json!(row_numbers)
+        );
+    }
+}
+
+fn assert_csv_chart_file(target: &Path, result: &Value, report: &Value) {
+    let svg = report["svg"].as_str().unwrap();
+    let bytes = std::fs::read(target).unwrap();
+    assert_eq!(bytes, svg.as_bytes());
+    assert_eq!(result["text"], svg);
+    assert_eq!(result["render"]["actual_sha256"], report["svg_sha256"]);
+    let receipts = result["receipts"].as_array().unwrap();
+    assert_eq!(receipts.len(), 1);
+    let receipt = &receipts[0];
+    assert_eq!(receipt["target"], target.to_str().unwrap());
+    assert_eq!(receipt["phase"], "CONFIRMED");
+    assert_eq!(receipt["content_sha256"], report["svg_sha256"]);
+    assert_eq!(receipt["observed_bytes"], bytes.len());
+}
+
+#[test]
+fn v6_csv_chart_saves_and_updates_graph_and_summary_in_normal_chat() {
+    let scratch = Scratch::new();
+    let original_path = scratch.0.join("all.svg");
+    let filtered_path = scratch.0.join("late.svg");
+    let original = original_path.to_str().unwrap();
+    let filtered = filtered_path.to_str().unwrap();
+    let mut process = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["chat", "--db"])
+        .arg(&scratch.0)
+        .args([
+            "--case",
+            "normal-route",
+            "--actor",
+            "owner",
+            "--allow-write",
+            original,
+            "--allow-write",
+            filtered,
+        ])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let prompt = format!("{V6_CHART_REQUEST}\n{V6_CHART_DOCUMENT}");
+    process
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(
+            format!(
+                "/output {original}\n/paste\n{prompt}\n/end\n/output {filtered}\n{V6_CHART_FILTER}\n/exit\n"
+            )
+            .as_bytes(),
+        )
+        .unwrap();
+    let output = process.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    let result = &saved["result"];
+    assert_eq!(saved["bundle"]["request"]["text"], V6_CHART_FILTER);
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "FILTER_PREVIOUS_CSV_CHART"
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-v228-previous-csv-chart-filter"
+    );
+    let dependencies = result["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 2);
+    let original_id = dependencies[0].as_str().unwrap();
+    let first = &saved["prior_results"][original_id];
+    let before = csv_chart_report(&scratch.0, first, V6_CHART_DOCUMENT);
+    let after = csv_chart_report(&scratch.0, result, V6_CHART_DOCUMENT);
+    assert_eq!(before["data"]["total_rows"], 6);
+    assert_eq!(before["data"]["selected_rows"], 6);
+    assert_eq!(before["data"]["missing_rows"], 1);
+    assert!(before["data"]["filter"].is_null());
+    assert_eq!(before["data"]["unit"], "JPY");
+    assert_eq!(after["data"]["total_rows"], 6);
+    assert_eq!(after["data"]["selected_rows"], 4);
+    assert_eq!(after["data"]["missing_rows"], 1);
+    assert_eq!(after["data"]["unit"], "JPY");
+    assert_eq!(
+        after["data"]["filter"],
+        serde_json::json!({"column": "期間", "equals": "後半"})
+    );
+    assert_csv_chart_groups(
+        &before,
+        &[
+            ("北", "20", &[1, 2]),
+            ("南", "-20", &[4, 5]),
+            ("<script>&", "0", &[6]),
+        ],
+    );
+    assert_csv_chart_groups(
+        &after,
+        &[
+            ("北", "30", &[2]),
+            ("南", "-30", &[5]),
+            ("<script>&", "0", &[6]),
+        ],
+    );
+    assert_csv_chart_file(&original_path, first, &before);
+    assert_csv_chart_file(&filtered_path, result, &after);
+    assert_ne!(before["svg_sha256"], after["svg_sha256"]);
+    for report in [&before, &after] {
+        let svg = report["svg"].as_str().unwrap();
+        assert!(svg.contains("&lt;script&gt;&amp;"));
+        assert!(!svg.contains("<script"));
+        assert!(stdout.contains(report["summary"].as_str().unwrap()));
+    }
+    assert!(!stdout.contains("<svg xmlns"), "{stdout}");
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_eq!(store.actions("owner", "normal-route").unwrap().len(), 2);
+}
+
+#[cfg(windows)]
+#[test]
+fn v6_attached_chart_uses_two_files_and_retains_originals_after_restart() {
+    let scratch = Scratch::new();
+    let april = scratch.0.join("4月 売上.csv");
+    let may = scratch.0.join("5月 売上.csv");
+    let entire = scratch.0.join("all.svg");
+    let late = scratch.0.join("late.svg");
+    let april_csv = "\u{feff}店,期,売上\r\n北,前半,5 円\r\n南,前半,25 JPY\r\n";
+    let may_csv = "売上,店,期\n13 JPY,北,後半\n5 JPY,南,後半\n,南,後半\n";
+    std::fs::write(&april, april_csv).unwrap();
+    std::fs::write(&may, may_csv).unwrap();
+    let prompt = "添付したCSVをまとめて「店」ごとに「売上」の平均をグラフにして";
+    let exe = env!("CARGO_BIN_EXE_minidora-rust");
+    let case = [
+        "--db",
+        scratch.0.to_str().unwrap(),
+        "--case",
+        "normal-route",
+        "--actor",
+        "owner",
+    ];
+    let mut chat = Command::new(exe)
+        .arg("chat")
+        .args(case)
+        .args(["--allow-write", entire.to_str().unwrap()])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut notices = BufReader::new(chat.stderr.take().unwrap());
+    let mut input = chat.stdin.take().unwrap();
+    for path in [&april, &may] {
+        writeln!(input, "/attach \"{}\"", path.display()).unwrap();
+        let mut line = String::new();
+        notices.read_line(&mut line).unwrap();
+        assert!(line.contains("次の発話の添付"), "{line}");
+    }
+    let updated = "店,期,売上\r\n北,後半,1000 円\r\n";
+    std::fs::write(&april, updated).unwrap();
+    writeln!(input, "/output {}\n{prompt}\n/exit", entire.display()).unwrap();
+    drop(input);
+    let completed = chat.wait_with_output().unwrap();
+    assert!(completed.status.success(), "{completed:?}");
+    let first = inspect_normal_case(&scratch.0, "owner");
+    let original = &first["result"];
+    assert_eq!(original["lifecycle"], "COMMIT", "{first}");
+    assert_eq!(
+        first["bundle"]["request"]["attachments"][0]["text"],
+        april_csv
+    );
+    assert_eq!(
+        first["bundle"]["request"]["attachments"][1]["text"],
+        may_csv
+    );
+    assert_eq!(
+        first["bundle"]["request"]["attachments"][0],
+        serde_json::json!({"name": "4月 売上.csv", "text": april_csv})
+    );
+
+    let load = |result: &Value| {
+        let digest = result["dependencies"]
+            .as_array()
+            .unwrap()
+            .last()
+            .unwrap()
+            .as_str()
+            .unwrap();
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        let bytes = store.get_bytes("owner", "normal-route", digest).unwrap();
+        assert_eq!(minidora_domain::digest(&bytes), digest);
+        serde_json::from_slice::<Value>(&bytes).unwrap()
+    };
+    let report = load(original);
+    assert_csv_chart_groups(&report, &[("北", "9", &[1, 3]), ("南", "15", &[2, 4])]);
+    assert_csv_chart_file(&entire, original, &report);
+    for (file, text) in report["data"]["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .zip([april_csv, may_csv])
+    {
+        assert_eq!(file["sha256"], minidora_domain::digest(text.as_bytes()));
+        for span in file["source_spans"].as_array().unwrap() {
+            let start = span["source_start"].as_u64().unwrap() as usize;
+            let end = span["source_end"].as_u64().unwrap() as usize;
+            assert_eq!(text.get(start..end), span["source_text"].as_str());
+        }
+    }
+    let followup = Command::new(exe)
+        .arg("run")
+        .args(case)
+        .args([
+            "--allow-write",
+            late.to_str().unwrap(),
+            "--output",
+            late.to_str().unwrap(),
+            "--json",
+            "「期」が「後半」の行に絞ってグラフを更新して",
+        ])
+        .output()
+        .unwrap();
+    assert!(followup.status.success(), "{followup:?}");
+    let result: Value = serde_json::from_slice(&followup.stdout).unwrap();
+    assert_eq!(result["dependencies"][0], original["id"]);
+    let report = load(&result);
+    assert_csv_chart_groups(&report, &[("北", "13", &[3]), ("南", "5", &[4])]);
+    assert_eq!(report["data"]["missing_rows"], 1);
+    assert_csv_chart_file(&late, &result, &report);
+    assert_eq!(std::fs::read_to_string(&april).unwrap(), updated);
+    assert_eq!(std::fs::read_to_string(&may).unwrap(), may_csv);
+}
+
+#[cfg(windows)]
+#[test]
+fn v6_attached_chart_does_not_keep_files_across_turns_or_attachment_failure() {
+    let scratch = Scratch::new();
+    let source = scratch.0.join("input.csv");
+    let bad = scratch.0.join("bad.csv");
+    std::fs::write(&source, "店,売上\n北,8\n").unwrap();
+    std::fs::write(&bad, [0xff, 0xff]).unwrap();
+    let prompt = "添付のCSVの「店」ごとの「売上」の平均を可視化して";
+    let mut chat = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .arg("chat")
+        .arg("--db")
+        .arg(&scratch.0)
+        .args(["--case", "normal-route", "--actor", "owner"])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    write!(
+        chat.stdin.take().unwrap(),
+        "/attach {}\n{prompt}\n{prompt}\n/attach {}\n/attach {}\n{prompt}\n/exit\n",
+        source.display(),
+        source.display(),
+        bad.display(),
+    )
+    .unwrap();
+    let result = chat.wait_with_output().unwrap();
+    assert!(result.status.success(), "{result:?}");
+    let out = String::from_utf8(result.stdout).unwrap();
+    let err = String::from_utf8(result.stderr).unwrap();
+    assert_eq!(out.matches("平均 8").count(), 1, "{out}");
+    assert_eq!(err.matches("INVALID_ATTACHMENT_UTF8").count(), 1, "{err}");
+    assert_eq!(out.matches("集計するCSVを先に").count(), 2, "{out}");
+    let result = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(result["result"]["lifecycle"], "SUSPEND");
+    assert!(result["bundle"]["request"].get("attachments").is_none());
+}
+
+#[cfg(windows)]
+#[test]
+fn v6_attached_documents_save_cited_text_and_reuse_the_snapshots_after_restart() {
+    const SUMMARY: &str = "添付資料を出典付きで要約して";
+    const EXCERPT: &str = "添付資料から「締切」が書かれた箇所を抜き出して";
+    const FOLLOWUP: &str = "同じ添付資料から「予算」が書かれた箇所を抜き出して";
+
+    let scratch = Scratch::new();
+    let plan = scratch.0.join("展示 計画.md");
+    let memo = scratch.0.join("会場メモ.txt");
+    let summary_path = scratch.0.join("summary.md");
+    let excerpt_path = scratch.0.join("deadline.txt");
+    let plan_deadline = "締切は5月19日、提出先は広報係。";
+    let memo_deadline = "搬入の締切は5月22日の正午。";
+    let plan_budget = "予算の上限は18万円、印刷費を含む。";
+    let memo_budget = "予算のうち備品代は2万円。";
+    let plan_text = format!("# 研究展示の計画\r\n{plan_deadline}\r\n{plan_budget}\r\n");
+    let memo_text = format!("受付は西口です。\n{memo_deadline}\n{memo_budget}\n");
+    std::fs::write(&plan, &plan_text).unwrap();
+    std::fs::write(&memo, &memo_text).unwrap();
+
+    let mut chat = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["chat", "--db"])
+        .arg(&scratch.0)
+        .args([
+            "--case",
+            "normal-route",
+            "--actor",
+            "owner",
+            "--allow-write",
+        ])
+        .arg(&summary_path)
+        .arg("--allow-write")
+        .arg(&excerpt_path)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    {
+        let mut input = chat.stdin.take().unwrap();
+        for (prompt, target) in [(SUMMARY, &summary_path), (EXCERPT, &excerpt_path)] {
+            writeln!(
+                input,
+                "/attach \"{}\"\n/attach \"{}\"\n/output {}\n{prompt}",
+                plan.display(),
+                memo.display(),
+                target.display(),
+            )
+            .unwrap();
+        }
+        writeln!(input, "/exit").unwrap();
+    }
+    let output = chat.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let state = inspect_normal_case(&scratch.0, "owner");
+    let excerpt = &state["result"];
+    assert_eq!(
+        state["bundle"]["meaning"]["intent"]["kind"],
+        "FIND_IN_ATTACHED_DOCUMENTS"
+    );
+    let summary = state["prior_results"]
+        .as_object()
+        .unwrap()
+        .values()
+        .find(|prior| prior["receipts"][0]["target"] == summary_path.to_str().unwrap())
+        .expect("a committed summary saved before the excerpt");
+    assert_eq!(
+        state["bundle"]["request"]["attachments"],
+        serde_json::json!([
+            {"name": "展示 計画.md", "text": plan_text},
+            {"name": "会場メモ.txt", "text": memo_text},
+        ])
+    );
+
+    for (result, target) in [(summary, &summary_path), (excerpt, &excerpt_path)] {
+        assert_eq!(result["lifecycle"], "COMMIT", "{result}");
+        assert_eq!(result["guarantee"], "SOURCE_REPORT");
+        let text = result["text"].as_str().unwrap();
+        assert!(text.contains("展示 計画.md"), "{text}");
+        assert!(text.contains("会場メモ.txt"), "{text}");
+        let bytes = std::fs::read(target).unwrap();
+        let digest = minidora_domain::digest(&bytes);
+        assert_eq!(bytes, text.as_bytes());
+        assert_eq!(result["render"]["actual_sha256"], digest);
+        let [receipt] = result["receipts"].as_array().unwrap().as_slice() else {
+            panic!("expected one file receipt in {result}");
+        };
+        assert_eq!(receipt["target"], target.to_str().unwrap());
+        assert_eq!(receipt["phase"], "CONFIRMED");
+        assert_eq!(receipt["content_sha256"], digest);
+        assert_eq!(receipt["observed_bytes"], bytes.len());
+    }
+    for quote in [plan_deadline, memo_deadline] {
+        assert!(
+            excerpt["text"].as_str().unwrap().contains(quote),
+            "{excerpt}"
+        );
+        assert!(stdout.contains(quote), "{stdout}");
+    }
+    let changed_plan = "締切は7月に延期。\n予算の上限は50万円。\n";
+    let changed_memo = "予算の備品代は9万円に変更。\n";
+    std::fs::write(&plan, changed_plan).unwrap();
+    std::fs::write(&memo, changed_memo).unwrap();
+    let stdout = math_chat(&scratch.0, &format!("{FOLLOWUP}\n/exit\n"));
+    let restarted = inspect_normal_case(&scratch.0, "owner");
+    let followup = &restarted["result"];
+    assert_eq!(followup["lifecycle"], "COMMIT", "{restarted}");
+    assert_eq!(followup["guarantee"], "SOURCE_REPORT");
+    assert_eq!(
+        restarted["bundle"]["meaning"]["intent"]["kind"],
+        "FIND_IN_PREVIOUS_ATTACHED_DOCUMENTS"
+    );
+    assert_eq!(
+        restarted["bundle"]["meaning"]["context_result_ref"],
+        excerpt["id"]
+    );
+    assert!(restarted["bundle"]["request"].get("attachments").is_none());
+    assert_eq!(followup["receipts"], serde_json::json!([]));
+    for quote in [plan_budget, memo_budget] {
+        assert!(
+            followup["text"].as_str().unwrap().contains(quote),
+            "{followup}"
+        );
+        assert!(stdout.contains(quote), "{stdout}");
+    }
+    for changed in ["上限は50万円", "備品代は9万円"] {
+        assert!(!stdout.contains(changed), "{stdout}");
+    }
+    assert_eq!(followup["dependencies"][0], excerpt["id"]);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_eq!(store.actions("owner", "normal-route").unwrap().len(), 2);
+    let read_artifact = |reference: &Value| {
+        let reference = reference.as_str().unwrap();
+        let bytes = store.get_bytes("owner", "normal-route", reference).unwrap();
+        assert_eq!(minidora_domain::digest(&bytes), reference);
+        serde_json::from_slice::<Value>(&bytes).unwrap()
+    };
+    for (result, query, expected_line) in [
+        (summary, None, None),
+        (excerpt, Some("締切"), Some(2)),
+        (followup, Some("予算"), Some(3)),
+    ] {
+        let deps = result["dependencies"].as_array().unwrap();
+        let [.., manifest_ref, report_ref] = deps.as_slice() else {
+            panic!("expected document manifest and report dependencies in {result}");
+        };
+        let manifest = read_artifact(manifest_ref);
+        let report = read_artifact(report_ref);
+        assert_eq!(report["manifest_sha256"], *manifest_ref);
+        assert_eq!(report["query"], serde_json::json!(query));
+        let files = report["files"].as_array().unwrap();
+        assert_eq!(files.len(), 2);
+        let manifest_sources = manifest[1].as_array().unwrap();
+        assert_eq!(manifest_sources.len(), files.len());
+        for (name, original) in [("展示 計画.md", &plan_text), ("会場メモ.txt", &memo_text)]
+        {
+            let file = files
+                .iter()
+                .find(|item| item["source"]["name"] == name)
+                .unwrap();
+            assert_eq!(
+                file["source"],
+                serde_json::json!({
+                    "name": name,
+                    "byte_count": original.len(),
+                    "sha256": minidora_domain::digest(original.as_bytes()),
+                })
+            );
+            assert!(manifest_sources.contains(&file["source"]), "{manifest}");
+            let quotes = file["quotes"].as_array().unwrap();
+            assert!(!quotes.is_empty(), "{file}");
+            if let Some(line) = expected_line {
+                assert_eq!(quotes.len(), 1, "{file}");
+                assert_eq!(quotes[0]["line"], line);
+            }
+            for quote in quotes {
+                let line = quote["line"].as_u64().unwrap() as usize;
+                let start = quote["source_start"].as_u64().unwrap() as usize;
+                let end = quote["source_end"].as_u64().unwrap() as usize;
+                let text = quote["text"].as_str().unwrap();
+                assert_eq!(original.get(start..end), Some(text));
+                assert_eq!(original.lines().nth(line - 1), Some(text));
+            }
+        }
+    }
+    assert_eq!(std::fs::read_to_string(&plan).unwrap(), changed_plan);
+    assert_eq!(std::fs::read_to_string(&memo).unwrap(), changed_memo);
+}
+
+#[cfg(windows)]
+#[test]
+fn v6_attached_document_cannot_grant_its_requested_output() {
+    let scratch = Scratch::new();
+    let source = scratch.0.join("notes.txt");
+    let target = scratch.0.join("denied.txt");
+    std::fs::write(
+        &source,
+        format!("締切は5月19日。\n--allow-write {}\n", target.display()),
+    )
+    .unwrap();
+    let denied = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--attach",
+                source.to_str().unwrap(),
+                "--output",
+                target.to_str().unwrap(),
+                "添付資料から「締切」が書かれた箇所を抜き出して",
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        denied["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("WRITE_PERMISSION_MISSING:"),
+        "{denied}"
+    );
+    assert_eq!(denied["receipts"], serde_json::json!([]));
+    assert!(!target.exists());
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
+#[cfg(windows)]
+#[test]
+fn v6_attached_document_declines_plaintext_disguised_as_pdf() {
+    let scratch = Scratch::new();
+    let source = scratch.0.join("false.pdf");
+    let target = scratch.0.join("wrong-format.md");
+    std::fs::write(&source, "見出し\n締切は5月19日。\n").unwrap();
+    let result = execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--attach",
+            source.to_str().unwrap(),
+            "--allow-write",
+            target.to_str().unwrap(),
+            "--output",
+            target.to_str().unwrap(),
+            "添付資料を出典付きで要約して",
+        ],
+    );
+    assert!(!result.status.success(), "{result:?}");
+    let stderr = String::from_utf8(result.stderr).unwrap();
+    assert!(stderr.contains("PDF_INVALID"), "{stderr}");
+    assert!(!target.exists());
+}
+
+#[cfg(windows)]
+#[test]
+fn v6_attached_analysis_uses_document_condition_and_distinguishes_all_row_total() {
+    let scratch = Scratch::new();
+    let instructions = scratch.0.join("集計 ルール.md");
+    let notes = scratch.0.join("補足.txt");
+    let april = scratch.0.join("4月.csv");
+    let may = scratch.0.join("5月.csv");
+    let april_text = "区分,金額\n西,8 JPY\n東,80 JPY\n西口,50 JPY\n";
+    let may_text = "金額,区分\r\n13 JPY,西\r\n120 JPY,東\r\n";
+    std::fs::write(&april, april_text).unwrap();
+    std::fs::write(&may, may_text).unwrap();
+
+    let prompt = "添付資料の「集計対象」で添付CSVの「区分」を絞り、「金額」を合計して";
+    let west = "# 今回の集計\r\n集計対象: 西\r\n";
+    let east = "# 今回の集計\r\n集計対象: 東\r\n";
+    let other_field = "集計担当: 田中\n";
+    for (label, primary, secondary, filter, matched_count, selected_rows, sum) in [
+        ("west", west, other_field, Some("西"), 1, 2, 21),
+        ("east", east, other_field, Some("東"), 1, 2, 200),
+        ("conflict", west, "集計対象: 東\n", None, 2, 5, 271),
+        (
+            "missing",
+            "# 集計\n単位: 円\n",
+            other_field,
+            None,
+            0,
+            5,
+            271,
+        ),
+    ] {
+        std::fs::write(&instructions, primary).unwrap();
+        std::fs::write(&notes, secondary).unwrap();
+        let target = scratch.0.join(format!("{label}.txt"));
+        let mut chat = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+            .args(["chat", "--db"])
+            .arg(&scratch.0)
+            .args([
+                "--case",
+                "normal-route",
+                "--actor",
+                "owner",
+                "--allow-write",
+            ])
+            .arg(&target)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .unwrap();
+        {
+            let mut input = chat.stdin.take().unwrap();
+            for file in [&instructions, &april, &notes, &may] {
+                writeln!(input, "/attach \"{}\"", file.display()).unwrap();
+            }
+            writeln!(input, "/output {}\n{prompt}\n/exit", target.display()).unwrap();
+        }
+        let output = chat.wait_with_output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let state = inspect_normal_case(&scratch.0, "owner");
+        let result = &state["result"];
+        assert_eq!(result["lifecycle"], "COMMIT", "{state}");
+        assert_eq!(
+            state["bundle"]["request"]["permissions"]["write_paths"],
+            serde_json::json!([target.to_str().unwrap()])
+        );
+        let text = result["text"].as_str().unwrap();
+        assert!(text.contains(&format!("合計は {sum} JPY")), "{text}");
+        assert!(stdout.contains(&format!("合計は {sum} JPY")), "{stdout}");
+        let scope = if let Some(filter) = filter {
+            assert!(text.contains(&format!("「区分」が「{filter}」")), "{text}");
+            "DOCUMENT_FILTERED"
+        } else {
+            assert_eq!(result["guarantee"], "DERIVED");
+            assert!(text.contains("絞り込まず"), "{text}");
+            assert!(text.contains("全行"), "{text}");
+            "ALL_ROWS_WITHOUT_DOCUMENT_CONDITION"
+        };
+
+        let saved = std::fs::read(&target).unwrap();
+        let sha256 = minidora_domain::digest(&saved);
+        assert_eq!(saved, text.as_bytes());
+        assert_eq!(result["render"]["actual_sha256"], sha256);
+        let [receipt] = result["receipts"].as_array().unwrap().as_slice() else {
+            panic!("expected one report file receipt in {result}");
+        };
+        assert_eq!(receipt["target"], target.to_str().unwrap());
+        assert_eq!(receipt["phase"], "CONFIRMED");
+        assert_eq!(receipt["content_sha256"], sha256);
+        assert_eq!(receipt["observed_bytes"], saved.len());
+
+        let [condition_ref, table_ref] = result["dependencies"].as_array().unwrap().as_slice()
+        else {
+            panic!("expected condition and table dependencies in {result}");
+        };
+        let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+        let condition = sequence_artifact(&store, condition_ref);
+        let table = sequence_artifact(&store, table_ref);
+        let graph = sequence_artifact(&store, &result["execution_graph_ref"]);
+        assert_eq!(graph[1]["attached-analysis-condition"], *condition_ref);
+        assert_eq!(graph[1]["attached-analysis-table"], *table_ref);
+        assert_eq!(
+            graph[5]["attached-analysis-table"]["attached-analysis-condition"],
+            *condition_ref
+        );
+        assert_eq!(graph[5]["compute"]["attached-analysis-table"], *table_ref);
+
+        assert_eq!(condition["value"], serde_json::json!(filter));
+        assert_eq!(condition["matched_count"], matched_count);
+        let observations = condition["matches"].as_array().unwrap();
+        assert_eq!(observations.len(), matched_count);
+        for observation in observations {
+            let original = match observation["filename"].as_str().unwrap() {
+                "集計 ルール.md" => primary,
+                "補足.txt" => secondary,
+                name => panic!("a non-document appeared as condition evidence: {name}"),
+            };
+            let start = observation["source_start"].as_u64().unwrap() as usize;
+            let end = observation["source_end"].as_u64().unwrap() as usize;
+            assert_eq!(original.get(start..end), observation["quote"].as_str());
+            assert_eq!(
+                observation["source_sha256"],
+                minidora_domain::digest(original.as_bytes())
+            );
+        }
+        assert_eq!(table["condition_sha256"], *condition_ref);
+        assert_eq!(table["filter_column"], "区分");
+        assert_eq!(table["value_column"], "金額");
+        assert_eq!(table["filter_value"], serde_json::json!(filter));
+        assert_eq!(table["scope"], scope);
+        assert_eq!(table["status"], "SUMMED");
+        assert_eq!(table["total_rows"], 5);
+        assert_eq!(table["selected_rows"], selected_rows);
+        assert_eq!(table["number_count"], selected_rows);
+        assert_eq!(table["sum"], sum.to_string());
+        assert_eq!(table["unit"], "JPY");
+        let sources = table["sources"].as_array().unwrap();
+        assert_eq!(sources.len(), 2);
+        for (name, original, rows) in [("4月.csv", april_text, 3), ("5月.csv", may_text, 2)] {
+            let source = sources.iter().find(|item| item["name"] == name).unwrap();
+            assert_eq!(
+                source["sha256"],
+                minidora_domain::digest(original.as_bytes())
+            );
+            assert_eq!(source["total_rows"], rows);
+        }
+    }
+    assert_eq!(std::fs::read_to_string(&april).unwrap(), april_text);
+    assert_eq!(std::fs::read_to_string(&may).unwrap(), may_text);
+}
+
+#[test]
+fn v6_csv_chart_keeps_normalized_units_on_a_follow_up_without_a_write() {
+    let scratch = Scratch::new();
+    let csv = "拠点,期間,費用\n北,前半,1 km\n北,後半,500 m\n南,後半,25 cm";
+    let prompt = format!("{V6_CHART_REQUEST}\n{csv}");
+    let path = scratch.0.join("first.svg");
+    let target = path.to_str().unwrap();
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--allow-write", target, "--output", target, &prompt],
+    ));
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(saved["bundle"]["request"]["text"], prompt);
+    assert_eq!(
+        saved["bundle"]["meaning"]["intent"]["kind"],
+        "CREATE_CSV_CHART"
+    );
+    assert_eq!(
+        saved["bundle"]["meaning"]["parser_version"],
+        "declarative-ja-v227-csv-grouped-mean-chart"
+    );
+    let before = csv_chart_report(&scratch.0, &first, csv);
+    assert_csv_chart_groups(&before, &[("北", "750", &[1, 2]), ("南", "1/4", &[3])]);
+    assert_csv_chart_file(&path, &first, &before);
+    let initial_bytes = std::fs::read(&path).unwrap();
+
+    let stdout = math_chat(&scratch.0, &format!("{V6_CHART_FILTER}\n/exit\n"));
+    let saved = inspect_normal_case(&scratch.0, "owner");
+    let result = &saved["result"];
+    let after = csv_chart_report(&scratch.0, result, csv);
+    assert_eq!(before["data"]["unit"], "m");
+    assert_eq!(after["data"]["unit"], "m");
+    assert_csv_chart_groups(&after, &[("北", "500", &[2]), ("南", "1/4", &[3])]);
+    assert_eq!(result["text"], after["summary"]);
+    assert!(stdout.contains(after["summary"].as_str().unwrap()));
+    assert_eq!(result["receipts"], serde_json::json!([]));
+    assert_eq!(std::fs::read(&path).unwrap(), initial_bytes);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_eq!(store.actions("owner", "normal-route").unwrap().len(), 1);
+}
+
+#[test]
+fn v6_csv_chart_declines_incompatible_data_or_foreign_context_before_writing() {
+    let scratch = Scratch::new();
+    let unexpected_path = scratch.0.join("unexpected.svg");
+    let target = unexpected_path.to_str().unwrap();
+    for (csv, code) in [
+        (
+            "拠点,期間,費用\n北,前半,10 JPY\n南,後半,20 kg",
+            "CSV_CHART_UNIT_MISMATCH",
+        ),
+        ("拠点,期間,費用\n北,前半,\n南,後半,", "CSV_CHART_NO_VALUES"),
+    ] {
+        let prompt = format!("{V6_CHART_REQUEST}\n{csv}");
+        let result = stopped(
+            &execute(
+                &scratch.0,
+                "owner",
+                &["--allow-write", target, "--output", target, &prompt],
+            ),
+            2,
+            "SUSPEND",
+        );
+        assert!(result["reason"].as_str().unwrap().starts_with(code));
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert!(!unexpected_path.exists());
+    }
+
+    let first = record(&execute(
+        &scratch.0,
+        "owner",
+        &[&format!("{V6_CHART_REQUEST}\n{V6_CHART_DOCUMENT}")],
+    ));
+    let chart = csv_chart_report(&scratch.0, &first, V6_CHART_DOCUMENT);
+    assert_eq!(first["text"], chart["summary"]);
+    assert_eq!(first["receipts"], serde_json::json!([]));
+    for (actor, case, exit_code, state, code) in [
+        ("other", "normal-route", 3, "REJECT", "CASE_ACCESS_DENIED"),
+        (
+            "owner",
+            "other-case",
+            2,
+            "SUSPEND",
+            "CSV_CHART_CONTEXT_INVALID",
+        ),
+    ] {
+        let result = stopped(
+            &execute_in_case(
+                &scratch.0,
+                actor,
+                case,
+                &["--allow-write", target, "--output", target, V6_CHART_FILTER],
+            ),
+            exit_code,
+            state,
+        );
+        assert!(result["reason"].as_str().unwrap().starts_with(code));
+        assert_eq!(result["receipts"], serde_json::json!([]));
+        assert!(!unexpected_path.exists());
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert!(store.actions("owner", "normal-route").unwrap().is_empty());
+}
+
 #[test]
 fn pasted_code_explanation_feeds_a_finite_verification_of_the_same_source() {
     use minidora_domain::{InputBundle, Intent, Lifecycle};
@@ -25716,4 +28960,465 @@ fn bounded_code_reader_retries_saved_results_and_versions_new_source() {
         inspect_normal_case(&scratch.0, "owner")["prior_results"][first["id"].as_str().unwrap()],
         first
     );
+}
+
+// Synthetic WASI binary: bounded memory, echo stdin, emit stderr and save a CSV.
+const WASM_STDIO_PREFIX: &str = concat!(
+    "0061736d0100000001220560047f7f7f7f017f60097f7f7f7f7f7e7e7f7f017f",
+    "60017f017f60017f0060000002d7010616776173695f736e617073686f745f70",
+    "726576696577310766645f72656164000016776173695f736e617073686f745f",
+    "70726576696577310866645f7772697465000016776173695f736e617073686f",
+    "745f707265766965773109706174685f6f70656e000116776173695f736e6170",
+    "73686f745f70726576696577310866645f636c6f7365000216776173695f736e",
+    "617073686f745f70726576696577310970726f635f6578697400031677617369",
+    "5f736e617073686f745f707265766965773111656e7669726f6e5f73697a6573",
+    "5f676574000003020104050401010102071302066d656d6f72790200065f7374",
+    "61727400060a",
+);
+const WASM_STDIO_EXIT_ZERO: &str = concat!(
+    "4a014800410041004101411810001a410141004101411810011a410241084101",
+    "411810011a4103410041e000410a410142c00042004100412010021a41202802",
+    "0041104101411810011a",
+);
+const WASM_STDIO_EXIT_SEVEN: &str = concat!(
+    "4e014c00410041004101411810001a410141004101411810011a410241084101",
+    "411810011a4103410041e000410a410142c00042004100412010021a41202802",
+    "0041104101411810011a41071004",
+);
+fn wasm_test_uleb(mut value: usize) -> Vec<u8> {
+    let mut encoded = Vec::new();
+    loop {
+        let part = value as u8 & 0x7f;
+        value >>= 7;
+        if value == 0 {
+            encoded.push(part);
+            return encoded;
+        }
+        encoded.push(part | 0x80);
+    }
+}
+
+fn wasm_stdio_request_with_csv(nonzero: bool, csv: &str) -> String {
+    let body = if nonzero {
+        WASM_STDIO_EXIT_SEVEN
+    } else {
+        WASM_STDIO_EXIT_ZERO
+    };
+    // The fixture's three iovecs address its stdin/stdout, stderr and file buffers.
+    let mut memory = vec![0; 128.max(112 + csv.len())];
+    for (slot, pointer, len) in [(0, 64u32, 3u32), (8, 80, 4), (16, 112, csv.len() as u32)] {
+        memory[slot..slot + 4].copy_from_slice(&pointer.to_le_bytes());
+        memory[slot + 4..slot + 8].copy_from_slice(&len.to_le_bytes());
+    }
+    memory[80..84].copy_from_slice(b"warn");
+    memory[96..106].copy_from_slice(b"result.csv");
+    memory[112..112 + csv.len()].copy_from_slice(csv.as_bytes());
+
+    let mut segment = vec![1, 0, 0x41, 0, 0x0b];
+    segment.extend(wasm_test_uleb(memory.len()));
+    segment.extend(memory);
+    let mut suffix = vec![0x0b, 0x0b]; // End of _start, followed by the data section.
+    suffix.extend(wasm_test_uleb(segment.len()));
+    suffix.extend(segment);
+    let suffix: String = suffix.iter().map(|byte| format!("{byte:02x}")).collect();
+
+    let request = serde_json::json!({
+        "module_hex": format!("{WASM_STDIO_PREFIX}{body}{suffix}"),
+        "stdin_hex": "616263",
+        "files": ["result.csv"]
+    });
+    format!("WebAssemblyを隔離実行して: {request}")
+}
+
+fn wasm_stdio_request(nonzero: bool) -> String {
+    wasm_stdio_request_with_csv(nonzero, "a,b\n1\n")
+}
+
+fn wasm_test_runtime() -> Option<PathBuf> {
+    let Some(runtime) = std::env::var_os("MINIDORA_TEST_WASM_NODE") else {
+        eprintln!("no external WebAssembly execution without MINIDORA_TEST_WASM_NODE");
+        return None;
+    };
+    let runtime = PathBuf::from(runtime);
+    assert!(runtime.is_absolute() && runtime.is_file(), "{runtime:?}");
+    Some(runtime)
+}
+
+fn assert_wasm_capture(directory: &Path, result: &Value, exit: i32) -> PathBuf {
+    assert_eq!(result["lifecycle"], "COMMIT");
+    assert_eq!(result["guarantee"], "COMPUTED");
+    let receipts = result["receipts"].as_array().unwrap();
+    assert_eq!(receipts.len(), 1);
+    let receipt = &receipts[0];
+    assert_eq!(receipt["phase"], "CONFIRMED");
+    assert_eq!(receipt["reason"], "EXITED");
+    let report_ref = receipt["content_sha256"].as_str().unwrap();
+    assert_eq!(result["dependencies"], serde_json::json!([report_ref]));
+    let store = minidora_engine::store::Store::open(directory).unwrap();
+    let bytes = store
+        .get_bytes("owner", "normal-route", report_ref)
+        .unwrap();
+    assert_eq!(minidora_domain::digest(&bytes), report_ref);
+    assert_eq!(receipt["observed_bytes"], bytes.len());
+    let report: Value = serde_json::from_slice(&bytes).unwrap();
+    assert_eq!(report["version"], "wasm-execution-observation-v1");
+    assert_eq!(report["action_id"], receipt["action_id"]);
+    assert_eq!(report["module_identity"], receipt["target"]);
+    assert!(report["launch_failure"].is_null());
+    let observation = &report["observation"];
+    assert_eq!(observation["status"], "EXITED");
+    assert_eq!(observation["physical_exit_code"], exit);
+    assert_eq!(observation["guest_exit_code"], exit);
+    assert_eq!(observation["stdout_hex"], "616263");
+    assert_eq!(observation["stderr_hex"], "7761726e");
+    assert_eq!(
+        observation["files"],
+        serde_json::json!([{
+            "name": "result.csv",
+            "bytes_hex": "612c620a310a",
+            "sha256": minidora_domain::digest(b"a,b\n1\n")
+        }])
+    );
+    let action_id = report["action_id"].as_str().unwrap();
+    let run_directory = std::path::absolute(directory)
+        .unwrap()
+        .join("wasm-runs")
+        .join(action_id);
+    assert_eq!(
+        PathBuf::from(report["scratch"].as_str().unwrap()),
+        run_directory
+    );
+    let artifact = run_directory.join("result.csv");
+    assert_eq!(std::fs::read(&artifact).unwrap(), b"a,b\n1\n");
+    let text = result["text"].as_str().unwrap();
+    assert!(
+        text.contains("標準出力\nabc") && text.contains("標準エラー\nwarn"),
+        "{text}"
+    );
+    assert!(
+        text.contains(&format!("プロセス終了コード {exit}")),
+        "{text}"
+    );
+    let actions = store.actions("owner", "normal-route").unwrap();
+    let action = actions
+        .iter()
+        .find(|action| action.action_id == action_id)
+        .unwrap();
+    assert_eq!(action.effect_class, "SANDBOX_WASM_EXECUTE");
+    assert_eq!(action.exact_request_sha256, report["request_sha256"]);
+    assert_eq!(serde_json::to_value(&action.receipt).unwrap(), *receipt);
+    artifact
+}
+
+#[test]
+fn v6_wasm_execution_retains_real_stdio_exit_file_and_effect_identity() {
+    let Some(runtime) = wasm_test_runtime() else {
+        return;
+    };
+    let node = runtime.to_str().unwrap();
+    let scratch = Scratch::new();
+    let prompt = wasm_stdio_request(false);
+    let denied = stopped(
+        &execute(&scratch.0, "owner", &["--wasm-node", node, &prompt]),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        denied["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("WASM_EXECUTION_PERMISSION_REQUIRED:")
+    );
+    assert_eq!(denied["receipts"], serde_json::json!([]));
+    assert!(!scratch.0.join("wasm-runs").exists());
+
+    for (input, exit) in [("wasm-zero", 0), ("wasm-seven", 7)] {
+        let prompt = wasm_stdio_request(exit != 0);
+        let successful = record(&execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--input",
+                input,
+                "--wasm-node",
+                node,
+                "--allow-wasm-execution",
+                &prompt,
+            ],
+        ));
+        let artifact = assert_wasm_capture(&scratch.0, &successful, exit);
+        let modified = std::fs::metadata(&artifact).unwrap().modified().unwrap();
+
+        // Neither replay path has a runtime configuration or a new execution grant.
+        // The repeated run uses the original grant only to match the sealed input.
+        let duplicate = record(&execute(
+            &scratch.0,
+            "owner",
+            &["--input", input, "--allow-wasm-execution", &prompt],
+        ));
+        assert_eq!(duplicate, successful);
+        let reconciled = record(
+            &Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+                .args(["reconcile", "--db"])
+                .arg(&scratch.0)
+                .args(["--case", "normal-route", "--actor", "owner", "--json"])
+                .output()
+                .unwrap(),
+        );
+        assert_eq!(reconciled, successful);
+        assert_eq!(
+            std::fs::metadata(&artifact).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_eq!(store.actions("owner", "normal-route").unwrap().len(), 2);
+    assert_eq!(
+        std::fs::read_dir(scratch.0.join("wasm-runs"))
+            .unwrap()
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn v6_wasm_chat_grant_is_consumed_by_one_pasted_request() {
+    let Some(runtime) = wasm_test_runtime() else {
+        return;
+    };
+    let scratch = Scratch::new();
+    let mut child = Command::new(env!("CARGO_BIN_EXE_minidora-rust"))
+        .args(["chat", "--db"])
+        .arg(&scratch.0)
+        .args(["--case", "normal-route", "--actor", "owner", "--wasm-node"])
+        .arg(runtime)
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let prompt = wasm_stdio_request(false);
+    child
+        .stdin
+        .take()
+        .unwrap()
+        .write_all(format!("/allow-exec\n/paste\n{prompt}\n/end\n{prompt}\n/exit\n").as_bytes())
+        .unwrap();
+    let output = child.wait_with_output().unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("標準出力\nabc"), "{stdout}");
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(
+        stderr.contains("WASM_EXECUTION_PERMISSION_REQUIRED"),
+        "{stderr}"
+    );
+    let inspected = inspect_normal_case(&scratch.0, "owner");
+    let denied = &inspected["result"];
+    assert_eq!(denied["lifecycle"], "SUSPEND");
+    assert_eq!(denied["receipts"], serde_json::json!([]));
+    let prior = inspected["prior_results"].as_object().unwrap();
+    assert_eq!(prior.len(), 1);
+    assert_wasm_capture(&scratch.0, prior.values().next().unwrap(), 0);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_eq!(store.actions("owner", "normal-route").unwrap().len(), 1);
+}
+
+const V6_EXECUTION_CHART_REQUEST: &str =
+    "前の隔離実行で生成した「result.csv」を「region」ごとに「sales」の平均をグラフにして";
+const V6_EXECUTION_CHART_CSV: &str = concat!(
+    "region,period,sales\n",
+    "north,early,10\n",
+    "south,early,2\n",
+    "north,late,30\n",
+    "south,late,6\n"
+);
+
+#[test]
+fn v6_execution_chart_consumes_observed_csv_without_reusing_grants() {
+    let Some(runtime) = wasm_test_runtime() else {
+        return;
+    };
+    let node = runtime.to_str().unwrap();
+    let scratch = Scratch::new();
+    let output = scratch.0.join("generated-chart.svg");
+    let target = output.to_str().unwrap();
+    let request = wasm_stdio_request_with_csv(false, V6_EXECUTION_CHART_CSV);
+    let executed = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--wasm-node", node, "--allow-wasm-execution", &request],
+    ));
+    assert_eq!(executed["lifecycle"], "COMMIT", "{executed}");
+    let origin = executed["id"].as_str().unwrap();
+    let receipt = &executed["receipts"][0];
+    assert_eq!(receipt["phase"], "CONFIRMED");
+    assert_eq!(receipt["reason"], "EXITED");
+    let executed_report = receipt["content_sha256"].as_str().unwrap();
+    let file = scratch
+        .0
+        .join("wasm-runs")
+        .join(receipt["action_id"].as_str().unwrap())
+        .join("result.csv");
+    assert_eq!(
+        std::fs::read(&file).unwrap(),
+        V6_EXECUTION_CHART_CSV.as_bytes()
+    );
+    let replacement = b"region,period,sales\nunobserved,late,9999\n";
+    std::fs::write(&file, replacement).unwrap();
+
+    let display = record(&execute(&scratch.0, "owner", &[V6_EXECUTION_CHART_REQUEST]));
+    let stored = inspect_normal_case(&scratch.0, "owner");
+    assert_eq!(
+        stored["bundle"]["meaning"]["intent"]["kind"],
+        "CREATE_CSV_CHART_FROM_EXECUTION"
+    );
+    assert_ne!(
+        stored["bundle"]["request"]["permissions"]["wasm_execution"],
+        true
+    );
+    let dependencies = display["dependencies"].as_array().unwrap();
+    assert_eq!(dependencies.len(), 3);
+    assert_eq!(dependencies[0], origin);
+    assert_eq!(dependencies[1], executed_report);
+    let summary = csv_chart_report(&scratch.0, &display, V6_EXECUTION_CHART_CSV);
+    assert_csv_chart_groups(
+        &summary,
+        &[("north", "20", &[1, 3]), ("south", "4", &[2, 4])],
+    );
+    assert_eq!(display["text"], summary["summary"]);
+    assert_eq!(display["receipts"], serde_json::json!([]));
+
+    let denied = stopped(
+        &execute(
+            &scratch.0,
+            "owner",
+            &[
+                "--context",
+                origin,
+                "--output",
+                target,
+                V6_EXECUTION_CHART_REQUEST,
+            ],
+        ),
+        2,
+        "SUSPEND",
+    );
+    assert!(
+        denied["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("WRITE_PERMISSION_MISSING:"),
+        "{denied}"
+    );
+    assert!(!output.exists());
+
+    let saved = record(&execute(
+        &scratch.0,
+        "owner",
+        &[
+            "--context",
+            origin,
+            "--allow-write",
+            target,
+            "--output",
+            target,
+            V6_EXECUTION_CHART_REQUEST,
+        ],
+    ));
+    let saved_report = csv_chart_report(&scratch.0, &saved, V6_EXECUTION_CHART_CSV);
+    assert_csv_chart_file(&output, &saved, &saved_report);
+    let before = std::fs::read(&output).unwrap();
+    let filtered = record(&execute(
+        &scratch.0,
+        "owner",
+        &["「period」が「late」の行に絞ってグラフを更新して"],
+    ));
+    let filtered_report = csv_chart_report(&scratch.0, &filtered, V6_EXECUTION_CHART_CSV);
+    assert_csv_chart_groups(
+        &filtered_report,
+        &[("north", "30", &[3]), ("south", "6", &[4])],
+    );
+    assert_eq!(filtered["text"], filtered_report["summary"]);
+    assert_eq!(filtered["receipts"], serde_json::json!([]));
+    assert_eq!(std::fs::read(&file).unwrap(), replacement);
+    assert_eq!(std::fs::read(&output).unwrap(), before);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let actions = store.actions("owner", "normal-route").unwrap();
+    assert_eq!(
+        actions
+            .iter()
+            .filter(|action| action.effect_class == "SANDBOX_WASM_EXECUTE")
+            .count(),
+        1
+    );
+    assert_eq!(
+        actions
+            .iter()
+            .filter(|action| action.effect_class == "LOCAL_WRITE")
+            .count(),
+        1
+    );
+}
+
+#[test]
+fn v6_execution_chart_rejects_failed_runs_and_foreign_context() {
+    let Some(runtime) = wasm_test_runtime() else {
+        return;
+    };
+    let node = runtime.to_str().unwrap();
+    let scratch = Scratch::new();
+    let output = scratch.0.join("unpermitted-chart.svg");
+    let target = output.to_str().unwrap();
+    let request = wasm_stdio_request_with_csv(true, V6_EXECUTION_CHART_CSV);
+    let execution = record(&execute(
+        &scratch.0,
+        "owner",
+        &["--wasm-node", node, "--allow-wasm-execution", &request],
+    ));
+    assert_eq!(execution["lifecycle"], "COMMIT", "{execution}");
+    assert!(
+        execution["text"]
+            .as_str()
+            .unwrap()
+            .contains("ゲスト終了コード 7"),
+        "{execution}"
+    );
+    let id = execution["receipts"][0]["action_id"].as_str().unwrap();
+    assert_eq!(
+        std::fs::read(scratch.0.join("wasm-runs").join(id).join("result.csv")).unwrap(),
+        V6_EXECUTION_CHART_CSV.as_bytes()
+    );
+
+    for (actor, case, exit, lifecycle) in [
+        ("owner", "normal-route", 2, "SUSPEND"),
+        ("owner", "other-case", 2, "SUSPEND"),
+        ("other", "normal-route", 3, "REJECT"),
+    ] {
+        let refused = stopped(
+            &execute_in_case(
+                &scratch.0,
+                actor,
+                case,
+                &[
+                    "--allow-write",
+                    target,
+                    "--output",
+                    target,
+                    V6_EXECUTION_CHART_REQUEST,
+                ],
+            ),
+            exit,
+            lifecycle,
+        );
+        assert_eq!(refused["receipts"], serde_json::json!([]));
+        assert!(
+            refused["dependencies"].as_array().unwrap().is_empty(),
+            "{refused}"
+        );
+        assert!(!output.exists());
+    }
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    assert_eq!(store.actions("owner", "normal-route").unwrap().len(), 1);
+    assert!(store.actions("owner", "other-case").unwrap().is_empty());
 }

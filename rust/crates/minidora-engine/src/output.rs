@@ -1,4 +1,4 @@
-//! Physical UTF-8 rendering and exact-target local file delivery.
+//! Physical rendering and exact-target local file delivery.
 //!
 //! The Core owns authorization and persists ATTEMPTED before invoking this
 //! module. Parent directories must be controlled by a trusted local owner;
@@ -12,6 +12,7 @@ use minidora_domain::{
     ActionRecord, ContentPlan, DeliveryReceipt, EffectPhase, RenderObservation, RenderTarget,
     Result, digest, failure,
 };
+use serde::{Deserialize, Serialize};
 use std::fs::{self, File, OpenOptions};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
@@ -19,6 +20,290 @@ use std::time::Instant;
 
 pub(crate) const LEGACY_RENDERER_VERSION: &str = "utf8-bytes-v1";
 pub(crate) const RENDERER_VERSION: &str = "utf8-bytes-v2";
+pub(crate) const PNG_RENDERER_VERSION: &str = "png-image-artifact-v1";
+pub(crate) const PNG_DISPLAY_RENDERER_VERSION: &str = "png-image-display-v1";
+pub(crate) const WAVE_PCM_RENDERER_VERSION: &str = "wav-pcm16-mono-v1";
+pub(crate) const WAVE_PCM_DISPLAY_RENDERER_VERSION: &str = "wav-pcm16-mono-display-v1";
+const WAVE_MAX_SECONDS: usize = 60;
+const WAVE_MAX_CHUNKS: usize = 32;
+const WAVE_MAX_EXTRA_BYTES: usize = 65_536;
+pub(crate) const WAVE_PCM_MAX_BYTES: usize = 48_000 * 2 * WAVE_MAX_SECONDS + WAVE_MAX_EXTRA_BYTES;
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct WaveFacts {
+    pub channels: u16,
+    pub sample_rate: u32,
+    pub bits_per_sample: u16,
+    pub frame_count: usize,
+    pub data_bytes: usize,
+    pub nonzero_frames: usize,
+    pub peak_amplitude: u16,
+    pub pcm_sha256: String,
+}
+
+fn invalid_wave() -> minidora_domain::Error {
+    failure(
+        "INVALID_WAVE_PCM",
+        "音声を有効なモノラル16ビットPCMのWAVとして確認できません。",
+    )
+}
+
+pub(crate) fn inspect_wave(bytes: &[u8]) -> Result<WaveFacts> {
+    inspect_wave_pcm(bytes).map(|(facts, _)| facts)
+}
+
+pub(crate) fn inspect_wave_pcm(bytes: &[u8]) -> Result<(WaveFacts, &[u8])> {
+    if bytes.len() > WAVE_PCM_MAX_BYTES {
+        return Err(failure(
+            "WAVE_PCM_LIMIT",
+            "WAVのバイト数が上限を超えました。",
+        ));
+    }
+    let [
+        b'R',
+        b'I',
+        b'F',
+        b'F',
+        l0,
+        l1,
+        l2,
+        l3,
+        b'W',
+        b'A',
+        b'V',
+        b'E',
+        rest @ ..,
+    ] = bytes
+    else {
+        return Err(invalid_wave());
+    };
+    if u64::from(u32::from_le_bytes([*l0, *l1, *l2, *l3])) + 8 != bytes.len() as u64 {
+        return Err(invalid_wave());
+    }
+
+    let mut chunks = rest;
+    let mut sample_rate = None;
+    let mut pcm = None;
+    for _ in 0..WAVE_MAX_CHUNKS {
+        if chunks.is_empty() {
+            break;
+        }
+        let [a, b, c, d, l0, l1, l2, l3, payload @ ..] = chunks else {
+            return Err(invalid_wave());
+        };
+        let size = u32::from_le_bytes([*l0, *l1, *l2, *l3]) as usize;
+        let padded_size = size.checked_add(size % 2).ok_or_else(invalid_wave)?;
+        let (chunk, remaining) = payload
+            .split_at_checked(padded_size)
+            .ok_or_else(invalid_wave)?;
+        let data = &chunk[..size];
+        match &[*a, *b, *c, *d] {
+            b"fmt " if sample_rate.is_none() => {
+                sample_rate = Some(parse_pcm_format(data)?);
+            }
+            b"data" if pcm.is_none() && sample_rate.is_some() => {
+                pcm = Some(data);
+            }
+            b"fmt " | b"data" => return Err(invalid_wave()),
+            _ => {}
+        }
+        chunks = remaining;
+    }
+    if !chunks.is_empty() {
+        return Err(invalid_wave());
+    }
+    let sample_rate = sample_rate.ok_or_else(invalid_wave)?;
+    let pcm = pcm.ok_or_else(invalid_wave)?;
+    let frame_count = pcm.len() / 2;
+    if pcm.len() % 2 != 0
+        || frame_count as u64 * 1_000 < u64::from(sample_rate) * 20
+        || frame_count > sample_rate as usize * WAVE_MAX_SECONDS
+        || bytes.len() - pcm.len() > WAVE_MAX_EXTRA_BYTES
+    {
+        return Err(invalid_wave());
+    }
+    let mut nonzero_frames = 0;
+    let mut peak_amplitude = 0;
+    for frame in pcm.chunks_exact(2) {
+        let amplitude = i16::from_le_bytes([frame[0], frame[1]]).unsigned_abs();
+        nonzero_frames += usize::from(amplitude != 0);
+        peak_amplitude = peak_amplitude.max(amplitude);
+    }
+    if nonzero_frames == 0 {
+        return Err(invalid_wave());
+    }
+    Ok((
+        WaveFacts {
+            channels: 1,
+            sample_rate,
+            bits_per_sample: 16,
+            frame_count,
+            data_bytes: pcm.len(),
+            nonzero_frames,
+            peak_amplitude,
+            pcm_sha256: digest(pcm),
+        },
+        pcm,
+    ))
+}
+
+fn parse_pcm_format(data: &[u8]) -> Result<u32> {
+    let [
+        tag0,
+        tag1,
+        ch0,
+        ch1,
+        r0,
+        r1,
+        r2,
+        r3,
+        b0,
+        b1,
+        b2,
+        b3,
+        align0,
+        align1,
+        bits0,
+        bits1,
+        extra @ ..,
+    ] = data
+    else {
+        return Err(invalid_wave());
+    };
+    let rate = u32::from_le_bytes([*r0, *r1, *r2, *r3]);
+    if u16::from_le_bytes([*tag0, *tag1]) != 1
+        || u16::from_le_bytes([*ch0, *ch1]) != 1
+        || !(16_000..=48_000).contains(&rate)
+        || u32::from_le_bytes([*b0, *b1, *b2, *b3]) != rate * 2
+        || u16::from_le_bytes([*align0, *align1]) != 2
+        || u16::from_le_bytes([*bits0, *bits1]) != 16
+        || !matches!(extra, [] | [0, 0])
+    {
+        return Err(invalid_wave());
+    }
+    Ok(rate)
+}
+
+pub(crate) fn matches_render_target(path: Option<&Path>, target: Option<&RenderTarget>) -> bool {
+    match (path, target) {
+        (None, Some(RenderTarget::Display)) => true,
+        (Some(expected), Some(RenderTarget::LocalFile { path })) => {
+            expected.as_os_str() == path.as_os_str()
+        }
+        _ => false,
+    }
+}
+
+fn wave_target_version(target: &RenderTarget) -> Option<&'static str> {
+    match target {
+        RenderTarget::Display => Some(WAVE_PCM_DISPLAY_RENDERER_VERSION),
+        RenderTarget::LocalFile { path } if valid_wave_path(path) => {
+            Some(WAVE_PCM_RENDERER_VERSION)
+        }
+        _ => None,
+    }
+}
+
+pub(crate) fn valid_wave_path(path: &Path) -> bool {
+    validate_local_target_path(path).is_ok()
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("wav"))
+}
+
+pub(crate) fn render_wave_to(
+    plan: &ContentPlan,
+    target: RenderTarget,
+    bytes: Vec<u8>,
+) -> Result<RenderObservation> {
+    if plan.id.is_empty() {
+        return Err(failure(
+            "INVALID_CONTENT_PLAN",
+            "A plan identity is required",
+        ));
+    }
+    let version = wave_target_version(&target).ok_or_else(|| {
+        failure(
+            "INVALID_WAVE_TARGET",
+            "音声の保存先には拡張子.wavのローカル絶対パスを指定してください。",
+        )
+    })?;
+    inspect_wave(&bytes)?;
+    Ok(RenderObservation {
+        plan_id: plan.id.clone(),
+        renderer_version: version.into(),
+        actual_sha256: digest(&bytes),
+        bytes,
+        status: "RENDERED".into(),
+        target: Some(target),
+    })
+}
+
+pub(crate) fn validate_wave_render(plan: &ContentPlan, render: &RenderObservation) -> bool {
+    !plan.id.is_empty()
+        && render.status == "RENDERED"
+        && render.plan_id == plan.id
+        && render.target.as_ref().and_then(wave_target_version)
+            == Some(render.renderer_version.as_str())
+        && inspect_wave(&render.bytes).is_ok()
+        && render.actual_sha256 == digest(&render.bytes)
+}
+
+pub(crate) fn valid_png_path(path: &Path) -> bool {
+    validate_local_target_path(path).is_ok()
+        && path
+            .extension()
+            .and_then(|ext| ext.to_str())
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("png"))
+}
+
+fn png_target_version(target: &RenderTarget) -> Option<&'static str> {
+    match target {
+        RenderTarget::Display => Some(PNG_DISPLAY_RENDERER_VERSION),
+        RenderTarget::LocalFile { path } if valid_png_path(path) => Some(PNG_RENDERER_VERSION),
+        _ => None,
+    }
+}
+
+pub(crate) fn render_png_to(
+    plan: &ContentPlan,
+    target: RenderTarget,
+    bytes: Vec<u8>,
+) -> Result<RenderObservation> {
+    if plan.id.is_empty() {
+        return Err(failure(
+            "INVALID_CONTENT_PLAN",
+            "採用した内容の識別子がありません。",
+        ));
+    }
+    let version = png_target_version(&target).ok_or_else(|| {
+        failure(
+            "INVALID_PNG_TARGET",
+            "画像の保存先には拡張子.pngのローカル絶対パスを指定してください。",
+        )
+    })?;
+    crate::image_artifact::inspect_png(&bytes)?;
+    Ok(RenderObservation {
+        plan_id: plan.id.clone(),
+        renderer_version: version.into(),
+        actual_sha256: digest(&bytes),
+        bytes,
+        status: "RENDERED".into(),
+        target: Some(target),
+    })
+}
+
+pub(crate) fn validate_png_render(plan: &ContentPlan, render: &RenderObservation) -> bool {
+    !plan.id.is_empty()
+        && render.status == "RENDERED"
+        && render.plan_id == plan.id
+        && render.target.as_ref().and_then(png_target_version)
+            == Some(render.renderer_version.as_str())
+        && render.actual_sha256 == digest(&render.bytes)
+        && crate::image_artifact::inspect_png(&render.bytes).is_ok()
+}
 
 /// Direct rendering retains the original observation format for callers
 /// without a sealed Goal.
@@ -300,6 +585,76 @@ mod tests {
     use std::process::Command;
     use std::time::Instant;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    fn wave() -> Vec<u8> {
+        let resolution = [1, 0, 1, 0, 128, 62, 0, 0, 0, 125, 0, 0, 2, 0, 16, 0, 0, 0];
+        let mut pcm = [0; 640];
+        pcm[100..102].copy_from_slice(&i16::MIN.to_le_bytes());
+        let mut bytes = b"RIFF".to_vec();
+        bytes.extend_from_slice(&(4 + 8 + 18 + 8 + pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(b"WAVEfmt ");
+        bytes.extend_from_slice(&18u32.to_le_bytes());
+        bytes.extend_from_slice(&resolution);
+        bytes.extend_from_slice(b"data");
+        bytes.extend_from_slice(&(pcm.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(&pcm);
+        bytes
+    }
+
+    #[test]
+    fn wave_render_checks_pcm_shape_and_retained_identity() {
+        let plan = ContentPlan {
+            id: "plan".into(),
+            text: "読み上げの原文。".into(),
+            locale: "ja".into(),
+            guarantee: minidora_domain::Guarantee::UserPremise,
+            required_units: Vec::new(),
+            dependencies: Vec::new(),
+            model_revision: String::new(),
+            model_artifact_ref: String::new(),
+            model_observation_ref: String::new(),
+        };
+        let wave = wave();
+        let facts = inspect_wave(&wave).unwrap();
+        assert_eq!(facts.sample_rate, 16_000);
+        assert_eq!(facts.frame_count, 320);
+        assert_eq!(facts.nonzero_frames, 1);
+        assert_eq!(facts.peak_amplitude, 32_768);
+        assert_eq!(facts.pcm_sha256, digest(&wave[46..]));
+        let path = PathBuf::from(if cfg!(windows) {
+            r"C:\output.wav"
+        } else {
+            "/output.wav"
+        });
+        let target = RenderTarget::LocalFile { path };
+        let render = render_wave_to(&plan, target, wave.clone()).unwrap();
+        assert!(validate_wave_render(&plan, &render));
+        assert_eq!(render.renderer_version, WAVE_PCM_RENDERER_VERSION);
+
+        let display = render_wave_to(&plan, RenderTarget::Display, wave.clone()).unwrap();
+        assert!(validate_wave_render(&plan, &display));
+        assert_eq!(display.renderer_version, WAVE_PCM_DISPLAY_RENDERER_VERSION);
+        assert_eq!(display.target, Some(RenderTarget::Display));
+        assert_eq!(display.bytes, wave);
+        assert_eq!(display.actual_sha256, render.actual_sha256);
+        let mut crossed_target = display;
+        crossed_target.target = render.target.clone();
+        assert!(!validate_wave_render(&plan, &crossed_target));
+
+        let mut stale = render.clone();
+        *stale.bytes.last_mut().unwrap() = 1;
+        assert!(!validate_wave_render(&plan, &stale));
+        let mut wrong_plan = plan;
+        wrong_plan.id = "other".into();
+        assert!(!validate_wave_render(&wrong_plan, &render));
+
+        let mut malformed = wave.clone();
+        malformed.push(0);
+        assert!(inspect_wave(&malformed).is_err());
+        malformed = wave;
+        malformed[46..].fill(0);
+        assert!(inspect_wave(&malformed).is_err());
+    }
 
     fn directory() -> PathBuf {
         let p = std::env::temp_dir().join(format!(

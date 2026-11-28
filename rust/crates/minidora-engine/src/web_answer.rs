@@ -488,16 +488,22 @@ fn find_topic_passage<'a>(
 }
 
 pub(crate) fn readable_passages(article: &str, limit: usize) -> Vec<Passage> {
-    readable_passages_with_markup(article, limit, false)
+    readable_passages_with_markup(article, "", limit, true, false)
 }
 
 pub(crate) fn readable_passages_with_nested_footnotes(article: &str, limit: usize) -> Vec<Passage> {
-    readable_passages_with_markup(article, limit, true)
+    readable_passages_with_markup(article, "", limit, true, true)
+}
+
+pub(crate) fn readable_research_passages(article: &str, topic: &str, limit: usize) -> Vec<Passage> {
+    readable_passages_with_markup(article, topic, limit, false, true)
 }
 
 fn readable_passages_with_markup(
     article: &str,
+    topic: &str,
     limit: usize,
+    summary_lead_only: bool,
     nested_footnotes: bool,
 ) -> Vec<Passage> {
     let mut passages = Vec::new();
@@ -508,9 +514,9 @@ fn readable_passages_with_markup(
     let _ = visit_passages(
         article,
         true,
-        true,
+        summary_lead_only,
         nested_footnotes,
-        &|_| true,
+        &|sentence| sentence.contains(topic),
         &mut |passage| {
             if !passage.text.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
                 passages.push(passage);

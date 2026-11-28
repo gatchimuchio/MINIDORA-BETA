@@ -18,5 +18,16 @@ num-traits.workspace = true
 unicode-normalization.workspace = true
 regex.workspace = true
 rusqlite.workspace = true
+roxmltree.workspace = true
+zip.workspace = true
+jbonsai.workspace = true
+jpreprocess.workspace = true
+image = { version = "=0.25.9", default-features = false, features = ["jpeg", "png"] }
 reqwest.workspace = true
 url.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+job-limits = "=0.1.0"
+lopdf.workspace = true
+tempfile = "=3.27.0"
+windows = { version = "=0.62.2", features = ["Data_Pdf", "Foundation", "Graphics_Imaging", "Storage_Streams", "System"] }

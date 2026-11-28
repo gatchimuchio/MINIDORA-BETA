@@ -67,6 +67,164 @@ pub fn identity<T: Serialize>(value: &T) -> Result<String> {
 pub struct Permissions {
     pub read_hosts: BTreeSet<String>,
     pub write_paths: BTreeSet<PathBuf>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub wasm_execution: bool,
+}
+
+pub const MAX_REQUEST_ATTACHMENTS: usize = 8;
+pub const MAX_BINARY_ATTACHMENT_BYTES: usize = 192_000;
+pub const MAX_PDF_ATTACHMENT_BYTES: usize = MAX_BINARY_ATTACHMENT_BYTES;
+
+/// An explicitly supplied text or binary snapshot with no host path or read grant.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestAttachment {
+    pub name: String,
+    pub text: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binary_base64: Option<String>,
+}
+
+impl RequestAttachment {
+    pub fn is_csv_name(name: &str) -> bool {
+        Self::extension(name).is_some_and(|ext| ext.eq_ignore_ascii_case("csv"))
+    }
+
+    pub fn is_text_name(name: &str) -> bool {
+        Self::extension(name)
+            .is_some_and(|ext| ext.eq_ignore_ascii_case("txt") || ext.eq_ignore_ascii_case("md"))
+    }
+
+    pub fn is_supported_name(name: &str) -> bool {
+        Self::is_csv_name(name)
+            || Self::is_text_name(name)
+            || Self::is_pdf_name(name)
+            || Self::is_xlsx_name(name)
+            || Self::is_image_name(name)
+    }
+
+    pub fn is_pdf_name(name: &str) -> bool {
+        Self::extension(name).is_some_and(|ext| ext.eq_ignore_ascii_case("pdf"))
+    }
+
+    pub fn is_xlsx_name(name: &str) -> bool {
+        Self::extension(name).is_some_and(|ext| ext.eq_ignore_ascii_case("xlsx"))
+    }
+
+    pub fn is_image_name(name: &str) -> bool {
+        Self::image_signature(name).is_some()
+    }
+
+    fn image_signature(name: &str) -> Option<&'static [u8]> {
+        let extension = Self::extension(name)?;
+        if extension.eq_ignore_ascii_case("png") {
+            Some(b"\x89PNG\r\n\x1a\n")
+        } else if extension.eq_ignore_ascii_case("jpg") || extension.eq_ignore_ascii_case("jpeg") {
+            Some(b"\xff\xd8\xff")
+        } else {
+            None
+        }
+    }
+
+    /// Admit the encoded format named by the filename before full decoding.
+    pub fn image_header_matches(name: &str, bytes: &[u8]) -> bool {
+        Self::image_signature(name).is_some_and(|signature| bytes.starts_with(signature))
+    }
+
+    pub fn pdf_snapshot(name: &str, bytes: &[u8]) -> Self {
+        Self::binary_snapshot(name, bytes)
+    }
+
+    pub fn binary_snapshot(name: &str, bytes: &[u8]) -> Self {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        Self {
+            name: name.into(),
+            text: String::new(),
+            binary_base64: Some(STANDARD.encode(bytes)),
+        }
+    }
+
+    pub fn payload_bytes(&self) -> usize {
+        self.text
+            .len()
+            .saturating_add(self.binary_base64.as_ref().map_or(0, String::len))
+    }
+
+    pub fn pdf_bytes(&self) -> Result<Option<Vec<u8>>> {
+        let invalid = || failure("PDF_INVALID", "添付の内容をPDFとして読み取れません。");
+        if !Self::is_pdf_name(&self.name) {
+            return if self.binary_base64.is_none()
+                || Self::is_xlsx_name(&self.name)
+                || Self::is_image_name(&self.name)
+            {
+                Ok(None)
+            } else {
+                Err(invalid())
+            };
+        }
+        let bytes = self.decode_binary("PDF_INVALID", "添付の内容をPDFとして読み取れません。")?;
+        if !bytes[..bytes.len().min(1024)]
+            .windows(5)
+            .any(|part| part == b"%PDF-")
+        {
+            return Err(invalid());
+        }
+        Ok(Some(bytes))
+    }
+
+    pub fn xlsx_bytes(&self) -> Result<Option<Vec<u8>>> {
+        if !Self::is_xlsx_name(&self.name) {
+            return Ok(None);
+        }
+        const MESSAGE: &str = "添付の内容をXLSXとして読み取れません。";
+        let bytes = self.decode_binary("XLSX_INVALID", MESSAGE)?;
+        if !bytes.starts_with(b"PK\x03\x04") {
+            return Err(failure("XLSX_INVALID", MESSAGE));
+        }
+        Ok(Some(bytes))
+    }
+
+    pub fn image_bytes(&self) -> Result<Option<Vec<u8>>> {
+        if !Self::is_image_name(&self.name) {
+            return Ok(None);
+        }
+        const MESSAGE: &str = "添付の内容がファイル名のPNGまたはJPEG形式と一致しません。";
+        let bytes = self.decode_binary("IMAGE_INVALID", MESSAGE)?;
+        if !Self::image_header_matches(&self.name, &bytes) {
+            return Err(failure("IMAGE_INVALID", MESSAGE));
+        }
+        Ok(Some(bytes))
+    }
+
+    fn decode_binary(&self, code: &str, message: &str) -> Result<Vec<u8>> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let encoded = self.binary_base64.as_ref().filter(|_| self.text.is_empty());
+        let encoded = encoded.ok_or_else(|| failure(code, message))?;
+        if encoded.len() > MAX_BINARY_ATTACHMENT_BYTES / 3 * 4 {
+            return Err(failure(
+                "ATTACHMENT_LIMIT",
+                "添付のデータが上限を超えています。",
+            ));
+        }
+        STANDARD.decode(encoded).map_err(|_| failure(code, message))
+    }
+
+    fn extension(name: &str) -> Option<&str> {
+        let (stem, extension) = name.rsplit_once('.')?;
+        let valid = !stem.is_empty()
+            && !extension.is_empty()
+            && name.len() <= 1024
+            && name.trim() == name
+            && !name.chars().any(|c| {
+                c.is_control()
+                    || matches!(
+                        c,
+                        '/' | '\\' | ':' | '<' | '>' | '"' | '|' | '?' | '*'
+                            | '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}'
+                    )
+            });
+        valid.then_some(extension)
+    }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -88,6 +246,101 @@ impl ResourceBudget {
         }
     }
 }
+
+/// Provenance of text recognized from an explicitly submitted audio turn.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SpeechInput {
+    pub recognizer: String,
+    pub wave_sha256: String,
+    pub wave_base64: String,
+    pub sample_rate: u32,
+    pub start_frame: usize,
+    pub end_frame: usize,
+}
+
+impl SpeechInput {
+    pub fn from_wave(recognizer: &str, wave: &[u8], sample_rate: u32, end_frame: usize) -> Self {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        Self {
+            recognizer: recognizer.into(),
+            wave_sha256: digest(wave),
+            wave_base64: STANDARD.encode(wave),
+            sample_rate,
+            start_frame: 0,
+            end_frame,
+        }
+    }
+
+    pub fn payload_bytes(&self) -> usize {
+        let padding = usize::from(self.wave_base64.ends_with('='))
+            + usize::from(self.wave_base64.ends_with("=="));
+        (self.wave_base64.len() / 4 * 3).saturating_sub(padding)
+    }
+
+    pub fn wave_bytes(&self, limit: usize) -> Result<Vec<u8>> {
+        use base64::{Engine, engine::general_purpose::STANDARD};
+        let invalid = || {
+            failure(
+                "SPEECH_INPUT_INVALID",
+                "保存した音声入力の原本を照合できません。",
+            )
+        };
+        if self.wave_base64.len() > (limit.saturating_add(2) / 3).saturating_mul(4)
+            || self.payload_bytes() > limit
+        {
+            return Err(invalid());
+        }
+        let bytes = STANDARD.decode(&self.wave_base64).map_err(|_| invalid())?;
+        if bytes.len() > limit || digest(&bytes) != self.wave_sha256 {
+            return Err(invalid());
+        }
+        Ok(bytes)
+    }
+}
+
+/// A named, owner-scoped document workflow and the upper bounds on its tools.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PurposeProfile {
+    pub name: String,
+    pub task: PurposeTask,
+    pub attachments: Vec<RequestAttachment>,
+    pub tools: PurposeTools,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum PurposeTask {
+    Summarize,
+    Find { query: String },
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PurposeTools {
+    pub read_hosts: BTreeSet<String>,
+    pub write_files: bool,
+    pub wasm_execution: bool,
+}
+
+/// Callers provide the name. Only Core may add the verified binding.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PurposeUse {
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub binding: Option<PurposeBinding>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PurposeBinding {
+    pub profile_sha256: String,
+    pub task: PurposeTask,
+    pub requested_permissions: Permissions,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct RequestEnvelope {
@@ -98,6 +351,12 @@ pub struct RequestEnvelope {
     pub text: String,
     pub locale: String,
     pub permissions: Permissions,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub attachments: Vec<RequestAttachment>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub speech: Option<SpeechInput>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub purpose: Option<Box<PurposeUse>>,
     pub output_path: Option<PathBuf>,
     pub context_ref: Option<String>,
     pub budget: ResourceBudget,
@@ -112,10 +371,26 @@ impl RequestEnvelope {
             text: text.into(),
             locale: "ja".into(),
             permissions: Permissions::default(),
+            attachments: Vec::new(),
+            speech: None,
+            purpose: None,
             output_path: None,
             context_ref: None,
             budget: ResourceBudget::development(),
         }
+    }
+
+    pub fn input_bytes(&self) -> usize {
+        self.attachments.iter().fold(
+            self.text
+                .len()
+                .saturating_add(self.speech.as_ref().map_or(0, SpeechInput::payload_bytes)),
+            |bytes, file| {
+                bytes
+                    .saturating_add(file.name.len())
+                    .saturating_add(file.payload_bytes())
+            },
+        )
     }
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -259,6 +534,99 @@ pub enum SummaryLineLimit {
     AtMost(usize),
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DocumentReviewOperation {
+    Summarize,
+    Compare,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NewsPeriod {
+    Today,
+    Latest,
+    Yesterday,
+    ThisMorning,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum AttachmentTableMedia {
+    #[default]
+    Csv,
+    Xlsx,
+    Mixed,
+}
+
+impl AttachmentTableMedia {
+    pub fn is_csv(&self) -> bool {
+        *self == Self::Csv
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImageRectangle {
+    pub x: u32,
+    pub y: u32,
+    pub width: u32,
+    pub height: u32,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ImageShape {
+    Circle,
+    Rectangle,
+    Triangle,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ImagePlacement {
+    pub shape: ImageShape,
+    pub rectangle: ImageRectangle,
+    pub color: [u8; 3],
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum ImageOperation {
+    Draw {
+        width: u32,
+        height: u32,
+        background: [u8; 3],
+        shapes: Vec<ImagePlacement>,
+    },
+    Fill {
+        rectangle: ImageRectangle,
+        color: [u8; 3],
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ConversationEventKind {
+    Observation,
+    Discovery,
+    Activity,
+    Movement,
+    Difficulty,
+    Feeling,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationEvent {
+    pub report: SourceSpan,
+    pub predicate: SourceSpan,
+    pub target: Option<SourceSpan>,
+    pub greeting: Option<SourceSpan>,
+    pub kind: ConversationEventKind,
+    pub negative: bool,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Intent {
@@ -271,18 +639,77 @@ pub enum Intent {
     RespondOnConversationTopic {
         remark: SourceSpan,
     },
+    ReportConversationEvent {
+        event: ConversationEvent,
+        continue_topic: bool,
+    },
+    ResumeConversationTopic {
+        topic: SourceSpan,
+        event: Option<ConversationEvent>,
+    },
+    DraftMessage {
+        draft: Box<MessageDraft>,
+    },
+    DraftFiction {
+        draft: FictionRequest,
+    },
+    TranslateText {
+        request: TranslationRequest,
+    },
+    ReviseTranslation {
+        register: TranslationRegister,
+    },
+    PlanWork {
+        request: WorkPlanRequest,
+    },
+    ReviseWorkPlan {
+        change: WorkPlanChange,
+    },
+    ReviseMessage {
+        revision: MessageRevision,
+    },
+    CompareOptions {
+        decision: Box<DecisionRequest>,
+    },
+    ReviseDecision {
+        revision: DecisionRevision,
+    },
+    ReviseDecisionFromAttachment {
+        candidate: SourceSpan,
+        field: SourceSpan,
+    },
     AskLocalIdentity,
     AskLocalCapabilities,
+    InspectMemorySettings,
+    SetMemorySharing {
+        enabled: bool,
+    },
     AskWeb {
         topic: String,
         #[serde(default, skip_serializing_if = "std::ops::Not::not")]
         elevation_in_kilometres: bool,
+    },
+    CompareWebResearch {
+        topic: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        expression: Option<String>,
+    },
+    AskCurrentNews {
+        topic: Option<String>,
+        period: NewsPeriod,
+    },
+    ExplainCurrentNews {
+        origin: String,
     },
     Calculate {
         expression: String,
     },
     ConvertPreviousLength {
         unit: String,
+    },
+    ScalePreviousCalculation {
+        numerator: i64,
+        denominator: u64,
     },
     ClarifyPreviousLength,
     ClarifyFilteredCsvStatistics,
@@ -322,11 +749,16 @@ pub enum Intent {
         replacement: String,
     },
     ExplainPrevious,
+    ExplainPreviousStop,
     ShowCalculationSequenceHistory,
     ExplainCalculationSequenceStep {
         step_id: String,
     },
     ReplacePreviousText {
+        old: String,
+        new: String,
+    },
+    ReplaceBranchSource {
         old: String,
         new: String,
     },
@@ -358,6 +790,9 @@ pub enum Intent {
     SummarizePreviousResultLines {
         limit: SummaryLineLimit,
     },
+    SummarizeBranchSource {
+        limit: SummaryLineLimit,
+    },
     GenerateCode {
         document: String,
     },
@@ -365,6 +800,9 @@ pub enum Intent {
         name: String,
         parameters: Vec<String>,
         expression: SourceSpan,
+    },
+    GenerateFunctionFromSpec {
+        spec: Box<FunctionalPythonSpec>,
     },
     ReadCode {
         document: String,
@@ -380,6 +818,16 @@ pub enum Intent {
     },
     VerifyPreviousCode {
         document: String,
+    },
+    RepairCode {
+        document: SourceSpan,
+    },
+    ExecuteWasm {
+        document: SourceSpan,
+    },
+    ExecuteAttachedCsvAggregation {
+        group_column: SourceSpan,
+        operation: CsvAggregationOperation,
     },
     FetchPreviousSearchCandidate {
         rank: u32,
@@ -412,6 +860,54 @@ pub enum Intent {
         document: String,
         group_column: String,
         value_column: String,
+    },
+    CreateCsvChart {
+        document: SourceSpan,
+        group_column: SourceSpan,
+        value_column: SourceSpan,
+    },
+    CreateCsvChartFromExecution {
+        artifact_name: SourceSpan,
+        group_column: SourceSpan,
+        value_column: SourceSpan,
+    },
+    CreateCsvChartFromExecutionValues {
+        artifact_name: SourceSpan,
+        group_column: SourceSpan,
+        value_column: SourceSpan,
+    },
+    CreateCsvChartFromAttachments {
+        group_column: SourceSpan,
+        value_column: SourceSpan,
+    },
+    SummarizeAttachedDocuments,
+    FindInAttachedDocuments {
+        query: SourceSpan,
+    },
+    FindInPreviousAttachedDocuments {
+        query: SourceSpan,
+    },
+    ReviewAttachedDocumentFields {
+        operation: DocumentReviewOperation,
+        fields: Vec<SourceSpan>,
+        previous: bool,
+    },
+    ProduceImage {
+        operation: ImageOperation,
+    },
+    SpeakPreviousAnswer,
+    AnalyzeAttachments {
+        label: SourceSpan,
+        filter_column: SourceSpan,
+        value_column: SourceSpan,
+        #[serde(default, skip_serializing_if = "AttachmentTableMedia::is_csv")]
+        table_media: AttachmentTableMedia,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        sheet: Option<SourceSpan>,
+    },
+    FilterPreviousCsvChart {
+        column: SourceSpan,
+        equals: SourceSpan,
     },
     CsvCompare {
         document: String,
@@ -526,6 +1022,12 @@ pub enum Intent {
     Statistics {
         values: Vec<String>,
         units: Option<Vec<String>>,
+    },
+    DescribeStatistics {
+        values: Vec<String>,
+        metrics: Vec<Statistic>,
+        show_values: bool,
+        explanation: Option<ExplanationRequest>,
     },
     NormalizeProbabilityWeights {
         weights: Vec<String>,
@@ -658,6 +1160,11 @@ pub enum Intent {
     AskWhy {
         proposition: Proposition,
     },
+    AskCounterfactualRelation {
+        assumptions: Vec<Proposition>,
+        proposition: Proposition,
+        replace_opposites: bool,
+    },
     InspectPremises {
         subject: String,
     },
@@ -699,6 +1206,112 @@ pub struct SourceSpan {
     pub end: usize,
     pub text: String,
 }
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum CsvAggregationOperation {
+    Count,
+    Sum { value_column: SourceSpan },
+}
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FunctionalPythonSpec {
+    pub name: Option<SourceSpan>,
+    pub parameters: Vec<SourceSpan>,
+    pub body: FunctionalPythonBody,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum FunctionalPythonBody {
+    Piecewise {
+        cases: Vec<NumericCase>,
+        otherwise: NumericValue,
+    },
+    Palindrome {
+        requirement: SourceSpan,
+    },
+    NumericList {
+        requirement: SourceSpan,
+        list_index: usize,
+        selection: NumericListSelection,
+        output: NumericListOutput,
+    },
+    StableUniqueList {
+        requirement: SourceSpan,
+        list_index: usize,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum NumericListSelection {
+    All,
+    Boundary {
+        comparison: NumericComparison,
+        threshold: NumericOperand,
+    },
+    Parity {
+        even: bool,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NumericListOutput {
+    Count,
+    Sum,
+    Keep,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct NumericCase {
+    pub left: NumericOperand,
+    pub comparison: NumericComparison,
+    pub right: NumericOperand,
+    pub result: NumericValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum NumericOperand {
+    Parameter { source: SourceSpan, index: usize },
+    Integer { source: SourceSpan, value: i64 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum NumericValue {
+    Operand {
+        value: NumericOperand,
+    },
+    Arithmetic {
+        left: NumericOperand,
+        operation: NumericOperation,
+        right: NumericOperand,
+    },
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NumericComparison {
+    Less,
+    LessEqual,
+    Greater,
+    GreaterEqual,
+    Equal,
+    NotEqual,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum NumericOperation {
+    Add,
+    Subtract,
+    Multiply,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SealedSourceEvidence {
@@ -716,6 +1329,350 @@ pub struct CalculationSequenceStep {
     pub expression: SourceSpan,
     pub requires: Vec<String>,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionRevision {
+    pub named: bool,
+    pub change: DecisionChange,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum DecisionChange {
+    Fact {
+        candidate: SourceSpan,
+        fact: DecisionFact,
+    },
+    Requirement {
+        property: SourceSpan,
+        expected: DecisionValue,
+        relation: Option<DecisionRelation>,
+    },
+    Preference {
+        property: SourceSpan,
+        direction: Option<DecisionDirection>,
+        only: bool,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionRequest {
+    pub candidates: Vec<DecisionCandidate>,
+    pub requirements: Vec<DecisionRequirement>,
+    pub preferences: Vec<DecisionPreference>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionCandidate {
+    pub name: SourceSpan,
+    pub facts: Vec<DecisionFact>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionFact {
+    pub property: SourceSpan,
+    pub value: DecisionValue,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum DecisionValue {
+    Quantity {
+        amount: SourceSpan,
+        unit: Option<SourceSpan>,
+    },
+    Flag {
+        present: bool,
+        span: SourceSpan,
+    },
+    Unknown {
+        span: SourceSpan,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionRequirement {
+    pub property: SourceSpan,
+    pub relation: DecisionRelation,
+    pub expected: DecisionValue,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DecisionRelation {
+    AtLeast,
+    AtMost,
+    Greater,
+    Less,
+    Equal,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionPreference {
+    pub property: SourceSpan,
+    pub direction: DecisionDirection,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum DecisionDirection {
+    Minimize,
+    Maximize,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageDraft {
+    pub recipient: Option<SourceSpan>,
+    pub purpose: MessagePurpose,
+    pub circumstance: Option<SourceSpan>,
+    pub reason: Option<SourceSpan>,
+    pub omit_reason: bool,
+    pub format: MessageFormat,
+    pub register: WritingRegister,
+    pub sentence_limit: Option<SentenceLimit>,
+    pub omit_subject: bool,
+    pub body_only: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FictionRequest {
+    pub protagonist: Option<SourceSpan>,
+    pub setting: Option<SourceSpan>,
+    pub required_elements: Vec<SourceSpan>,
+    pub audience: FictionAudience,
+    pub register: FictionRegister,
+    pub tone: FictionTone,
+    pub genre: FictionGenre,
+    pub sentence_count: u8,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FictionAudience {
+    #[default]
+    General,
+    YoungChildren,
+    Elementary,
+    Adult,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FictionRegister {
+    #[default]
+    Plain,
+    Polite,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FictionTone {
+    #[default]
+    Neutral,
+    Warm,
+    Playful,
+    Mysterious,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum FictionGenre {
+    Story,
+    FairyTale,
+    ShortStory,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TranslationRequest {
+    pub source: SourceSpan,
+    pub source_language: TranslationLanguage,
+    pub target_language: TranslationLanguage,
+    pub register: TranslationRegister,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TranslationLanguage {
+    Japanese,
+    English,
+}
+
+impl TranslationLanguage {
+    pub fn locale(self) -> &'static str {
+        match self {
+            Self::Japanese => "ja",
+            Self::English => "en",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum TranslationRegister {
+    #[default]
+    Preserve,
+    Polite,
+    Plain,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkPlanRequest {
+    pub purpose: Option<SourceSpan>,
+    pub tasks: Vec<WorkPlanTask>,
+    pub dependencies: Vec<WorkPlanDependency>,
+    pub personnel: u8,
+    pub deadline_minutes: u16,
+    pub allow_parallel: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkPlanTask {
+    pub name: SourceSpan,
+    pub duration_minutes: u16,
+    pub workers: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct WorkPlanDependency {
+    pub before: SourceSpan,
+    pub after: SourceSpan,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum WorkPlanChange {
+    TaskDuration {
+        task: SourceSpan,
+        duration_minutes: u16,
+    },
+    Personnel {
+        personnel: u8,
+    },
+    Deadline {
+        deadline_minutes: u16,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageRevision {
+    pub named: bool,
+    pub format: Option<MessageFormat>,
+    pub sentence_limit: Option<SentenceLimit>,
+    pub omit_subject: Option<bool>,
+    pub register: Option<WritingRegister>,
+    pub shorten: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE", deny_unknown_fields)]
+pub enum MessagePurpose {
+    Request {
+        action: SourceSpan,
+    },
+    Ask {
+        clause: MessageClause,
+    },
+    Inform {
+        clause: MessageClause,
+    },
+    Announce {
+        clause: MessageClause,
+    },
+    DeclineInvitation {
+        occasion: SourceSpan,
+        gratitude: Option<SourceSpan>,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MessageClause {
+    pub stem: SourceSpan,
+    pub ending: ClauseEnding,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ClauseEnding {
+    Do,
+    DoNot,
+    Did,
+    WantToDo,
+    Can,
+    Cannot,
+    Is,
+    IsNot,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum MessageFormat {
+    Email,
+    Message,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum WritingRegister {
+    Formal,
+    Polite,
+    Casual,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum SentenceLimit {
+    Exact(u8),
+    AtMost(u8),
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum Statistic {
+    Mean,
+    Median,
+    Sum,
+    Minimum,
+    Maximum,
+    PopulationVariance,
+    SampleVariance,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ExplanationAudience {
+    General,
+    Beginner,
+    Technical,
+    Unresolved(String),
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ExplanationRequest {
+    pub audience: ExplanationAudience,
+    pub detail: ExplanationDetail,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum ExplanationDetail {
+    Standard,
+    Brief,
+    Detailed,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MeaningIR {
     pub parser_version: String,
@@ -923,6 +1880,27 @@ pub struct ResultRecord {
     pub actor_memory_revision: Option<u64>,
     pub execution_graph_ref: Option<String>,
 }
+/// A child conversation anchored to a specific immutable source revision.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct CaseBranch {
+    pub case_id: String,
+    pub source_case_id: String,
+    pub source_result_id: String,
+    pub source_revision: u64,
+    pub source_state_sha256: String,
+}
+
+/// A read-only exchange displayed with its original scope.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct BranchHistoryEntry {
+    pub source_case_id: String,
+    pub result_id: String,
+    pub input_text: String,
+    pub text: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CaseRevision {
     pub schema_version: String,

@@ -4,7 +4,7 @@ use crate::ports::{JsonKind, strict_json_document};
 use crate::store::{Store, VerifiedCaseHistory};
 use minidora_domain::{
     ContentPlan, Error, EvidencePacket, Guarantee, InputBundle, Intent, Lifecycle, MeaningIR,
-    Result, ResultRecord, SummaryLineLimit, canonical, digest, failure, identity,
+    RequestEnvelope, Result, ResultRecord, SummaryLineLimit, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
@@ -82,6 +82,7 @@ pub(crate) const PREVIOUS_RESULT_SUMMARY_KIND: &str = "minidora.previous-result-
 const PREVIOUS_RESULT_LINE_SUMMARY_KIND: &str = "minidora.previous-result-line-summary.v1";
 pub(crate) const PREVIOUS_RESULT_SUMMARY_HEADER: &str = "前回結果からの抽出候補";
 const LINE_SUMMARY_NOTE: &str = "（抽出候補・網羅性未確認）";
+const FICTION_EXCERPT_NOTE: &str = "（創作の抜粋）";
 
 #[derive(Clone, Copy)]
 pub(crate) enum PreviousResultSummaryLimits {
@@ -121,6 +122,8 @@ pub(crate) struct PreviousResultSummaryArtifact {
     pub summary: ExtractiveSummaryCandidates,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub line_limit: Option<SummaryLineLimit>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fiction_source_ref: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -524,10 +527,19 @@ fn push_sentence(
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum SummaryBoundaries {
+enum SummaryBoundaries<'a> {
     Legacy,
     FetchedPageBreaks,
-    RfcPagedProse { candidate_limit: usize },
+    RfcPagedProse {
+        candidate_limit: usize,
+    },
+    BranchAnswer {
+        quotes: Option<&'a [Range<usize>]>,
+    },
+    Fiction {
+        reference: &'a str,
+        quotes: &'a [Range<usize>],
+    },
 }
 
 fn sentence_candidates(text: &str, line_layout: bool) -> Result<Vec<Candidate>> {
@@ -537,12 +549,25 @@ fn sentence_candidates(text: &str, line_layout: bool) -> Result<Vec<Candidate>> 
 fn sentence_candidates_with_boundaries(
     text: &str,
     line_layout: bool,
-    boundaries: SummaryBoundaries,
+    boundaries: SummaryBoundaries<'_>,
 ) -> Result<Vec<Candidate>> {
+    let branch_answer = matches!(boundaries, SummaryBoundaries::BranchAnswer { .. });
     let mut sentences = Vec::new();
     let mut start = 0usize;
     let mut chars = text.char_indices().peekable();
     while let Some((at, character)) = chars.next() {
+        if branch_answer
+            && character == '.'
+            && text[..at]
+                .chars()
+                .next_back()
+                .is_some_and(|previous| previous.is_ascii_alphanumeric())
+            && chars
+                .peek()
+                .is_some_and(|(_, next)| next.is_ascii_alphanumeric())
+        {
+            continue;
+        }
         if line_layout
             && character == '.'
             && text[..at].chars().next_back().is_some_and(char::is_numeric)
@@ -559,6 +584,14 @@ fn sentence_candidates_with_boundaries(
                 let (next_at, next) = chars.next().expect("peeked punctuation");
                 end = next_at + next.len_utf8();
             }
+            if branch_answer {
+                while chars.peek().is_some_and(|(_, next)| {
+                    matches!(*next, '」' | '』' | '）' | ')' | '”' | '’' | '"')
+                }) {
+                    let (next_at, next) = chars.next().expect("peeked closing punctuation");
+                    end = next_at + next.len_utf8();
+                }
+            }
             push_sentence(text, start, end, &mut sentences)?;
             start = end;
         } else if matches!(character, '\n' | '\r')
@@ -574,6 +607,47 @@ fn sentence_candidates_with_boundaries(
     }
     push_sentence(text, start, text.len(), &mut sentences)?;
     Ok(sentences)
+}
+
+fn branch_answer_candidates(
+    text: &str,
+    line_layout: bool,
+    quotes: Option<&[Range<usize>]>,
+) -> Result<Vec<Candidate>> {
+    if let Some(quotes) = quotes {
+        let mut candidates = Vec::new();
+        let mut previous_end = 0;
+        for range in quotes {
+            if range.start < previous_end
+                || text
+                    .get(range.clone())
+                    .is_none_or(|quote| quote.contains(['\r', '\n', '\u{2028}', '\u{2029}']))
+            {
+                return Err(failure(
+                    "RESULT_SUMMARY_SOURCE_MISMATCH",
+                    "分岐元の回答と引用箇所を照合できません。",
+                ));
+            }
+            push_sentence(text, range.start, range.end, &mut candidates)?;
+            previous_end = range.end;
+        }
+        return Ok(candidates);
+    }
+    fn complete(candidate: &Candidate) -> bool {
+        candidate
+            .text
+            .trim_end_matches(['」', '』', '）', ')', '”', '’', '"'])
+            .ends_with(['。', '！', '？', '!', '?', '.'])
+    }
+    let mut candidates = sentence_candidates_with_boundaries(
+        text,
+        line_layout,
+        SummaryBoundaries::BranchAnswer { quotes: None },
+    )?;
+    if candidates.iter().any(complete) {
+        candidates.retain(complete);
+    }
+    Ok(candidates)
 }
 
 fn rfc_paged_prose_candidates(text: &str, candidate_limit: usize) -> Result<Vec<Candidate>> {
@@ -1547,7 +1621,7 @@ fn select_sentences(
 fn extractive_summary_candidates_internal(
     document: &str,
     line_layout: bool,
-    boundaries: SummaryBoundaries,
+    boundaries: SummaryBoundaries<'_>,
 ) -> Result<ExtractiveSummaryCandidates> {
     if document.is_empty() || document.len() > MAX_REQUEST_BYTES {
         return Err(failure(
@@ -1611,6 +1685,7 @@ fn extractive_summary_candidates_internal(
         ));
     }
     let rfc_prose = matches!(boundaries, SummaryBoundaries::RfcPagedProse { .. });
+    let branch_answer = matches!(boundaries, SummaryBoundaries::BranchAnswer { .. });
     if text.trim().is_empty()
         || text.len() > MAX_REQUEST_BYTES
         || text.chars().count() > MAX_TEXT_SCALARS
@@ -1618,7 +1693,10 @@ fn extractive_summary_candidates_internal(
         || text.chars().any(|character| {
             character.is_control()
                 && !matches!(character, '\t' | '\n' | '\r')
-                && !(boundaries != SummaryBoundaries::Legacy && character == '\x0c')
+                && !(matches!(
+                    boundaries,
+                    SummaryBoundaries::FetchedPageBreaks | SummaryBoundaries::RfcPagedProse { .. }
+                ) && character == '\x0c')
         })
     {
         return Err(failure(
@@ -1626,12 +1704,25 @@ fn extractive_summary_candidates_internal(
             "text must be nonempty, at most 100000 Unicode scalars/256000 bytes, with supported controls only",
         ));
     }
-    let mut candidates = if let SummaryBoundaries::RfcPagedProse { candidate_limit } = boundaries {
-        rfc_paged_prose_candidates(&text, candidate_limit)?
-    } else {
-        sentence_candidates_with_boundaries(&text, line_layout, boundaries)?
+    let mut candidates = match boundaries {
+        SummaryBoundaries::RfcPagedProse { candidate_limit } => {
+            rfc_paged_prose_candidates(&text, candidate_limit)?
+        }
+        SummaryBoundaries::BranchAnswer { quotes } => {
+            branch_answer_candidates(&text, line_layout, quotes)?
+        }
+        SummaryBoundaries::Fiction { quotes, .. } => {
+            branch_answer_candidates(&text, line_layout, Some(quotes))?
+        }
+        _ => sentence_candidates_with_boundaries(&text, line_layout, boundaries)?,
     };
     if candidates.is_empty() {
+        if branch_answer {
+            return Err(failure(
+                "RESULT_SUMMARY_LINE_COUNT_UNMET",
+                "分岐元の回答から引用できる本文が見つかりません。",
+            ));
+        }
         return Err(schema("text contains no sentence candidates"));
     }
     if required_sentence_indices
@@ -1682,6 +1773,9 @@ fn extractive_summary_candidates_internal(
         let output_start = output.len();
         output.push_str(&candidate.text);
         let output_end = output.len();
+        if spans.is_empty() && matches!(boundaries, SummaryBoundaries::Fiction { .. }) {
+            output.push_str(FICTION_EXCERPT_NOTE);
+        }
         if line_layout && spans.is_empty() {
             output.push_str(if rfc_prose {
                 RFC_PAGED_PROSE_LINE_NOTE
@@ -1713,7 +1807,9 @@ fn extractive_summary_candidates_internal(
             OPERATION
         }
         .into(),
-        algorithm: if rfc_prose {
+        algorithm: if branch_answer {
+            "BRANCH_ANSWER_COMPLETE_SENTENCE_VERIFIED_QUOTE_LINE_OUTPUT_V1"
+        } else if rfc_prose {
             RFC_PAGED_PROSE_ALGORITHM
         } else if line_layout {
             LINE_SUMMARY_ALGORITHM
@@ -1780,13 +1876,184 @@ fn shortest_suffix_totals(
     minimum
 }
 
+struct FictionExcerptSource {
+    reference: String,
+    quotes: Vec<Range<usize>>,
+}
+
+impl FictionExcerptSource {
+    fn boundaries(&self) -> SummaryBoundaries<'_> {
+        SummaryBoundaries::Fiction {
+            reference: &self.reference,
+            quotes: &self.quotes,
+        }
+    }
+}
+
+fn fiction_excerpt_source(
+    store: &Store,
+    actor: &str,
+    case: &str,
+    source: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<Option<FictionExcerptSource>> {
+    // Text only gates the lookup. A heading or an annotation in caller-supplied
+    // prose cannot make it fiction without the case-owned typed artifact.
+    let direct = source.text.starts_with(crate::fiction::LABEL);
+    if !direct && !source.text.contains(FICTION_EXCERPT_NOTE) {
+        return Ok(None);
+    }
+    let Some((_, bundle)) =
+        store.get_input_bundle(actor, case, &source.input_id, source.input_version)?
+    else {
+        return Ok(None);
+    };
+    let invalid = || {
+        failure(
+            "RESULT_SUMMARY_FICTION_SOURCE_INVALID",
+            "元の創作と抜粋箇所を保存済みの成果から照合できません。",
+        )
+    };
+
+    let (reference, quotes) = if let Intent::DraftFiction { draft } = &bundle.meaning.intent {
+        let body = source
+            .text
+            .strip_prefix(crate::fiction::LABEL)
+            .ok_or_else(invalid)?;
+        let (reference, dependencies) = plan.dependencies.split_last().ok_or_else(invalid)?;
+        if identity(&bundle.request)? != source.id
+            || source.guarantee != Guarantee::Computed
+            || !crate::input::verified_fiction_input(&bundle)?
+            || dependencies != source.dependencies.as_slice()
+        {
+            return Err(invalid());
+        }
+        let bytes = store.get_bytes(actor, case, reference)?;
+        let artifact: crate::fiction::GeneratedFictionArtifact =
+            serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        let meaning = crate::fiction::FictionMeaningPlan::from_draft(
+            draft.clone(),
+            bundle.fingerprint.clone(),
+        )?;
+        if artifact.meaning_plan != meaning
+            || meaning.dependencies() != source.dependencies
+            || artifact.content_generation.text != source.text
+            || artifact.content_generation.evidence_ids != source.dependencies
+            || artifact.content_generation.model_revision != plan.model_revision
+            || artifact.content_generation.model_artifact_ref.as_deref()
+                != Some(plan.model_artifact_ref.as_str())
+            || canonical(&crate::fiction::GeneratedFictionArtifact::new(
+                meaning,
+                artifact.content_generation,
+            ))? != bytes
+        {
+            return Err(invalid());
+        }
+        artifact.meaning_plan.verify_surface(&source.text)?;
+        let start = crate::fiction::LABEL.len();
+        let quotes = sentence_candidates(body, false)?
+            .into_iter()
+            .map(|sentence| (start + sentence.start)..(start + sentence.end))
+            .collect();
+        (reference, quotes)
+    } else if PreviousResultSummaryLimits::from_intent(&bundle.meaning.intent).is_some() {
+        let reference = source.dependencies.first().ok_or_else(invalid)?;
+        let bytes = store.get_bytes(actor, case, reference)?;
+        let artifact: PreviousResultSummaryArtifact =
+            serde_json::from_slice(&bytes).map_err(|_| invalid())?;
+        if artifact.fiction_source_ref.is_none() {
+            return Ok(None);
+        }
+        if identity(&bundle.request)? != source.id
+            || source.guarantee != Guarantee::Hypothesis
+            || artifact.summary_result_id != source.id
+            || source.dependencies.get(1) != Some(&artifact.source_result_id)
+            || bundle.meaning.context_result_ref.as_ref() != Some(&artifact.source_result_id)
+            || !plan.dependencies.starts_with(&source.dependencies)
+            || artifact.output_unit() != source.text
+            || canonical(&artifact)? != bytes
+        {
+            return Err(invalid());
+        }
+        // Excerpt spans are relative to its rendered summary, which may have a
+        // separate header in the adopted result text. Copy only the verified quotes.
+        let header_size = source.text.len() - artifact.summary.text.len();
+        let quotes = artifact
+            .summary
+            .sentences
+            .iter()
+            .map(|sentence| {
+                let range = sentence.output_start..sentence.output_end;
+                if artifact.summary.text.get(range.clone()) != Some(sentence.text.as_str()) {
+                    return Err(invalid());
+                }
+                Ok((range.start + header_size)..(range.end + header_size))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        (reference, quotes)
+    } else {
+        return Ok(None);
+    };
+    Ok(Some(FictionExcerptSource {
+        reference: reference.clone(),
+        quotes,
+    }))
+}
+
 pub(crate) fn summarize_previous_result_with_limits(
+    store: &Store,
+    request: &RequestEnvelope,
+    source: &ResultRecord,
+    limits: PreviousResultSummaryLimits,
+) -> Result<PreviousResultSummaryArtifact> {
+    let (Some(plan), Some(render)) = (&source.content_plan, &source.render) else {
+        return Err(failure(
+            "PREVIOUS_RESULT_UNSUMMARIZABLE",
+            "前回結果に採用本文または実表示記録がありません。",
+        ));
+    };
+    let fiction = fiction_excerpt_source(store, &request.actor_id, &request.case_id, source, plan)?;
+    summarize_result(
+        &identity(request)?,
+        &source.id,
+        &plan.id,
+        &render.actual_sha256,
+        &source.text,
+        limits,
+        fiction
+            .as_ref()
+            .map_or(SummaryBoundaries::Legacy, FictionExcerptSource::boundaries),
+    )
+}
+
+pub(crate) fn summarize_branch_answer(
+    summary_result_id: &str,
+    source_result_id: &str,
+    source_content_plan_id: &str,
+    source_render_sha256: &str,
+    source_text: &str,
+    limit: SummaryLineLimit,
+    quotes: Option<&[Range<usize>]>,
+) -> Result<PreviousResultSummaryArtifact> {
+    summarize_result(
+        summary_result_id,
+        source_result_id,
+        source_content_plan_id,
+        source_render_sha256,
+        source_text,
+        PreviousResultSummaryLimits::Lines(limit),
+        SummaryBoundaries::BranchAnswer { quotes },
+    )
+}
+
+fn summarize_result(
     summary_result_id: &str,
     source_result_id: &str,
     source_content_plan_id: &str,
     source_render_sha256: &str,
     source_text: &str,
     limits: PreviousResultSummaryLimits,
+    boundaries: SummaryBoundaries<'_>,
 ) -> Result<PreviousResultSummaryArtifact> {
     if !sha256_id(summary_result_id)
         || !sha256_id(source_result_id)
@@ -1807,24 +2074,28 @@ pub(crate) fn summarize_previous_result_with_limits(
             limit @ (SummaryLineLimit::Exact(count) | SummaryLineLimit::AtMost(count)),
         ) => (count, None, Some(limit)),
     };
-    let document = match max_chars {
-        Some(max_chars) => serde_json::to_string(&serde_json::json!({
+    let document = match (boundaries, line_limit, max_chars) {
+        (SummaryBoundaries::BranchAnswer { .. }, Some(limit), _) => {
+            serde_json::to_string(&serde_json::json!({
+                "text": source_text,
+                "line_limit": limit,
+                "format": "bullets"
+            }))?
+        }
+        (_, _, Some(max_chars)) => serde_json::to_string(&serde_json::json!({
             "text": source_text,
             "max_sentences": max_sentences,
             "max_chars": max_chars,
             "format": "bullets"
         }))?,
-        None => serde_json::to_string(&serde_json::json!({
+        _ => serde_json::to_string(&serde_json::json!({
             "text": source_text,
             "max_sentences": max_sentences,
             "format": "bullets"
         }))?,
     };
-    let summary = extractive_summary_candidates_internal(
-        &document,
-        line_limit.is_some(),
-        SummaryBoundaries::Legacy,
-    )?;
+    let summary =
+        extractive_summary_candidates_internal(&document, line_limit.is_some(), boundaries)?;
     if summary.source_text != source_text
         || summary.source_text_sha256 != digest(source_text.as_bytes())
     {
@@ -1863,6 +2134,10 @@ pub(crate) fn summarize_previous_result_with_limits(
         summary_unit_sha256: String::new(),
         summary,
         line_limit,
+        fiction_source_ref: match boundaries {
+            SummaryBoundaries::Fiction { reference, .. } => Some(reference.to_owned()),
+            _ => None,
+        },
     };
     artifact.summary_unit_sha256 = digest(artifact.output_unit().as_bytes());
     Ok(artifact)
@@ -1977,13 +2252,51 @@ pub(crate) fn verify_retained_previous_result_summary(
             "the summary input did not seal the exact source result",
         ));
     }
-    let artifact = summarize_previous_result_with_limits(
+    let retained = result
+        .dependencies
+        .first()
+        .map(|reference| store.get_bytes_if_present(actor, case, reference))
+        .transpose()?
+        .flatten()
+        .ok_or_else(|| {
+            failure(
+                "RESULT_SUMMARY_ARTIFACT_UNAVAILABLE",
+                "the recomputed summary has no retained report in this case",
+            )
+        })?;
+    let saved: PreviousResultSummaryArtifact = serde_json::from_slice(&retained).map_err(|_| {
+        failure(
+            "RECOVERY_RESULT_SUMMARY_MISMATCH",
+            "the retained summary artifact has an invalid shape",
+        )
+    })?;
+    // The optional reference is the opt-in on the already-adopted artifact.
+    // Older summaries replay their original extraction, including stored results
+    // from before the first fiction-aware extraction was available.
+    let fiction = saved
+        .fiction_source_ref
+        .as_ref()
+        .map(|reference| {
+            fiction_excerpt_source(store, actor, case, source, source_plan)?
+                .filter(|proof| &proof.reference == reference)
+                .ok_or_else(|| {
+                    failure(
+                        "RECOVERY_RESULT_SUMMARY_MISMATCH",
+                        "the retained fiction summary differs from its verified source",
+                    )
+                })
+        })
+        .transpose()?;
+    let artifact = summarize_result(
         &result.id,
         &source.id,
         &source_plan.id,
         &source_render.actual_sha256,
         &source.text,
         limits,
+        fiction
+            .as_ref()
+            .map_or(SummaryBoundaries::Legacy, FictionExcerptSource::boundaries),
     )?;
     if artifact.summary.sentence_count > request.budget.max_actions as usize {
         return Err(failure(
@@ -2000,14 +2313,6 @@ pub(crate) fn verify_retained_previous_result_summary(
         ));
     }
     let summary_ref = digest(&artifact_bytes);
-    let retained = store
-        .get_bytes_if_present(actor, case, &summary_ref)?
-        .ok_or_else(|| {
-            failure(
-                "RESULT_SUMMARY_ARTIFACT_UNAVAILABLE",
-                "the recomputed summary has no retained report in this case",
-            )
-        })?;
     if retained != artifact_bytes {
         return Err(failure(
             "RECOVERY_RESULT_SUMMARY_MISMATCH",
@@ -4572,7 +4877,7 @@ fn summarize_page_break_source_for_intent(
     source_result_id: &str,
     packet: &EvidencePacket,
     source_packet_ref: &str,
-    boundaries: SummaryBoundaries,
+    boundaries: SummaryBoundaries<'_>,
 ) -> Result<PageBreakSourceSummary> {
     let rfc_prose = matches!(boundaries, SummaryBoundaries::RfcPagedProse { .. });
     if !has_fetched_page_breaks(packet)
@@ -4757,7 +5062,7 @@ fn summarize_fetched_source_internal(
     packet: &EvidencePacket,
     source_packet_ref: &str,
     limits: PreviousResultSummaryLimits,
-    boundaries: SummaryBoundaries,
+    boundaries: SummaryBoundaries<'_>,
 ) -> Result<SourceExtractiveSummaryCandidates> {
     if !sha256_id(source_result_id) {
         return Err(failure(
@@ -4830,6 +5135,54 @@ fn summarize_fetched_source_internal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branch_answer_summary_excludes_labels_and_retains_exact_source_spans() {
+        let namespaced = digest(b"summary-test");
+        let prose = "山田さん\n雨のため見学を延期します。\nご確認をお願いいたします。";
+        let document = "「予定表.md」\n- 2行目 byte[16..35)　予算は1.5万円です。\n- 3行目 byte[37..61)　受付は西口です。";
+        let quote_text = ["予算は1.5万円です。", "受付は西口です。"];
+        let quotes = quote_text.map(|quote| {
+            let start = document.find(quote).unwrap();
+            start..start + quote.len()
+        });
+        let summary = |source, limit, quotes| {
+            summarize_branch_answer(
+                &namespaced,
+                &namespaced,
+                &namespaced,
+                &namespaced,
+                source,
+                SummaryLineLimit::Exact(limit),
+                quotes,
+            )
+        };
+        let prose_result = summary(prose, 2, None).unwrap();
+        assert!(
+            prose_result
+                .output_unit()
+                .contains("雨のため見学を延期します。")
+        );
+        assert!(!prose_result.output_unit().contains("山田さん"));
+        let result = summary(document, 2, Some(&quotes)).unwrap();
+        assert_eq!(
+            result
+                .summary
+                .sentences
+                .iter()
+                .map(|sentence| {
+                    let source = &document[sentence.source_start..sentence.source_end];
+                    assert_eq!(source, sentence.text);
+                    source
+                })
+                .collect::<Vec<_>>(),
+            quote_text,
+        );
+        assert!(matches!(
+            summary(document, 3, Some(&quotes)),
+            Err(Error::Contract { code, .. }) if code == "RESULT_SUMMARY_LINE_COUNT_UNMET"
+        ));
+    }
 
     #[test]
     fn fetched_page_breaks_split_exact_source_bytes_without_admitting_other_controls() {

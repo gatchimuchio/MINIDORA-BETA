@@ -1,6 +1,7 @@
 //! Bounded evidence observers and a source-preserving JSON selection adapter.
 //! Direct URL retrieval is not a search provider, and retrieved bytes carry no
-//! instruction or effect authority. HTML/PDF interpretation is not implemented.
+//! instruction or effect authority. Typed news reads return raw UTF-8 for a
+//! separate source parser.
 
 use minidora_domain::{
     EvidencePacket, Permissions, ResourceBudget, Result, RetryAfterDirective,
@@ -22,6 +23,41 @@ use url::{Host, Url};
 pub(crate) const READ_PERMISSION_REQUIRED: &str = "READ_PERMISSION_REQUIRED";
 pub(crate) const READ_PERMISSION_REQUIRED_MESSAGE: &str =
     "The exact destination hostname is not in the authorized read scope";
+const NEWS_READ_PROVIDER: &str = "https-news-read-v1";
+
+/// Transfer format for configured news sources. Interpretation is separate
+/// from transport and receiving a document does not authorize its links.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum NewsWebFormat {
+    ListingXml,
+    ListingHtml,
+    ArticleHtml,
+}
+
+impl NewsWebFormat {
+    fn mime(self) -> &'static str {
+        match self {
+            Self::ListingXml => "application/xml",
+            Self::ListingHtml | Self::ArticleHtml => "text/html",
+        }
+    }
+
+    fn packet_kind(self) -> &'static str {
+        match self {
+            Self::ListingXml => "NEWS_LISTING_XML",
+            Self::ListingHtml => "NEWS_LISTING_HTML",
+            Self::ArticleHtml => "NEWS_ARTICLE_HTML",
+        }
+    }
+
+    fn parser_version(self) -> &'static str {
+        match self {
+            Self::ListingXml => "strict-utf8-news-listing-xml-v1",
+            Self::ListingHtml => "strict-utf8-news-listing-html-v1",
+            Self::ArticleHtml => "strict-utf8-news-article-html-v1",
+        }
+    }
+}
 
 pub(crate) fn approved_url(raw: &str, permissions: &Permissions) -> Result<Url> {
     let url = Url::parse(raw)
@@ -285,6 +321,15 @@ pub(crate) fn fetch_packet_identity(packet: &EvidencePacket) -> Result<String> {
         &packet.redirect_chain,
         &packet.provider_id,
     ))?;
+    let identity_without_retry = if packet.provider_id == NEWS_READ_PROVIDER {
+        identity(&(
+            "news-observation-v1",
+            identity_without_retry,
+            packet.observed_at_unix_ms,
+        ))?
+    } else {
+        identity_without_retry
+    };
     match &packet.retry_after {
         Some(retry) => identity(&(
             "fetch-failure-retry-after-v1",
@@ -305,9 +350,24 @@ fn bind_retry_after(
 }
 
 fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
+    decode_body_with_format(content_type, bytes, None)
+}
+
+fn decode_body_with_format(
+    content_type: &str,
+    bytes: &[u8],
+    news: Option<NewsWebFormat>,
+) -> Result<String> {
     let mut parts = content_type.split(';');
     let mime = parts.next().unwrap_or("").trim().to_ascii_lowercase();
-    if !matches!(
+    if let Some(format) = news {
+        if mime != format.mime() {
+            return Err(failure(
+                "UNSUPPORTED_EVIDENCE_FORMAT",
+                "The news response media type does not match the configured format",
+            ));
+        }
+    } else if !matches!(
         mime.as_str(),
         "text/plain" | "text/markdown" | "text/x-wiki" | "application/json"
     ) {
@@ -545,6 +605,13 @@ impl RetrievalBudget {
         Self::new(Instant::now(), budget, MAX_HTTP_STARTS_PER_SOURCE as u32)
     }
 
+    pub(crate) fn reserve_output(&mut self, duration: Duration, evidence_bytes: usize) {
+        self.remaining_bytes = self.remaining_bytes.saturating_sub(evidence_bytes);
+        if let Some(read_deadline) = self.deadline.checked_sub(duration) {
+            self.deadline = read_deadline;
+        }
+    }
+
     pub(crate) fn time_remaining(&self) -> Result<Duration> {
         self.deadline
             .checked_duration_since(Instant::now())
@@ -686,14 +753,43 @@ pub(crate) fn fetch_with_budget(
     budget: &mut RetrievalBudget,
     check_admission: &dyn Fn() -> Result<()>,
 ) -> Result<ReadObservation<EvidencePacket>> {
+    fetch_with_format(raw_url, None, permissions, budget, check_admission)
+}
+
+pub(crate) fn fetch_news_with_budget(
+    raw_url: &str,
+    format: NewsWebFormat,
+    permissions: &Permissions,
+    budget: &mut RetrievalBudget,
+    check_admission: &dyn Fn() -> Result<()>,
+) -> Result<ReadObservation<EvidencePacket>> {
+    fetch_with_format(raw_url, Some(format), permissions, budget, check_admission)
+}
+
+fn fetch_with_format(
+    raw_url: &str,
+    news: Option<NewsWebFormat>,
+    permissions: &Permissions,
+    budget: &mut RetrievalBudget,
+    check_admission: &dyn Fn() -> Result<()>,
+) -> Result<ReadObservation<EvidencePacket>> {
     let mut redirect_wait = None;
-    let observation = fetch_packet(
+    let mut observation = fetch_packet(
         raw_url,
+        news,
         permissions,
         budget,
         check_admission,
         &mut redirect_wait,
     )?;
+    if let Some(format) = news {
+        observation.provider_id = NEWS_READ_PROVIDER.into();
+        observation.parser_version = format.parser_version().into();
+        if observation.failure.is_none() {
+            observation.packet_kind = format.packet_kind().into();
+        }
+        observation.id = fetch_packet_identity(&observation)?;
+    }
     Ok(ReadObservation {
         observation,
         redirect_wait,
@@ -702,6 +798,7 @@ pub(crate) fn fetch_with_budget(
 
 fn fetch_packet(
     raw_url: &str,
+    news: Option<NewsWebFormat>,
     permissions: &Permissions,
     budget: &mut RetrievalBudget,
     check_admission: &dyn Fn() -> Result<()>,
@@ -787,7 +884,13 @@ fn fetch_packet(
         let mut response = match http
             .get(url.clone())
             .timeout(remaining)
-            .header("Accept", "text/plain, text/markdown, application/json")
+            .header(
+                "Accept",
+                news.map_or(
+                    "text/plain, text/markdown, application/json",
+                    NewsWebFormat::mime,
+                ),
+            )
             .header("Accept-Encoding", "identity")
             .send()
         {
@@ -891,6 +994,16 @@ fn fetch_packet(
             }
             Ok(result)
         };
+        // A news failure uses the status and any Retry-After header. An
+        // error page is neither listing nor article evidence.
+        if news.is_some() && status != 200 {
+            let code = if status == 429 {
+                "HTTP_RATE_LIMITED"
+            } else {
+                "HTTP_STATUS_FAILURE"
+            };
+            return finish(vec![], None, Some(code));
+        }
         if response
             .content_length()
             .is_some_and(|n| n > budget.remaining_bytes as u64)
@@ -961,7 +1074,11 @@ fn fetch_packet(
         if !encoding.eq_ignore_ascii_case("identity") {
             return finish(raw, None, Some("UNSUPPORTED_CONTENT_ENCODING"));
         }
-        return match decode_body(&content_type, &raw) {
+        let decoded = match news {
+            Some(format) => decode_body_with_format(&content_type, &raw, Some(format)),
+            None => decode_body(&content_type, &raw),
+        };
+        return match decoded {
             Ok(text) => finish(raw, Some(text), None),
             Err(minidora_domain::Error::Contract { code, .. }) => finish(raw, None, Some(&code)),
             Err(_) => finish(raw, None, Some("EVIDENCE_DECODE_FAILED")),
@@ -1027,6 +1144,44 @@ pub(crate) fn validate_successful_packet(
             "RECOVERY_EVIDENCE_MISMATCH",
             "Observed body packet identity is invalid",
         ));
+    }
+    Ok(())
+}
+
+pub(crate) fn is_news_packet(packet: &EvidencePacket) -> bool {
+    packet.provider_id == NEWS_READ_PROVIDER
+}
+
+pub(crate) fn validate_news_packet(
+    packet: &EvidencePacket,
+    format: NewsWebFormat,
+    permissions: &Permissions,
+) -> Result<()> {
+    validate_observed_route(packet, permissions)?;
+    let invalid = || {
+        failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "Observed news format, transport, bytes or identity differs",
+        )
+    };
+    let text = std::str::from_utf8(&packet.raw_body).map_err(|_| invalid())?;
+    if packet.mode != "LIVE"
+        || packet.packet_kind != format.packet_kind()
+        || packet.failure.is_some()
+        || packet.retry_after.is_some()
+        || packet.http_status != 200
+        || packet.provider_id != NEWS_READ_PROVIDER
+        || packet.parser_version != format.parser_version()
+        || packet.raw_sha256 != digest(&packet.raw_body)
+        || packet.extracted_text.as_deref() != Some(text)
+        || text.trim().is_empty()
+        || packet.independence_group != packet.final_uri
+        || packet.redirect_chain.len() > MAX_HTTP_STARTS_PER_SOURCE
+        || packet.redirect_chain.iter().collect::<BTreeSet<_>>().len()
+            != packet.redirect_chain.len()
+        || packet.id != fetch_packet_identity(packet)?
+    {
+        return Err(invalid());
     }
     Ok(())
 }

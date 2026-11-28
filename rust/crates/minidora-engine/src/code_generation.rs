@@ -1,14 +1,15 @@
-//! Generate a bounded Python function from the inherited explicit algorithm IR.
+//! Generate bounded Python functions through the existing algorithm IR.
 //! No source evaluation, host process, external effect or test oracle is used.
 use crate::ports::{JsonKind, JsonNode, strict_json_document};
 use minidora_domain::{
-    CaseRevision, Guarantee, InputBundle, Intent, Lifecycle, Result, ResultRecord, SourceSpan,
-    canonical, digest, failure, identity,
+    CaseRevision, FunctionalPythonBody, Guarantee, InputBundle, Intent, Lifecycle,
+    NumericComparison, NumericListOutput, NumericListSelection, NumericOperand, NumericOperation,
+    NumericValue, Result, ResultRecord, SourceSpan, canonical, digest, failure, identity,
 };
 use num_bigint::BigInt;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeSet;
 use std::str::FromStr;
 use std::sync::OnceLock;
@@ -17,6 +18,7 @@ use unicode_normalization::UnicodeNormalization;
 
 const VERSION: &str = "structured-python-generator-v1-ucd15";
 const RETURN_FUNCTION_VERSION: &str = "structured-python-return-function-v1-ucd15";
+pub(crate) const FUNCTION_SPEC_VERSION: &str = "structured-python-functional-spec-v1-ucd15";
 const VERIFICATION_CONTEXT_MISMATCH: &str = "CODE_VERIFICATION_CONTEXT_MISMATCH";
 pub(crate) const VERIFICATION_EXPLANATION_PREDICATE: &str =
     "PREVIOUS_CODE_VERIFICATION_EXPLANATION_V1";
@@ -52,10 +54,15 @@ fn invalid(message: impl Into<String>) -> minidora_domain::Error {
 }
 
 fn identifier(value: &Value) -> Result<&str> {
-    static IDENTIFIER: OnceLock<Regex> = OnceLock::new();
     let name = value
         .as_str()
         .ok_or_else(|| invalid("identifier must be a string"))?;
+    validate_python_identifier(name)?;
+    Ok(name)
+}
+
+pub(crate) fn validate_python_identifier(name: &str) -> Result<()> {
+    static IDENTIFIER: OnceLock<Regex> = OnceLock::new();
     // Unicode 16 XID intersected with Age <=15, excluding the four continuation
     // additions after Python 3.12's Unicode 15.0 contract. No new table/dependency.
     let pattern = IDENTIFIER.get_or_init(|| Regex::new(
@@ -109,7 +116,7 @@ fn identifier(value: &Value) -> Result<&str> {
     {
         return Err(invalid("unsupported, reserved or noncanonical identifier"));
     }
-    Ok(name)
+    Ok(())
 }
 
 struct ValueBudget {
@@ -203,8 +210,26 @@ impl Piece {
 struct Generator<'a> {
     constants: &'a BTreeSet<String>,
     nodes: usize,
-    inline_integers: bool,
+    mode: GenerationMode,
 }
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum GenerationMode {
+    Structured,
+    ReturnExpression,
+    NaturalSpecification,
+}
+
+impl GenerationMode {
+    fn version(self) -> &'static str {
+        match self {
+            Self::Structured => VERSION,
+            Self::ReturnExpression => RETURN_FUNCTION_VERSION,
+            Self::NaturalSpecification => FUNCTION_SPEC_VERSION,
+        }
+    }
+}
+
 impl Generator<'_> {
     fn shape<'a>(&mut self, node: &'a Value, keys: &[&str]) -> Result<&'a Map<String, Value>> {
         self.nodes += 1;
@@ -232,7 +257,7 @@ impl Generator<'_> {
                 self.shape(node, &["種別", "名前"])?;
                 Ok(Piece::leaf(identifier(&node["名前"])?.into(), 2, 1))
             }
-            "整数" if self.inline_integers => {
+            "整数" if self.mode != GenerationMode::Structured => {
                 self.shape(node, &["種別", "値"])?;
                 let digits = node["値"]
                     .as_str()
@@ -251,6 +276,17 @@ impl Generator<'_> {
                     (1, 0)
                 };
                 Ok(Piece::leaf(digits.into(), nodes, height))
+            }
+            "真偽" if self.mode == GenerationMode::NaturalSpecification => {
+                self.shape(node, &["種別", "値"])?;
+                let value = node["値"]
+                    .as_bool()
+                    .ok_or_else(|| invalid("expected a boolean literal"))?;
+                Ok(Piece::leaf(
+                    if value { "True" } else { "False" }.into(),
+                    1,
+                    0,
+                ))
             }
             "定数参照" => {
                 self.shape(node, &["種別", "キー"])?;
@@ -280,6 +316,11 @@ impl Generator<'_> {
                     ("比較", Some("以下")) => "<=",
                     ("比較", Some("超")) => ">",
                     ("比較", Some("以上")) => ">=",
+                    ("比較", Some("非包含"))
+                        if self.mode == GenerationMode::NaturalSpecification =>
+                    {
+                        "not in"
+                    }
                     _ => return Err(invalid("unsupported operator")),
                 };
                 let a = self.expression(&node["左"], depth + 1)?;
@@ -432,7 +473,7 @@ impl Generator<'_> {
 }
 
 pub fn generate(document: &str) -> Result<CodeGenerationReport> {
-    generate_report(document, false)
+    generate_report(document, GenerationMode::Structured)
 }
 
 pub(crate) fn generate_return_function(bundle: &InputBundle) -> Result<CodeGenerationReport> {
@@ -452,10 +493,264 @@ pub(crate) fn generate_return_function(bundle: &InputBundle) -> Result<CodeGener
         "仕様": {"名前": name, "引数": parameters, "手順": [{"種別": "返却", "式": expression}]},
         "定数": {},
     }))?;
-    generate_report(&document, true)
+    generate_report(&document, GenerationMode::ReturnExpression)
 }
 
-fn generate_report(document: &str, inline_return: bool) -> Result<CodeGenerationReport> {
+fn reference_ir(name: &str) -> Value {
+    json!({"種別": "参照", "名前": name})
+}
+
+fn integer_ir(value: i64) -> Value {
+    json!({"種別": "整数", "値": value.to_string()})
+}
+
+fn binary_ir(kind: &str, operation: &str, left: Value, right: Value) -> Value {
+    json!({"種別": kind, "演算": operation, "左": left, "右": right})
+}
+
+fn return_ir(expression: Value) -> Value {
+    json!({"種別": "返却", "式": expression})
+}
+
+fn numeric_comparison_name(comparison: NumericComparison) -> &'static str {
+    match comparison {
+        NumericComparison::Less => "未満",
+        NumericComparison::LessEqual => "以下",
+        NumericComparison::Greater => "超",
+        NumericComparison::GreaterEqual => "以上",
+        NumericComparison::Equal => "等値",
+        NumericComparison::NotEqual => "非等値",
+    }
+}
+
+fn numeric_operand_ir(operand: &NumericOperand, parameters: &[&str]) -> Result<Value> {
+    match operand {
+        NumericOperand::Parameter { index, .. } => parameters
+            .get(*index)
+            .map(|parameter| reference_ir(parameter))
+            .ok_or_else(|| invalid("numeric operand refers to an undeclared parameter")),
+        NumericOperand::Integer { value, .. } => Ok(integer_ir(*value)),
+    }
+}
+
+fn numeric_value_ir(value: &NumericValue, parameters: &[&str]) -> Result<Value> {
+    match value {
+        NumericValue::Operand { value } => numeric_operand_ir(value, parameters),
+        NumericValue::Arithmetic {
+            left,
+            operation,
+            right,
+        } => Ok(binary_ir(
+            "算術",
+            match operation {
+                NumericOperation::Add => "加算",
+                NumericOperation::Subtract => "減算",
+                NumericOperation::Multiply => "乗算",
+            },
+            numeric_operand_ir(left, parameters)?,
+            numeric_operand_ir(right, parameters)?,
+        )),
+    }
+}
+
+fn palindrome_ir(parameter: &str) -> Vec<Value> {
+    // Neither compiler-selected local may shadow the function parameter.
+    let length = if parameter == "length" {
+        "size"
+    } else {
+        "length"
+    };
+    let index = if parameter == "left" { "index" } else { "left" };
+    let at = |position| json!({"種別": "添字", "対象": reference_ir(parameter), "位置": position});
+    let mirror = binary_ir(
+        "算術",
+        "減算",
+        binary_ir("算術", "減算", reference_ir(length), integer_ir(1)),
+        reference_ir(index),
+    );
+    let mismatch = binary_ir("比較", "非等値", at(reference_ir(index)), at(mirror));
+    let pairs = binary_ir("算術", "整数商", reference_ir(length), integer_ir(2));
+    vec![
+        json!({"種別": "代入", "名前": length,
+            "式": {"種別": "呼出", "関数": "長さ", "引数": [reference_ir(parameter)]}}),
+        json!({"種別": "反復", "変数": index,
+            "対象": {"種別": "呼出", "関数": "範囲", "引数": [pairs]},
+            "手順": [{"種別": "分岐", "条件": mismatch,
+                "真": [return_ir(json!({"種別": "真偽", "値": false}))],
+                "偽": []}]}),
+        return_ir(json!({"種別": "真偽", "値": true})),
+    ]
+}
+
+fn assignment_ir(name: &str, expression: Value) -> Value {
+    json!({"種別": "代入", "名前": name, "式": expression})
+}
+
+fn list_ir(elements: Vec<Value>) -> Value {
+    json!({"種別": "リスト", "要素": elements})
+}
+
+fn list_locals(parameters: &[&str]) -> (String, String) {
+    let available = |base: &str| {
+        let mut name = base.to_owned();
+        while parameters.contains(&name.as_str()) {
+            name.push('_');
+        }
+        name
+    };
+    (available("item"), available("result"))
+}
+
+fn numeric_list_ir(
+    parameters: &[&str],
+    list_index: usize,
+    selection: &NumericListSelection,
+    output: NumericListOutput,
+) -> Result<Vec<Value>> {
+    let input = parameters
+        .get(list_index)
+        .ok_or_else(|| invalid("list operation requires a declared list parameter"))?;
+    let input = reference_ir(input);
+    if matches!(selection, NumericListSelection::All) {
+        let function = match output {
+            NumericListOutput::Count => "長さ",
+            NumericListOutput::Sum => "合計",
+            NumericListOutput::Keep => "リスト化",
+        };
+        return Ok(vec![return_ir(
+            json!({"種別": "呼出", "関数": function, "引数": [input]}),
+        )]);
+    }
+    let (item, result) = list_locals(parameters);
+    let selected = match selection {
+        NumericListSelection::Boundary {
+            comparison,
+            threshold,
+        } => binary_ir(
+            "比較",
+            numeric_comparison_name(*comparison),
+            reference_ir(&item),
+            numeric_operand_ir(threshold, parameters)?,
+        ),
+        NumericListSelection::Parity { even } => binary_ir(
+            "比較",
+            if *even { "等値" } else { "非等値" },
+            binary_ir("算術", "剰余", reference_ir(&item), integer_ir(2)),
+            integer_ir(0),
+        ),
+        NumericListSelection::All => unreachable!("unfiltered lists use a direct operation"),
+    };
+    let (initial, contribution) = match output {
+        NumericListOutput::Count => (integer_ir(0), integer_ir(1)),
+        NumericListOutput::Sum => (integer_ir(0), reference_ir(&item)),
+        NumericListOutput::Keep => (list_ir(Vec::new()), list_ir(vec![reference_ir(&item)])),
+    };
+    let update = assignment_ir(
+        &result,
+        binary_ir("算術", "加算", reference_ir(&result), contribution),
+    );
+    Ok(vec![
+        assignment_ir(&result, initial),
+        json!({"種別": "反復", "変数": item, "対象": input,
+            "手順": [{"種別": "分岐", "条件": selected, "真": [update], "偽": []}]}),
+        return_ir(reference_ir(&result)),
+    ])
+}
+
+fn stable_unique_list_ir(parameters: &[&str], list_index: usize) -> Result<Vec<Value>> {
+    let input = parameters
+        .get(list_index)
+        .ok_or_else(|| invalid("unique list operation requires a declared list parameter"))?;
+    let (item, result) = list_locals(parameters);
+    let new_item = binary_ir("比較", "非包含", reference_ir(&item), reference_ir(&result));
+    let append = assignment_ir(
+        &result,
+        binary_ir(
+            "算術",
+            "加算",
+            reference_ir(&result),
+            list_ir(vec![reference_ir(&item)]),
+        ),
+    );
+    Ok(vec![
+        assignment_ir(&result, list_ir(Vec::new())),
+        json!({"種別": "反復", "変数": item, "対象": reference_ir(input),
+            "手順": [{"種別": "分岐", "条件": new_item, "真": [append], "偽": []}]}),
+        return_ir(reference_ir(&result)),
+    ])
+}
+
+pub(crate) fn generate_function_from_spec(bundle: &InputBundle) -> Result<CodeGenerationReport> {
+    crate::input::verify_function_spec_input(bundle)?;
+    let Intent::GenerateFunctionFromSpec { spec } = &bundle.meaning.intent else {
+        return Err(invalid("a sealed functional specification is required"));
+    };
+    let mut parameters = spec
+        .parameters
+        .iter()
+        .map(|parameter| parameter.text.as_str())
+        .collect::<Vec<_>>();
+    let name = match (&spec.name, &spec.body) {
+        (Some(name), _) => name.text.as_str(),
+        (None, FunctionalPythonBody::Palindrome { .. }) if parameters.is_empty() => {
+            parameters.push("text");
+            "is_palindrome"
+        }
+        (None, FunctionalPythonBody::NumericList { output, .. }) if parameters.is_empty() => {
+            parameters.push("values");
+            match output {
+                NumericListOutput::Count => "count_selected",
+                NumericListOutput::Sum => "sum_selected",
+                NumericListOutput::Keep => "filter_selected",
+            }
+        }
+        (None, FunctionalPythonBody::StableUniqueList { .. }) if parameters.is_empty() => {
+            parameters.push("values");
+            "unique_in_order"
+        }
+        _ => return Err(invalid("a function signature is required")),
+    };
+    let steps = match &spec.body {
+        FunctionalPythonBody::Piecewise { cases, otherwise } => {
+            let mut steps = vec![return_ir(numeric_value_ir(otherwise, &parameters)?)];
+            for case in cases.iter().rev() {
+                let test = binary_ir(
+                    "比較",
+                    numeric_comparison_name(case.comparison),
+                    numeric_operand_ir(&case.left, &parameters)?,
+                    numeric_operand_ir(&case.right, &parameters)?,
+                );
+                let matched = return_ir(numeric_value_ir(&case.result, &parameters)?);
+                steps = vec![json!({
+                    "種別": "分岐", "条件": test, "真": [matched], "偽": steps,
+                })];
+            }
+            steps
+        }
+        FunctionalPythonBody::Palindrome { .. } => {
+            let [parameter] = parameters.as_slice() else {
+                return Err(invalid("a palindrome test requires one text parameter"));
+            };
+            palindrome_ir(parameter)
+        }
+        FunctionalPythonBody::NumericList {
+            list_index,
+            selection,
+            output,
+            ..
+        } => numeric_list_ir(&parameters, *list_index, selection, *output)?,
+        FunctionalPythonBody::StableUniqueList { list_index, .. } => {
+            stable_unique_list_ir(&parameters, *list_index)?
+        }
+    };
+    let document = serde_json::to_string(&json!({
+        "仕様": {"名前": name, "引数": parameters, "手順": steps},
+        "定数": {},
+    }))?;
+    generate_report(&document, GenerationMode::NaturalSpecification)
+}
+
+fn generate_report(document: &str, mode: GenerationMode) -> Result<CodeGenerationReport> {
     if document.len() > 256_000 {
         return Err(invalid("structured code document exceeds 256000 bytes"));
     }
@@ -479,7 +774,7 @@ fn generate_report(document: &str, inline_return: bool) -> Result<CodeGeneration
     let mut generator = Generator {
         constants: &constants,
         nodes: 0,
-        inline_integers: inline_return,
+        mode,
     };
     generator.shape(&specification, &["名前", "引数", "手順"])?;
     let name = identifier(&specification["名前"])?;
@@ -493,7 +788,7 @@ fn generate_report(document: &str, inline_return: bool) -> Result<CodeGeneration
     {
         return Err(invalid("at most 15 unique user parameters are supported"));
     }
-    if inline_return
+    if mode == GenerationMode::ReturnExpression
         && (!constants.is_empty()
             || !specification["手順"].as_array().is_some_and(
                 |steps| matches!(steps.as_slice(), [step] if step["種別"].as_str() == Some("返却")),
@@ -503,18 +798,20 @@ fn generate_report(document: &str, inline_return: bool) -> Result<CodeGeneration
             "an inline function requires one return step and no constant dictionary",
         ));
     }
+    if mode == GenerationMode::NaturalSpecification && !constants.is_empty() {
+        return Err(invalid(
+            "a functional specification does not take a separate constant dictionary",
+        ));
+    }
     let body = generator.block(&specification["手順"], 0)?;
     let ast_nodes = 4 + parameters.len() + body.iter().map(|p| p.nodes).sum::<usize>();
     let ast_depth = 3.max(2 + body.iter().map(|p| p.height).max().unwrap_or(0));
     if ast_nodes > 2048 || ast_depth > 40 {
         return Err(invalid("constructed AST node/depth budget exceeded"));
     }
-    let version = if inline_return {
-        RETURN_FUNCTION_VERSION
-    } else {
+    if mode == GenerationMode::Structured {
         parameters.push("定数".into());
-        VERSION
-    };
+    }
     let source = format!(
         "{PREAMBLE}def {name}({}):\n{}",
         parameters.join(", "),
@@ -532,7 +829,7 @@ fn generate_report(document: &str, inline_return: bool) -> Result<CodeGeneration
         }
     };
     Ok(CodeGenerationReport {
-        version: version.into(),
+        version: mode.version().into(),
         target_runtime: "Python 3.12 / Unicode 15.0.0 identifiers".into(),
         source_document: document.into(),
         source_document_sha256: digest(document.as_bytes()),
@@ -545,7 +842,12 @@ fn generate_report(document: &str, inline_return: bool) -> Result<CodeGeneration
         ir_nodes: generator.nodes,
         constructed_ast_nodes: ast_nodes,
         constructed_ast_depth: ast_depth,
-        validation: "EXPLICIT_IR_STRUCTURE_AND_CONSTRUCTED_AST_BOUNDS".into(),
+        validation: if mode == GenerationMode::NaturalSpecification {
+            "TYPED_SPECIFICATION_LOWERING_AND_CONSTRUCTED_AST_BOUNDS"
+        } else {
+            "EXPLICIT_IR_STRUCTURE_AND_CONSTRUCTED_AST_BOUNDS"
+        }
+        .into(),
         python_parse: "NOT_RUN".into(),
         execution: "NOT_RUN".into(),
         input_output_tests: "NOT_RUN".into(),
@@ -582,12 +884,17 @@ pub(crate) fn previous_code_report(
         let Ok(report) = serde_json::from_slice::<CodeGenerationReport>(&bytes) else {
             continue;
         };
-        if !matches!(report.version.as_str(), VERSION | RETURN_FUNCTION_VERSION)
-            || report.source != previous.text
+        if !matches!(
+            report.version.as_str(),
+            VERSION | RETURN_FUNCTION_VERSION | FUNCTION_SPEC_VERSION
+        ) || report.source != previous.text
         {
             continue;
         }
-        if report.version == RETURN_FUNCTION_VERSION {
+        if matches!(
+            report.version.as_str(),
+            RETURN_FUNCTION_VERSION | FUNCTION_SPEC_VERSION
+        ) {
             let mismatch = || {
                 failure(
                     "CODE_GENERATION_CONTEXT_MISMATCH",
@@ -599,12 +906,44 @@ pub(crate) fn previous_code_report(
             else {
                 return Err(mismatch());
             };
-            let expected = generate_return_function(&bundle)?;
-            if expected != report || minidora_domain::identity(&bundle.request)? != previous.id {
+            let expected = if report.version == RETURN_FUNCTION_VERSION {
+                generate_return_function(&bundle)?
+            } else {
+                generate_function_from_spec(&bundle)?
+            };
+            if expected != report
+                || minidora_domain::identity(&bundle.request)? != previous.id
+                || report.version == FUNCTION_SPEC_VERSION && canonical(&expected)? != bytes
+            {
                 return Err(mismatch());
             }
         } else {
             validate_report(&report)?;
+        }
+        if report.version == FUNCTION_SPEC_VERSION {
+            const CODE: &str = "CODE_GENERATION_CONTEXT_MISMATCH";
+            if previous.lifecycle != Lifecycle::Commit
+                || previous.guarantee != Guarantee::Computed
+                || previous.dependencies.as_slice() != [dependency.as_str()]
+                || previous
+                    .content_plan
+                    .as_ref()
+                    .is_none_or(|plan| plan.required_units.as_slice() != [report.source.as_str()])
+            {
+                return Err(failure(
+                    CODE,
+                    "the retained functional generation result is invalid",
+                ));
+            }
+            crate::document::revalidate_previous_document_render(
+                store,
+                actor,
+                case,
+                previous,
+                Some(dependency),
+                CODE,
+                "generated Python function",
+            )?;
         }
         return Ok(Some((dependency.clone(), report)));
     }
@@ -1127,7 +1466,9 @@ pub(crate) fn previous_code_verification(
     let Some((origin, origin_bundle)) = registered_origin.filter(|(_, bundle)| {
         matches!(
             bundle.meaning.intent,
-            Intent::GenerateCode { .. } | Intent::GenerateReturnFunction { .. }
+            Intent::GenerateCode { .. }
+                | Intent::GenerateReturnFunction { .. }
+                | Intent::GenerateFunctionFromSpec { .. }
         )
     }) else {
         if matches!(context.output, RetainedCodeOutput::Explanation) {
@@ -1142,6 +1483,7 @@ pub(crate) fn previous_code_verification(
         || !match &origin_bundle.meaning.intent {
             Intent::GenerateCode { document } => report.source_document == *document,
             Intent::GenerateReturnFunction { .. } => report.version == RETURN_FUNCTION_VERSION,
+            Intent::GenerateFunctionFromSpec { .. } => report.version == FUNCTION_SPEC_VERSION,
             _ => false,
         }
     {
@@ -1402,11 +1744,14 @@ fn verification_mismatch() -> minidora_domain::Error {
 }
 
 fn validate_report(report: &CodeGenerationReport) -> Result<()> {
-    if generate_report(
-        &report.source_document,
-        report.version == RETURN_FUNCTION_VERSION,
-    )? != *report
-    {
+    // Functional specifications are re-lowered from the sealed request
+    // when adopted as context. This check only reconstructs the IR report.
+    let mode = match report.version.as_str() {
+        RETURN_FUNCTION_VERSION => GenerationMode::ReturnExpression,
+        FUNCTION_SPEC_VERSION => GenerationMode::NaturalSpecification,
+        _ => GenerationMode::Structured,
+    };
+    if generate_report(&report.source_document, mode)? != *report {
         return Err(failure(
             "CODE_GENERATION_CONTEXT_MISMATCH",
             "stored code report is not reproducible from its structured specification",
@@ -1429,7 +1774,10 @@ fn explanation_lines_from_validated(report: &CodeGenerationReport) -> Result<Vec
     let steps = specification
         .get("手順")
         .ok_or_else(|| invalid("stored algorithm steps are missing"))?;
-    let parameters = if report.version == RETURN_FUNCTION_VERSION {
+    let parameters = if matches!(
+        report.version.as_str(),
+        RETURN_FUNCTION_VERSION | FUNCTION_SPEC_VERSION
+    ) {
         format!(
             "引数: {}。",
             if report.parameters.is_empty() {
@@ -1452,7 +1800,9 @@ fn explanation_lines_from_validated(report: &CodeGenerationReport) -> Result<Vec
         parameters,
         "手順:".into(),
     ];
-    explain_block(steps, 0, &mut lines)?;
+    let declared_parameters =
+        (report.version == FUNCTION_SPEC_VERSION).then_some(report.parameters.as_slice());
+    explain_block(steps, 0, &mut lines, declared_parameters)?;
     if !report.source_sha256.is_empty() {
         lines.push(format!(
             "生成Pythonソース SHA-256: {}。",
@@ -1466,7 +1816,12 @@ fn explanation_lines_from_validated(report: &CodeGenerationReport) -> Result<Vec
     Ok(lines)
 }
 
-fn explain_block(rows: &Value, depth: usize, lines: &mut Vec<String>) -> Result<()> {
+fn explain_block(
+    rows: &Value,
+    depth: usize,
+    lines: &mut Vec<String>,
+    declared_parameters: Option<&[String]>,
+) -> Result<()> {
     let rows = rows
         .as_array()
         .ok_or_else(|| invalid("stored algorithm block must be an array"))?;
@@ -1485,31 +1840,31 @@ fn explain_block(rows: &Value, depth: usize, lines: &mut Vec<String>) -> Result<
                 let name = node["名前"]
                     .as_str()
                     .ok_or_else(|| invalid("stored assignment name must be a string"))?;
-                let expression = expression_summary(&node["式"])?;
+                let expression = expression_summary(&node["式"], declared_parameters)?;
                 lines.push(format!(
                     "{indent}変数「{name}」に、{expression}を代入します。"
                 ));
             }
             "返却" => {
-                let expression = expression_summary(&node["式"])?;
+                let expression = expression_summary(&node["式"], declared_parameters)?;
                 lines.push(format!("{indent}{expression}を返します。"));
             }
             "分岐" => {
-                let condition = expression_summary(&node["条件"])?;
+                let condition = expression_summary(&node["条件"], declared_parameters)?;
                 lines.push(format!("{indent}条件「{condition}」が真なら:"));
-                explain_block(&node["真"], depth + 1, lines)?;
+                explain_block(&node["真"], depth + 1, lines, declared_parameters)?;
                 lines.push(format!("{indent}条件が偽なら:"));
-                explain_block(&node["偽"], depth + 1, lines)?;
+                explain_block(&node["偽"], depth + 1, lines, declared_parameters)?;
             }
             "反復" => {
                 let variable = node["変数"]
                     .as_str()
                     .ok_or_else(|| invalid("stored loop variable must be a string"))?;
-                let target = expression_summary(&node["対象"])?;
+                let target = expression_summary(&node["対象"], declared_parameters)?;
                 lines.push(format!(
                     "{indent}「{target}」の各要素を変数「{variable}」に順に設定して繰り返します:"
                 ));
-                explain_block(&node["手順"], depth + 1, lines)?;
+                explain_block(&node["手順"], depth + 1, lines, declared_parameters)?;
             }
             _ => return Err(invalid("stored algorithm statement is unsupported")),
         }
@@ -1517,7 +1872,7 @@ fn explain_block(rows: &Value, depth: usize, lines: &mut Vec<String>) -> Result<
     Ok(())
 }
 
-fn expression_summary(node: &Value) -> Result<String> {
+fn expression_summary(node: &Value, declared_parameters: Option<&[String]>) -> Result<String> {
     let kind = node
         .get("種別")
         .and_then(Value::as_str)
@@ -1527,13 +1882,29 @@ fn expression_summary(node: &Value) -> Result<String> {
             .and_then(Value::as_str)
             .ok_or_else(|| invalid(format!("stored expression field {key} must be a string")))
     };
+    let describe = |child| expression_summary(child, declared_parameters);
     match kind {
-        "参照" => Ok(format!("入力値「{}」", field("名前")?)),
+        "参照" => {
+            let name = field("名前")?;
+            let role = if declared_parameters
+                .is_some_and(|parameters| !parameters.iter().any(|parameter| parameter == name))
+            {
+                "変数"
+            } else {
+                "入力値"
+            };
+            Ok(format!("{role}「{name}」"))
+        }
         "整数" => Ok(format!("整数{}", field("値")?)),
+        "真偽" => Ok(match node["値"].as_bool() {
+            Some(true) => "真（True）".into(),
+            Some(false) => "偽（False）".into(),
+            None => return Err(invalid("stored boolean literal must be true or false")),
+        }),
         "定数参照" => Ok(format!("定数辞書の「{}」", field("キー")?)),
         "算術" => {
-            let left = expression_summary(&node["左"])?;
-            let right = expression_summary(&node["右"])?;
+            let left = describe(&node["左"])?;
+            let right = describe(&node["右"])?;
             let operation = match field("演算")? {
                 "加算" => format!("{left}に{right}を足した値"),
                 "減算" => format!("{left}から{right}を引いた値"),
@@ -1545,8 +1916,8 @@ fn expression_summary(node: &Value) -> Result<String> {
             Ok(operation)
         }
         "比較" => {
-            let left = expression_summary(&node["左"])?;
-            let right = expression_summary(&node["右"])?;
+            let left = describe(&node["左"])?;
+            let right = describe(&node["右"])?;
             let comparison = match field("演算")? {
                 "等値" => format!("{left}と{right}が等しい"),
                 "非等値" => format!("{left}と{right}が等しくない"),
@@ -1554,22 +1925,23 @@ fn expression_summary(node: &Value) -> Result<String> {
                 "以下" => format!("{left}は{right}以下"),
                 "超" => format!("{left}は{right}より大きい"),
                 "以上" => format!("{left}は{right}以上"),
+                "非包含" => format!("{right}に{left}が含まれていない"),
                 _ => return Err(invalid("stored comparison operator is unsupported")),
             };
             Ok(format!("{comparison}かどうか"))
         }
         "選択" => Ok(format!(
             "条件「{}」が真なら「{}」、偽なら「{}」を選んだ値",
-            expression_summary(&node["条件"])?,
-            expression_summary(&node["真"])?,
-            expression_summary(&node["偽"])?
+            describe(&node["条件"])?,
+            describe(&node["真"])?,
+            describe(&node["偽"])?
         )),
         "リスト" => {
             let values = node["要素"]
                 .as_array()
                 .ok_or_else(|| invalid("stored list elements must be an array"))?
                 .iter()
-                .map(expression_summary)
+                .map(describe)
                 .collect::<Result<Vec<_>>>()?;
             if values.is_empty() {
                 Ok("空のリスト".into())
@@ -1579,8 +1951,8 @@ fn expression_summary(node: &Value) -> Result<String> {
         }
         "添字" => Ok(format!(
             "{}の位置{}にある要素",
-            expression_summary(&node["対象"])?,
-            expression_summary(&node["位置"])?
+            describe(&node["対象"])?,
+            describe(&node["位置"])?
         )),
         "呼出" => {
             let name = field("関数")?;
@@ -1588,7 +1960,7 @@ fn expression_summary(node: &Value) -> Result<String> {
                 .as_array()
                 .ok_or_else(|| invalid("stored call arguments must be an array"))?
                 .iter()
-                .map(expression_summary)
+                .map(describe)
                 .collect::<Result<Vec<_>>>()?;
             Ok(format!(
                 "{}({})の結果",

@@ -1582,6 +1582,7 @@ pub(crate) const GENERATED_CALCULATION_PREDICATE: &str = "EXACT_CALCULATION_V2";
 pub(crate) const CALCULATION_CORRECTION_PREDICATE: &str =
     "EXACT_PREVIOUS_CALCULATION_CORRECTION_V1";
 const PREVIOUS_LENGTH_CONVERSION_PREDICATE: &str = "EXACT_PREVIOUS_LENGTH_CONVERSION_V1";
+const PREVIOUS_CALCULATION_SCALE_PREDICATE: &str = "EXACT_PREVIOUS_CALCULATION_SCALE_V1";
 const PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE: &str = "EXACT_PREVIOUS_WEB_LENGTH_CONVERSION_V1";
 const PREVIOUS_FINITE_EVENT_PROBABILITY_PREDICATE: &str =
     "EXACT_PREVIOUS_FINITE_EVENT_PROBABILITY_V1";
@@ -1810,10 +1811,57 @@ pub(crate) fn web_dependencies_after_topic_lookup<'a>(
     Ok((actions, dependencies))
 }
 pub(crate) const CONVERSATIONAL_MATH_PREDICATE: &str = "COMPUTED_JAPANESE_MATH_REPORT_V1";
+pub(crate) const STATISTICS_VALUES_NODE: &str = "statistics-values";
+pub(crate) const STATISTICS_EXPLANATION_NODE: &str = "statistics-explanation";
+const STATISTICS_EXPLANATION_BLOCKED: &str = "STATISTICS_EXPLANATION_UNAVAILABLE";
+// Exact values, Core adoption, content and render require four observations.
+// The explanation adds one observation before the Core adoption.
+const STATISTICS_EXPLANATION_ACTIONS: u32 = 5;
 const CODE_EXPLANATION_PREDICATE: &str = "SOURCE_CODE_EXPLANATION_V1";
+const CODE_REPAIR_PREDICATE: &str = "VERIFIED_CODE_REPAIR_V1";
+pub(crate) const WASM_EXECUTION_PREDICATE: &str = "OBSERVED_WASM_EXECUTION_V1";
+pub(crate) const CSV_CHART_PREDICATE: &str = "CSV_GROUPED_MEAN_CHART_V1";
+pub(crate) const ATTACHED_DOCUMENT_PREDICATE: &str = "ATTACHED_DOCUMENT_REPORT_V1";
+pub(crate) const ATTACHED_ANALYSIS_PREDICATE: &str = "ATTACHED_DOCUMENT_CSV_ANALYSIS_V1";
+const ATTACHED_ANALYSIS_CONDITION: &str = "attached-analysis-condition";
+pub(crate) const ATTACHED_ANALYSIS_TABLE: &str = "attached-analysis-table";
 const RETURN_FUNCTION_PREDICATE: &str = "SOURCE_RETURN_FUNCTION_V1";
 pub(crate) const CONVERSATION_PREDICATE: &str = "GENERATED_CONVERSATION_V1";
+pub(crate) const DRAFT_MESSAGE_PREDICATE: &str = "GENERATED_MESSAGE_DRAFT_V1";
+pub(crate) const DRAFT_FICTION_PREDICATE: &str = "GENERATED_FICTION_DRAFT_V1";
+pub(crate) const TRANSLATION_PREDICATE: &str = "GENERATED_TRANSLATION_V1";
+pub(crate) const WORK_PLAN_PREDICATE: &str = "GENERATED_WORK_PLAN_V1";
+pub(crate) const MESSAGE_REVISION_PREDICATE: &str = "GENERATED_MESSAGE_REVISION_V1";
+pub(crate) const OPTION_DECISION_PREDICATE: &str = "GENERATED_OPTION_DECISION_V1";
 const GENERATED_CONVERSATION_KIND: &str = "minidora.core-computation.conversation.v1";
+
+pub(crate) fn attached_analysis_nodes() -> [GoalNode; 2] {
+    [
+        GoalNode {
+            id: ATTACHED_ANALYSIS_CONDITION.into(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        },
+        GoalNode {
+            id: ATTACHED_ANALYSIS_TABLE.into(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: vec![ATTACHED_ANALYSIS_CONDITION.into()],
+        },
+    ]
+}
+
+pub(crate) fn observe_attached_analysis(
+    graph: &mut Scheduler,
+    condition: &str,
+    table: &str,
+) -> Result<()> {
+    graph.observe(ATTACHED_ANALYSIS_CONDITION, condition, &BTreeMap::new())?;
+    graph.observe(
+        ATTACHED_ANALYSIS_TABLE,
+        table,
+        &BTreeMap::from([(ATTACHED_ANALYSIS_CONDITION.into(), condition.into())]),
+    )
+}
 
 pub(crate) fn goal_predicates(
     meaning: &MeaningIR,
@@ -1825,17 +1873,64 @@ pub(crate) fn goal_predicates(
         Intent::ClarifyPreviousLength
         | Intent::ClarifyFilteredCsvStatistics
         | Intent::SupplyHearingAnswer { .. } => predicates.push(hearing::PREDICATE.into()),
-        Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. } => {
+        intent if is_conversation_intent(intent) => {
             predicates.push(CONVERSATION_PREDICATE.into());
         }
+        Intent::DraftMessage { .. } => predicates.push(DRAFT_MESSAGE_PREDICATE.into()),
+        Intent::DraftFiction { .. } => predicates.push(DRAFT_FICTION_PREDICATE.into()),
+        Intent::TranslateText { .. } | Intent::ReviseTranslation { .. } => {
+            predicates.push(TRANSLATION_PREDICATE.into())
+        }
+        Intent::PlanWork { .. } | Intent::ReviseWorkPlan { .. } => {
+            predicates.push(WORK_PLAN_PREDICATE.into());
+        }
+        Intent::ReviseMessage { .. } => predicates.push(MESSAGE_REVISION_PREDICATE.into()),
+        intent if is_decision_intent(intent) => predicates.push(OPTION_DECISION_PREDICATE.into()),
         Intent::AskWeb { .. } => predicates.push(WEB_ANSWER_PREDICATE.into()),
-        Intent::Statistics { .. } | Intent::FiniteProbabilityStatistics { .. }
-            if meaning.parser_version == input::CONVERSATIONAL_MATH_PARSER_VERSION =>
+        Intent::CompareWebResearch { .. } => {
+            predicates.push(crate::research_goal::PREDICATE.into())
+        }
+        intent if crate::branch_text::handles(intent) => {
+            predicates.push(crate::branch_text::PREDICATE.into());
+        }
+        Intent::AskCurrentNews { .. } => predicates.push(crate::news::PREDICATE.into()),
+        Intent::AskCounterfactualRelation { .. } => {
+            predicates.push(crate::counterfactual::PREDICATE.into())
+        }
+        Intent::ExplainCurrentNews { .. } => {
+            predicates.push(crate::news::EXPLANATION_PREDICATE.into())
+        }
+        Intent::ExplainPreviousStop => predicates.push(crate::clarification::PREDICATE.into()),
+        Intent::Statistics { .. }
+        | Intent::FiniteProbabilityStatistics { .. }
+        | Intent::DescribeStatistics { .. }
+            if input::is_conversational_math_version(&meaning.parser_version) =>
         {
             predicates.push(CONVERSATIONAL_MATH_PREDICATE.into());
         }
         Intent::ExplainCode { .. } => predicates.push(CODE_EXPLANATION_PREDICATE.into()),
-        Intent::GenerateReturnFunction { .. } => predicates.push(RETURN_FUNCTION_PREDICATE.into()),
+        Intent::RepairCode { .. } => predicates.push(CODE_REPAIR_PREDICATE.into()),
+        intent if crate::wasm_execution::handles(intent) => {
+            predicates.push(WASM_EXECUTION_PREDICATE.into())
+        }
+        Intent::CreateCsvChart { .. }
+        | Intent::CreateCsvChartFromExecution { .. }
+        | Intent::CreateCsvChartFromExecutionValues { .. }
+        | Intent::CreateCsvChartFromAttachments { .. }
+        | Intent::FilterPreviousCsvChart { .. } => {
+            predicates.push(CSV_CHART_PREDICATE.into());
+        }
+        intent if input::is_attached_document_intent(intent) => {
+            predicates.push(ATTACHED_DOCUMENT_PREDICATE.into());
+        }
+        Intent::SpeakPreviousAnswer => predicates.push(crate::speech::PREDICATE.into()),
+        Intent::ProduceImage { .. } => predicates.push(crate::image_delivery::PREDICATE.into()),
+        Intent::AnalyzeAttachments { .. } => {
+            predicates.push(ATTACHED_ANALYSIS_PREDICATE.into());
+        }
+        Intent::GenerateReturnFunction { .. } | Intent::GenerateFunctionFromSpec { .. } => {
+            predicates.push(RETURN_FUNCTION_PREDICATE.into());
+        }
         Intent::VerifyPreviousCode { .. }
             if meaning.parser_version == input::EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION =>
         {
@@ -1857,6 +1952,11 @@ pub(crate) fn goal_predicates(
             if meaning.parser_version == input::PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION =>
         {
             predicates.push(PREVIOUS_LENGTH_CONVERSION_PREDICATE.into());
+        }
+        Intent::ScalePreviousCalculation { .. }
+            if meaning.parser_version == input::PREVIOUS_CALCULATION_SCALE_PARSER_VERSION =>
+        {
+            predicates.push(PREVIOUS_CALCULATION_SCALE_PREDICATE.into());
         }
         Intent::ConvertPreviousLength { .. }
             if meaning.parser_version == input::PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION =>
@@ -2004,10 +2104,16 @@ fn verify_report_goal_content(
                 | RELATION_COMPARISON_PREDICATE
                 | GENERATED_CALCULATION_PREDICATE
                 | CONVERSATION_PREDICATE
+                | DRAFT_MESSAGE_PREDICATE
+                | DRAFT_FICTION_PREDICATE
+                | TRANSLATION_PREDICATE
+                | MESSAGE_REVISION_PREDICATE
+                | OPTION_DECISION_PREDICATE
                 | CONVERSATIONAL_MATH_PREDICATE
                 | hearing::PREDICATE
                 | CALCULATION_CORRECTION_PREDICATE
                 | PREVIOUS_LENGTH_CONVERSION_PREDICATE
+                | PREVIOUS_CALCULATION_SCALE_PREDICATE
                 | PREVIOUS_WEB_LENGTH_CONVERSION_PREDICATE
                 | PREVIOUS_FINITE_EVENT_PROBABILITY_PREDICATE
                 | PREVIOUS_FILTERED_CSV_STATISTICS_PREDICATE
@@ -2029,7 +2135,20 @@ fn verify_report_goal_content(
                 | MULTI_CONDITION_PREMISE_PREDICATE
                 | CORRECTION_ASSERTION_PREDICATE
                 | WEB_ANSWER_PREDICATE
+                | crate::research_goal::PREDICATE
+                | crate::news::PREDICATE
+                | crate::counterfactual::PREDICATE
+                | crate::news::EXPLANATION_PREDICATE
+                | crate::clarification::PREDICATE
                 | CODE_EXPLANATION_PREDICATE
+                | CODE_REPAIR_PREDICATE
+                | WASM_EXECUTION_PREDICATE
+                | CSV_CHART_PREDICATE
+                | ATTACHED_DOCUMENT_PREDICATE
+                | crate::speech::PREDICATE
+                | crate::image_delivery::PREDICATE
+                | crate::branch_text::PREDICATE
+                | ATTACHED_ANALYSIS_PREDICATE
                 | RETURN_FUNCTION_PREDICATE
                 | crate::code_generation::EXPLAINED_CODE_VERIFICATION_PREDICATE
                 | PREVIOUS_ASSERTION_EXPLANATION_PREDICATE
@@ -2122,15 +2241,27 @@ pub(crate) fn calculation_from_context(
     prior_results: &BTreeMap<String, ResultRecord>,
     started: Instant,
 ) -> Result<Calculation> {
+    if matches!(
+        bundle.meaning.intent,
+        Intent::ScalePreviousCalculation { .. }
+    ) && !input::verified_previous_calculation_scale_input(bundle)?
+    {
+        return Err(failure(
+            "CALCULATION_SCALE_INPUT_MISMATCH",
+            "倍率の指定を封印済みの発話と照合できません。",
+        ));
+    }
     let value = verified_calculation_in_context(store, bundle, previous, prior_results, started)?;
     let result = apply_calculation_context_intent(value, &bundle.meaning.intent)?;
     if started.elapsed().as_millis() >= u128::from(bundle.request.budget.deadline_ms) {
         return Err(failure(
             "DEADLINE",
-            if matches!(bundle.meaning.intent, Intent::CorrectCalculation { .. }) {
-                "訂正対象の確認中に締切へ達しました。"
-            } else {
-                "換算対象の確認中に締切へ達しました。"
+            match bundle.meaning.intent {
+                Intent::CorrectCalculation { .. } => "訂正対象の確認中に締切へ達しました。",
+                Intent::ScalePreviousCalculation { .. } => {
+                    "倍率を適用する計算の確認中に締切へ達しました。"
+                }
+                _ => "換算対象の確認中に締切へ達しました。",
             },
         ));
     }
@@ -2145,6 +2276,10 @@ fn apply_calculation_context_intent(value: Calculation, intent: &Intent) -> Resu
             replacement,
         } => language::correct_binary_operand(&value, *operand_index, replacement),
         Intent::ConvertPreviousLength { unit } => language::convert_exact_length(&value, unit),
+        Intent::ScalePreviousCalculation {
+            numerator,
+            denominator,
+        } => language::scale_previous_calculation(&value, *numerator, *denominator),
         _ => Err(failure(
             "CALCULATION_CONTEXT_INVALID",
             "確定した計算値を処理できません。",
@@ -2166,11 +2301,20 @@ pub(crate) fn verified_calculation_in_context(
     }
 
     let correcting = matches!(bundle.meaning.intent, Intent::CorrectCalculation { .. });
+    let scaling = matches!(
+        bundle.meaning.intent,
+        Intent::ScalePreviousCalculation { .. }
+    );
     let invalid = || {
         if correcting {
             failure(
                 "CORRECTION_SOURCE_MISMATCH",
                 "訂正対象を同じケースの封印済み計算と確定結果に結び付けられません。",
+            )
+        } else if scaling {
+            failure(
+                "CALCULATION_SCALE_SOURCE_MISMATCH",
+                "倍率を適用する値を、同じ会話で確定した計算として照合できません。",
             )
         } else {
             failure(
@@ -2199,6 +2343,8 @@ pub(crate) fn verified_calculation_in_context(
                 "DEADLINE",
                 if correcting {
                     "訂正対象の確認中に締切へ達しました。"
+                } else if scaling {
+                    "倍率を適用する計算の確認中に締切へ達しました。"
                 } else {
                     "換算対象の確認中に締切へ達しました。"
                 },
@@ -2212,6 +2358,8 @@ pub(crate) fn verified_calculation_in_context(
             "ACTION_BUDGET_EXHAUSTED",
             if correcting {
                 "訂正に必要な計算と履歴を照合する行動予算が不足しています。"
+            } else if scaling {
+                "倍率を適用する値と履歴を照合する行動予算が不足しています。"
             } else {
                 "換算に必要な計算と履歴を照合する行動予算が不足しています。"
             },
@@ -2276,6 +2424,8 @@ pub(crate) fn verified_calculation_in_context(
                     }
                     Intent::ConvertPreviousLength { .. }
                         if input.meaning.parser_version == input::PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION => {}
+                    Intent::ScalePreviousCalculation { .. }
+                        if input::verified_previous_calculation_scale_input(&input)? => {}
                     Intent::ExplainPrevious | Intent::CorrectCalculation { .. } => {}
                     _ => return Err(invalid()),
                 }
@@ -2595,6 +2745,16 @@ pub(crate) fn verify_generated_calculation_computation(
     Ok(compute_ref)
 }
 
+pub(crate) fn is_conversation_intent(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::OpenConversationTopic { .. }
+            | Intent::RespondOnConversationTopic { .. }
+            | Intent::ReportConversationEvent { .. }
+            | Intent::ResumeConversationTopic { .. }
+    )
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct ConversationOpening {
@@ -2603,17 +2763,35 @@ struct ConversationOpening {
     input_version: u64,
     bundle_fingerprint: String,
     topic: SourceSpan,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event: Option<ConversationEvent>,
 }
 
 impl ConversationOpening {
-    fn from_input(bundle: &InputBundle, topic: &SourceSpan) -> Result<Self> {
-        Ok(Self {
+    fn matches_selector(&self, selector: &str) -> bool {
+        self.topic.text == selector
+            || self.event.as_ref().is_some_and(|event| {
+                event.report.text == selector.strip_suffix('。').unwrap_or(selector)
+            })
+    }
+
+    fn from_input(bundle: &InputBundle) -> Result<Option<Self>> {
+        let (topic, event) = match &bundle.meaning.intent {
+            Intent::OpenConversationTopic { topic } => (topic, None),
+            Intent::ReportConversationEvent {
+                event,
+                continue_topic: false,
+            } => (event.target.as_ref().unwrap_or(&event.report), Some(event)),
+            _ => return Ok(None),
+        };
+        Ok(Some(Self {
             result_id: identity(&bundle.request)?,
             input_id: bundle.request.input_id.clone(),
             input_version: bundle.request.input_version,
             bundle_fingerprint: bundle.fingerprint.clone(),
             topic: topic.clone(),
-        })
+            event: event.cloned(),
+        }))
     }
 }
 
@@ -2693,6 +2871,35 @@ struct ConversationReply {
     prior_id: String,
     remark: SourceSpan,
     focus: ConversationFocus,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    event: Option<ConversationEvent>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    named_topic: Option<SourceSpan>,
+}
+
+impl ConversationReply {
+    fn from_input(bundle: &InputBundle, prior_id: &str) -> Option<Self> {
+        let (remark, event, named_topic) = match &bundle.meaning.intent {
+            Intent::RespondOnConversationTopic { remark } => (remark, None, None),
+            Intent::ReportConversationEvent {
+                event,
+                continue_topic: true,
+            } => (&event.report, Some(event), None),
+            Intent::ResumeConversationTopic { topic, event } => (
+                event.as_ref().map_or(topic, |event| &event.report),
+                event.as_ref(),
+                Some(topic),
+            ),
+            _ => return None,
+        };
+        Some(Self {
+            prior_id: prior_id.into(),
+            remark: remark.clone(),
+            focus: ConversationFocus::from_remark(&remark.text),
+            event: event.cloned(),
+            named_topic: named_topic.cloned(),
+        })
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -2703,12 +2910,139 @@ struct ConversationMeaningPlan {
     reply: Option<ConversationReply>,
 }
 
+fn conversation_event_fragments(
+    event: &ConversationEvent,
+    previous_topic: Option<&SourceSpan>,
+) -> Vec<language::MeaningGrammarFragment> {
+    use language::MeaningGrammarFragment::{ExactField, Literal};
+
+    let mut fragments = Vec::new();
+    if let Some(greeting) = &event.greeting {
+        fragments.extend([
+            ExactField {
+                value: greeting.text.clone(),
+            },
+            Literal {
+                value: "。".into()
+            },
+        ]);
+    }
+    if let Some(topic) = previous_topic {
+        fragments.extend([
+            Literal {
+                value: "「".into()
+            },
+            ExactField {
+                value: topic.text.clone(),
+            },
+            Literal {
+                value: "」の話に続いて、".into(),
+            },
+        ]);
+    }
+    fragments.extend([
+        Literal {
+            value: "「".into()
+        },
+        ExactField {
+            value: event.report.text.clone(),
+        },
+        Literal {
+            value: "」というお話ですね。".into(),
+        },
+    ]);
+    let question = if event.negative {
+        "そのときはどんな状況でしたか。よければ聞かせてください。"
+    } else {
+        match event.kind {
+            ConversationEventKind::Observation => "そのとき、どんな様子が印象に残りましたか。",
+            ConversationEventKind::Discovery => "何がきっかけで気づいたのですか。",
+            ConversationEventKind::Activity => {
+                "その場面で、気づいたことや印象に残ったことはありますか。"
+            }
+            ConversationEventKind::Movement => "行き先や道中で、印象に残ったことはありますか。",
+            ConversationEventKind::Difficulty => {
+                "どの場面が難しかったのか、そこから一緒に考えられます。"
+            }
+            ConversationEventKind::Feeling => "どんなところが特に印象に残りましたか。",
+        }
+    };
+    fragments.push(Literal {
+        value: question.into(),
+    });
+    fragments
+}
+
 #[derive(serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct GeneratedConversationArtifact {
     kind: String,
     meaning_plan: ConversationMeaningPlan,
     content_generation: language::MeaningGenerationReport,
+}
+
+fn registered_news_input(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+) -> Result<Option<InputBundle>> {
+    let Some((_, bundle)) = store.get_input_bundle(
+        &state.actor_id,
+        &state.case_id,
+        &result.input_id,
+        result.input_version,
+    )?
+    else {
+        return Ok(None);
+    };
+    if !matches!(
+        bundle.meaning.intent,
+        Intent::AskCurrentNews { .. } | Intent::ExplainCurrentNews { .. }
+    ) {
+        return Ok(None);
+    }
+    if identity(&bundle.request)? != result.id
+        || !input::verified_current_news_input(&bundle)?
+        || store
+            .get_input_result(
+                &state.actor_id,
+                &state.case_id,
+                &result.input_id,
+                result.input_version,
+            )?
+            .as_ref()
+            != Some(result)
+    {
+        return Err(failure(
+            "NEWS_CONTEXT_INVALID",
+            "保存されたニュースの依頼と結果を照合できません。",
+        ));
+    }
+    Ok(Some(bundle))
+}
+
+fn current_news_origin(
+    store: &Store,
+    state: &CaseRevision,
+    previous: &ResultRecord,
+) -> Result<Option<String>> {
+    let Some(source) = registered_news_input(store, state, previous)? else {
+        return Ok(None);
+    };
+    match source.meaning.intent {
+        Intent::AskCurrentNews { .. } => Ok(Some(previous.id.clone())),
+        Intent::ExplainCurrentNews { origin } if previous.lifecycle == Lifecycle::Commit => {
+            if let Some(original) = state.prior_results.get(&origin)
+                && registered_news_input(store, state, original)?.is_some_and(|bundle| {
+                    matches!(bundle.meaning.intent, Intent::AskCurrentNews { .. })
+                })
+            {
+                return Ok(Some(origin));
+            }
+            Ok(None)
+        }
+        _ => Ok(None),
+    }
 }
 
 fn registered_conversation_input(
@@ -2728,10 +3062,7 @@ fn registered_conversation_input(
     else {
         return Ok(None);
     };
-    if !matches!(
-        bundle.meaning.intent,
-        Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. }
-    ) {
+    if !is_conversation_intent(&bundle.meaning.intent) {
         return Ok(None);
     }
     if identity(&bundle.request)? != result.id
@@ -2754,23 +3085,111 @@ fn registered_conversation_input(
     Ok(Some(bundle))
 }
 
+fn named_conversation_parent(
+    store: &Store,
+    state: &CaseRevision,
+    request: &RequestEnvelope,
+    topic: &SourceSpan,
+    through_revision: Option<u64>,
+    deadline: Instant,
+) -> Result<(ResultRecord, u32)> {
+    let not_found = || {
+        failure(
+            "CONVERSATION_TOPIC_NOT_FOUND",
+            "同じ会話で、その名前の確定した話題を見つけられませんでした。",
+        )
+    };
+    let before = through_revision.ok_or_else(not_found)?;
+    let check_deadline = || {
+        if Instant::now() >= deadline {
+            Err(failure(
+                "DEADLINE",
+                "話題の履歴を確認する時間に達しました。",
+            ))
+        } else {
+            Ok(())
+        }
+    };
+    let max_inputs = request.budget.max_actions.saturating_sub(3).min(128);
+    check_deadline()?;
+    if let Some(id) = &request.context_ref {
+        if max_inputs == 0 {
+            return Err(failure(
+                "ACTION_BUDGET_EXHAUSTED",
+                "指定した話題を照合する行動予算がありません。",
+            ));
+        }
+        let candidate = state.prior_results.get(id).ok_or_else(not_found)?;
+        let source =
+            registered_conversation_input(store, state, candidate)?.ok_or_else(not_found)?;
+        let opening = ConversationOpening::from_input(&source)?
+            .filter(|opening| opening.matches_selector(&topic.text))
+            .ok_or_else(not_found)?;
+        debug_assert_eq!(opening.result_id, candidate.id);
+        check_deadline()?;
+        return Ok((candidate.clone(), 1));
+    }
+    let mut selected = None;
+    let scan = store.recent_result_input_before(
+        &request.actor_id,
+        &request.case_id,
+        before,
+        max_inputs,
+        false,
+        |bundle, result| {
+            check_deadline()?;
+            if result.guarantee != Guarantee::Computed {
+                return Ok(false);
+            }
+            let Some(opening) = ConversationOpening::from_input(bundle)? else {
+                return Ok(false);
+            };
+            if !opening.matches_selector(&topic.text) {
+                return Ok(false);
+            }
+            if opening.result_id != result.id || !input::verified_conversation_input(bundle)? {
+                return Err(failure(
+                    "CONVERSATION_CONTEXT_INVALID",
+                    "保存された話題と元の入力を照合できません。",
+                ));
+            }
+            if selected.is_some() {
+                return Err(failure(
+                    "CONVERSATION_TOPIC_AMBIGUOUS",
+                    "同名の話題が複数あります。元の発話を「」に入れて、戻る話を指定してください。",
+                ));
+            }
+            selected = Some(result.clone());
+            Ok(false)
+        },
+    );
+    let (_, examined) = match scan {
+        Err(Error::Contract { code, .. }) if code == "ACTION_BUDGET_EXHAUSTED" => {
+            return Err(failure(
+                &code,
+                "この予算では、話題の履歴を最後まで照合できません。",
+            ));
+        }
+        other => other?,
+    };
+    check_deadline()?;
+    Ok((selected.ok_or_else(not_found)?, examined))
+}
+
 fn retained_conversation_opening(
     store: &Store,
     state: &CaseRevision,
     prior: &ResultRecord,
     prior_bundle: &InputBundle,
 ) -> Result<ConversationOpening> {
-    if let Intent::OpenConversationTopic { topic } = &prior_bundle.meaning.intent {
-        return ConversationOpening::from_input(prior_bundle, topic);
+    if let Some(opening) = ConversationOpening::from_input(prior_bundle)? {
+        return Ok(opening);
     }
     let invalid = || {
         failure(
             "CONVERSATION_CONTEXT_INVALID",
             "前の発話から、元の話題入力を照合できません。",
         )
-    };
-    let Intent::RespondOnConversationTopic { remark } = &prior_bundle.meaning.intent else {
-        return Err(invalid());
     };
     let content = prior.content_plan.as_ref().ok_or_else(invalid)?;
     let compute_ref = content.dependencies.last().ok_or_else(invalid)?;
@@ -2784,8 +3203,7 @@ fn retained_conversation_opening(
         .ok_or_else(invalid)?;
     if artifact.kind != GENERATED_CONVERSATION_KIND
         || meaning.source_bundle != prior_bundle.fingerprint
-        || &reply.remark != remark
-        || reply.focus != ConversationFocus::from_remark(&remark.text)
+        || ConversationReply::from_input(prior_bundle, &reply.prior_id).as_ref() != Some(reply)
         || prior_bundle.meaning.context_result_ref.as_deref() != Some(reply.prior_id.as_str())
         || prior_bundle.context_sha256 != identity(&Some(context))?
         || prior.dependencies != meaning.dependencies()
@@ -2802,17 +3220,19 @@ fn retained_conversation_opening(
         .get(&meaning.opening.result_id)
         .ok_or_else(invalid)?;
     let source = registered_conversation_input(store, state, opening)?.ok_or_else(invalid)?;
-    let Intent::OpenConversationTopic { topic } = &source.meaning.intent else {
-        return Err(invalid());
-    };
-    if ConversationOpening::from_input(&source, topic)? != meaning.opening {
+    if ConversationOpening::from_input(&source)?.as_ref() != Some(&meaning.opening) {
         return Err(invalid());
     }
     Ok(meaning.opening)
 }
 
 impl ConversationMeaningPlan {
-    fn resolve(store: &Store, state: &CaseRevision, bundle: &InputBundle) -> Result<Self> {
+    fn resolve(
+        store: &Store,
+        state: &CaseRevision,
+        bundle: &InputBundle,
+        selected: Option<&ResultRecord>,
+    ) -> Result<Self> {
         if bundle.request.actor_id != state.actor_id
             || bundle.request.case_id != state.case_id
             || state.input_fingerprint.as_deref() != Some(identity(&bundle.request)?.as_str())
@@ -2823,11 +3243,9 @@ impl ConversationMeaningPlan {
                 "元の発話とその意味を照合できません。",
             ));
         }
-        let (opening, reply) = match &bundle.meaning.intent {
-            Intent::OpenConversationTopic { topic } => {
-                (ConversationOpening::from_input(bundle, topic)?, None)
-            }
-            Intent::RespondOnConversationTopic { remark } => {
+        let (opening, reply) = match ConversationOpening::from_input(bundle)? {
+            Some(opening) => (opening, None),
+            None => {
                 let invalid = || {
                     failure(
                         "CONVERSATION_CONTEXT_INVALID",
@@ -2840,7 +3258,29 @@ impl ConversationMeaningPlan {
                     .as_ref()
                     .and_then(|id| state.prior_results.get(id))
                     .ok_or_else(invalid)?;
-                let matches_context = if let Some(reference) = bundle.request.context_ref.as_ref() {
+                let matches_context = if let Intent::ResumeConversationTopic { topic, .. } =
+                    &bundle.meaning.intent
+                {
+                    if let Some(selected) = selected {
+                        selected == prior
+                    } else {
+                        let before = store
+                            .input_start_predecessor_revision(state)?
+                            .map(|case| case.revision);
+                        let deadline = Instant::now()
+                            .checked_add(Duration::from_millis(bundle.request.budget.deadline_ms))
+                            .ok_or_else(invalid)?;
+                        named_conversation_parent(
+                            store,
+                            state,
+                            &bundle.request,
+                            topic,
+                            before,
+                            deadline,
+                        )?
+                        .0 == *prior
+                    }
+                } else if let Some(reference) = bundle.request.context_ref.as_ref() {
                     reference == &prior.id
                 } else {
                     store.input_start_predecessor(state)?.as_ref() == Some(prior)
@@ -2851,20 +3291,8 @@ impl ConversationMeaningPlan {
                 let prior_bundle =
                     registered_conversation_input(store, state, prior)?.ok_or_else(invalid)?;
                 let opening = retained_conversation_opening(store, state, prior, &prior_bundle)?;
-                (
-                    opening,
-                    Some(ConversationReply {
-                        prior_id: prior.id.clone(),
-                        remark: remark.clone(),
-                        focus: ConversationFocus::from_remark(&remark.text),
-                    }),
-                )
-            }
-            _ => {
-                return Err(failure(
-                    "CONVERSATION_SOURCE_INVALID",
-                    "話題に対応する発話がありません。",
-                ));
+                let reply = ConversationReply::from_input(bundle, &prior.id).ok_or_else(invalid)?;
+                (opening, Some(reply))
             }
         };
         Ok(Self {
@@ -2888,9 +3316,37 @@ impl ConversationMeaningPlan {
     fn generation_request(&self, budget: usize) -> Result<language::MeaningGenerationRequest> {
         use language::{
             MeaningCompositionFormat, MeaningCompositionPurpose, MeaningCompositionStyle,
-            MeaningGrammarFragment::{ExactField, Literal},
             MeaningGrammarUnit, MeaningRole,
         };
+
+        let event = self
+            .reply
+            .as_ref()
+            .map_or(self.opening.event.as_ref(), |reply| reply.event.as_ref());
+        let fragments = if let Some(event) = event {
+            conversation_event_fragments(event, self.reply.as_ref().map(|_| &self.opening.topic))
+        } else {
+            self.topic_fragments()
+        };
+        Ok(language::MeaningGenerationRequest {
+            purpose: MeaningCompositionPurpose::ShortComposition,
+            format: MeaningCompositionFormat::Paragraph,
+            style: MeaningCompositionStyle::Neutral,
+            units: vec![MeaningGrammarUnit {
+                id: "conversation_turn".into(),
+                role: MeaningRole::Body,
+                semantic_sha256: identity(&(GENERATED_CONVERSATION_KIND, self))?,
+                evidence_ids: self.dependencies(),
+                dependencies: Vec::new(),
+                fragments,
+            }],
+            max_output_bytes: budget.min(language::MAX_EXACT_FIELD_GENERATION_BYTES),
+            max_tokens: language::MAX_EXACT_FIELD_GENERATION_TOKENS,
+        })
+    }
+
+    fn topic_fragments(&self) -> Vec<language::MeaningGrammarFragment> {
+        use language::MeaningGrammarFragment::{ExactField, Literal};
 
         let mut fragments = vec![
             Literal {
@@ -2900,6 +3356,29 @@ impl ConversationMeaningPlan {
                 value: self.opening.topic.text.clone(),
             },
         ];
+        if self
+            .reply
+            .as_ref()
+            .is_some_and(|reply| reply.named_topic.is_some())
+        {
+            fragments.push(Literal {
+                value: "」の話に戻りましょう。".into(),
+            });
+            if let Some(event) = &self.opening.event {
+                fragments.extend([
+                    Literal {
+                        value: "前には「".into(),
+                    },
+                    ExactField {
+                        value: event.report.text.clone(),
+                    },
+                    Literal {
+                        value: "」と話していました。".into(),
+                    },
+                ]);
+            }
+            return fragments;
+        }
         if let Some(reply) = self.reply.as_ref() {
             fragments.extend([
                 Literal {
@@ -2927,21 +3406,7 @@ impl ConversationMeaningPlan {
                 },
             ]);
         }
-        Ok(language::MeaningGenerationRequest {
-            purpose: MeaningCompositionPurpose::ShortComposition,
-            format: MeaningCompositionFormat::Paragraph,
-            style: MeaningCompositionStyle::Neutral,
-            units: vec![MeaningGrammarUnit {
-                id: "conversation_turn".into(),
-                role: MeaningRole::Body,
-                semantic_sha256: identity(&(GENERATED_CONVERSATION_KIND, self))?,
-                evidence_ids: self.dependencies(),
-                dependencies: Vec::new(),
-                fragments,
-            }],
-            max_output_bytes: budget.min(language::MAX_EXACT_FIELD_GENERATION_BYTES),
-            max_tokens: language::MAX_EXACT_FIELD_GENERATION_TOKENS,
-        })
+        fragments
     }
 }
 
@@ -2958,7 +3423,7 @@ pub(crate) fn verify_conversation_computation(
         )
     };
     let bundle = state.bundle.as_ref().ok_or_else(invalid)?;
-    let meaning_plan = ConversationMeaningPlan::resolve(store, state, bundle)?;
+    let meaning_plan = ConversationMeaningPlan::resolve(store, state, bundle, None)?;
     let dependencies = meaning_plan.dependencies();
     if result.id != identity(&bundle.request)?
         || result.guarantee != Guarantee::Computed
@@ -2993,6 +3458,1636 @@ pub(crate) fn verify_conversation_computation(
     store.get_bytes(&state.actor_id, &state.case_id, &compute_ref)?;
     verify_generated_model_artifacts(store, &state.actor_id, &state.case_id, plan)?;
     Ok(compute_ref)
+}
+
+pub(crate) fn verify_committed_conversation_return(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+) -> Result<()> {
+    let Some(bundle) = state.bundle.as_ref().filter(|bundle| {
+        matches!(
+            bundle.meaning.intent,
+            Intent::ResumeConversationTopic { .. }
+        )
+    }) else {
+        return Ok(());
+    };
+    let invalid = || {
+        failure(
+            "RECOVERY_CONVERSATION_MISMATCH",
+            "元の話題と保存した回答を照合できません。",
+        )
+    };
+    let plan = result.content_plan.as_ref().ok_or_else(invalid)?;
+    let render = result.render.as_ref().ok_or_else(invalid)?;
+    let goal_ref = state.goal_sha256.as_deref().ok_or_else(invalid)?;
+    let goal: GoalContract =
+        serde_json::from_slice(&store.get_bytes(&state.actor_id, &state.case_id, goal_ref)?)?;
+    if goal.intent != bundle.meaning.intent
+        || goal.output_path.is_some()
+        || goal.input_fingerprint != result.id
+        || goal.budget != bundle.request.budget
+        || goal.permissions != bundle.request.permissions
+        || goal.required_predicates != goal_predicates(&bundle.meaning, false, None)
+        || result.input_id != bundle.request.input_id
+        || result.input_version != bundle.request.input_version
+        || store
+            .get_input_bundle(
+                &state.actor_id,
+                &state.case_id,
+                &result.input_id,
+                result.input_version,
+            )?
+            .is_none_or(|(_, registered)| registered != *bundle)
+        || !result.receipts.is_empty()
+        || !validate_goal_render(&goal, plan, render)
+    {
+        return Err(invalid());
+    }
+    let compute_ref = verify_conversation_computation(store, state, result, plan)?;
+    crate::document::revalidate_previous_document_render(
+        store,
+        &state.actor_id,
+        &state.case_id,
+        result,
+        Some(&compute_ref),
+        "RECOVERY_CONVERSATION_MISMATCH",
+        "conversation return",
+    )?;
+    Ok(())
+}
+
+fn message_context_invalid() -> Error {
+    failure(
+        "MESSAGE_CONTEXT_INVALID",
+        "同じ会話の確定した下書きを照合できません。",
+    )
+}
+
+fn is_message_intent(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::DraftMessage { .. } | Intent::ReviseMessage { .. }
+    )
+}
+
+fn check_message_deadline(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        Err(failure(
+            "DEADLINE",
+            "元の下書きを確認する間に処理の締切に達しました。",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn recent_message(
+    store: &Store,
+    request: &RequestEnvelope,
+    revision: &MessageRevision,
+    through_revision: u64,
+    deadline: Instant,
+) -> Result<Option<ResultRecord>> {
+    check_message_deadline(deadline)?;
+    store.recent_committed_input_before(
+        &request.actor_id,
+        &request.case_id,
+        through_revision,
+        request.budget.max_actions,
+        |bundle, result| {
+            check_message_deadline(deadline)?;
+            if !is_message_intent(&bundle.meaning.intent) {
+                return Ok(false);
+            }
+            let Some(expected) = revision.format else {
+                return Ok(true);
+            };
+            let format = match &bundle.meaning.intent {
+                Intent::DraftMessage { draft } => draft.format,
+                Intent::ReviseMessage { .. } => {
+                    let reference = result
+                        .content_plan
+                        .as_ref()
+                        .and_then(|plan| plan.dependencies.last())
+                        .ok_or_else(message_context_invalid)?;
+                    let artifact: crate::writing::GeneratedMessageArtifact =
+                        serde_json::from_slice(&store.get_bytes(
+                            &request.actor_id,
+                            &request.case_id,
+                            reference,
+                        )?)?;
+                    artifact.meaning_plan.draft.format
+                }
+                _ => unreachable!("non-message input was rejected"),
+            };
+            Ok(format == expected)
+        },
+    )
+}
+
+fn bound_message_parent<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+    bundle: &InputBundle,
+    revision: &MessageRevision,
+    deadline: Instant,
+) -> Result<&'a ResultRecord> {
+    let parent = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .filter(|result| result.lifecycle == Lifecycle::Commit)
+        .ok_or_else(message_context_invalid)?;
+    if !registered_relation_context_matches(bundle, &state.prior_results, parent)? {
+        return Err(message_context_invalid());
+    }
+    if bundle.request.context_ref.is_none() {
+        let previous = store
+            .input_start_predecessor_revision(state)?
+            .ok_or_else(message_context_invalid)?;
+        let actual = if revision.named {
+            recent_message(
+                store,
+                &bundle.request,
+                revision,
+                previous.revision,
+                deadline,
+            )?
+        } else {
+            previous.result
+        };
+        if actual.as_ref() != Some(parent) {
+            return Err(message_context_invalid());
+        }
+    }
+    Ok(parent)
+}
+
+fn original_message_plan(
+    bundle: &InputBundle,
+    draft: &MessageDraft,
+) -> crate::writing::MessageMeaningPlan {
+    crate::writing::MessageMeaningPlan {
+        source_bundle: bundle.fingerprint.clone(),
+        draft: draft.clone(),
+        revision: None,
+    }
+}
+
+fn apply_message_revision(
+    input: &InputBundle,
+    mut plan: crate::writing::MessageMeaningPlan,
+    parent: &ResultRecord,
+    compute_ref: String,
+    render_ref: String,
+) -> Result<crate::writing::MessageMeaningPlan> {
+    let Intent::ReviseMessage { revision } = &input.meaning.intent else {
+        return Err(message_context_invalid());
+    };
+    if revision
+        .format
+        .is_some_and(|format| format != plan.draft.format)
+    {
+        return Err(message_context_invalid());
+    }
+    if revision.omit_subject == Some(false)
+        && (plan.draft.format != MessageFormat::Email || plan.draft.body_only)
+    {
+        return Err(failure(
+            "MESSAGE_REVISION_CONSTRAINT",
+            "元の本文のみの指定や媒体では件名を付けられません。",
+        ));
+    }
+    if let Some(limit) = revision.sentence_limit {
+        plan.draft.sentence_limit = Some(limit);
+    }
+    if let Some(omit) = revision.omit_subject {
+        plan.draft.omit_subject = omit;
+    }
+    if let Some(register) = revision.register {
+        plan.draft.register = register;
+    }
+    let compact = revision.shorten || plan.revision.as_ref().is_some_and(|proof| proof.compact);
+    plan.source_bundle = input.fingerprint.clone();
+    plan.revision = Some(crate::writing::MessageRevisionProof {
+        prior_result: parent.id.clone(),
+        prior_compute: compute_ref,
+        prior_render: render_ref,
+        compact,
+        shorter_than: revision
+            .shorten
+            .then(|| crate::writing::rendered_body(&parent.text).chars().count()),
+    });
+    Ok(plan)
+}
+
+fn resolve_message_plan(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    deadline: Instant,
+) -> Result<crate::writing::MessageMeaningPlan> {
+    if bundle.request.actor_id != state.actor_id
+        || bundle.request.case_id != state.case_id
+        || state.input_fingerprint.as_deref() != Some(identity(&bundle.request)?.as_str())
+        || !input::verified_message_input(bundle)?
+    {
+        return Err(failure(
+            "MESSAGE_SOURCE_INVALID",
+            "下書きの内容と登録した原文を照合できません。",
+        ));
+    }
+    if let Intent::DraftMessage { draft } = &bundle.meaning.intent {
+        return Ok(original_message_plan(bundle, draft));
+    }
+    let Intent::ReviseMessage { revision } = &bundle.meaning.intent else {
+        return Err(message_context_invalid());
+    };
+    let mut parent = bound_message_parent(store, state, bundle, revision, deadline)?.clone();
+    let budget = &bundle.request.budget;
+    // The same deadline covers every ancestor and the new generation.
+    store.with_verified_case_history(&state.actor_id, &state.case_id, |history| {
+        let mut ancestors = Vec::new();
+        let mut before = state.revision;
+        let max_ancestors = budget
+            .max_actions
+            .saturating_sub(3 + u32::from(bundle.request.output_path.is_some()));
+        let mut plan = loop {
+            check_message_deadline(deadline)?;
+            if ancestors.len() >= max_ancestors as usize {
+                return Err(failure(
+                    "ACTION_BUDGET_EXHAUSTED",
+                    "下書きの改訂履歴を確認する行動予算が不足しています。",
+                ));
+            }
+            let committed = history
+                .committed_result_revision(&parent)?
+                .filter(|case| case.revision < before)
+                .ok_or_else(message_context_invalid)?;
+            let (_, input) = history
+                .input_bundle(&parent.input_id, parent.input_version)?
+                .ok_or_else(message_context_invalid)?;
+            if committed.bundle.as_ref() != Some(&input)
+                || identity(&input.request)? != parent.id
+                || history
+                    .input_result(&parent.input_id, parent.input_version)?
+                    .as_ref()
+                    != Some(&parent)
+                || !input::verified_message_input(&input)?
+            {
+                return Err(message_context_invalid());
+            }
+            before = committed.revision;
+            match &input.meaning.intent {
+                Intent::DraftMessage { draft } => {
+                    let original = original_message_plan(&input, draft);
+                    ancestors.push((input, parent));
+                    break original;
+                }
+                Intent::ReviseMessage { revision } => {
+                    let earlier =
+                        bound_message_parent(store, &committed, &input, revision, deadline)?
+                            .clone();
+                    ancestors.push((input, parent));
+                    parent = earlier;
+                }
+                _ => return Err(message_context_invalid()),
+            }
+        };
+        let mut evidence_bytes = 0usize;
+        for idx in (0..ancestors.len()).rev() {
+            check_message_deadline(deadline)?;
+            let (input, result) = &ancestors[idx];
+            let content = result
+                .content_plan
+                .as_ref()
+                .ok_or_else(message_context_invalid)?;
+            let (computed, size) =
+                verify_saved_message(store, input, result, content, &plan, deadline)?;
+            evidence_bytes = evidence_bytes.saturating_add(size);
+            if evidence_bytes > budget.max_evidence_bytes {
+                return Err(failure(
+                    "RESOURCE_LIMIT",
+                    "下書きの改訂履歴が証拠予算を超えています。",
+                ));
+            }
+            let render = crate::document::revalidate_previous_document_render(
+                store,
+                &state.actor_id,
+                &state.case_id,
+                result,
+                Some(&computed),
+                "MESSAGE_CONTEXT_INVALID",
+                "message draft",
+            )?;
+            let next_input = if idx == 0 {
+                bundle
+            } else {
+                &ancestors[idx - 1].0
+            };
+            plan = apply_message_revision(next_input, plan, result, computed, render)?;
+        }
+        check_message_deadline(deadline)?;
+        Ok(plan)
+    })
+}
+
+fn verify_saved_message(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    meaning: &crate::writing::MessageMeaningPlan,
+    deadline: Instant,
+) -> Result<(String, usize)> {
+    let invalid = || {
+        failure(
+            "RECOVERY_MESSAGE_MISMATCH",
+            "原文の意味から下書きの保存内容を再現できません。",
+        )
+    };
+    let dependencies = meaning.dependencies();
+    if result.id != identity(&bundle.request)?
+        || result.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || result.actor_memory_revision.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies != dependencies
+    {
+        return Err(invalid());
+    }
+    let grammar = meaning.grammar(bundle.request.budget.max_evidence_bytes)?;
+    let mut replay = language::generate_semantic_meaning_until(&grammar, deadline)?;
+    validate_meaning_generation(&grammar, &dependencies, &replay.report)?;
+    meaning.verify_surface(&replay.report.text)?;
+    replay.report.model_artifact_ref = Some(digest(&canonical(&replay.model)?));
+    if result.text != replay.report.text {
+        return Err(invalid());
+    }
+    let artifact = crate::writing::GeneratedMessageArtifact::new(meaning.clone(), replay.report);
+    let bytes = canonical(&artifact)?;
+    let compute_ref = digest(&bytes);
+    validate_generated_content_plan_adoption(
+        result,
+        &artifact.content_generation,
+        &replay.emission,
+        &dependencies,
+        &compute_ref,
+        &bundle.request.locale,
+        plan,
+    )?;
+    let actor = &bundle.request.actor_id;
+    let case = &bundle.request.case_id;
+    if store.get_bytes(actor, case, &compute_ref)? != bytes {
+        return Err(invalid());
+    }
+    verify_generated_model_artifacts(store, actor, case, plan)?;
+    Ok((compute_ref, bytes.len()))
+}
+
+pub(crate) fn verify_message_computation(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<String> {
+    let bundle = state.bundle.as_ref().ok_or_else(message_context_invalid)?;
+    let time = if bundle.meaning.parser_version == crate::writing::PARSER_VERSION {
+        // V219 recovered an accepted draft using the decoder's repair window.
+        Duration::from_secs(30)
+    } else {
+        Duration::from_millis(bundle.request.budget.deadline_ms)
+    };
+    let deadline = Instant::now()
+        .checked_add(time)
+        .ok_or_else(|| failure("INVALID_DEADLINE", "下書きの確認に使用する締切が無効です。"))?;
+    let meaning = resolve_message_plan(store, state, bundle, deadline)?;
+    Ok(verify_saved_message(store, bundle, result, plan, &meaning, deadline)?.0)
+}
+
+fn resolve_fiction_plan(
+    state: &CaseRevision,
+    bundle: &InputBundle,
+) -> Result<crate::fiction::FictionMeaningPlan> {
+    let invalid = || {
+        failure(
+            "FICTION_SOURCE_INVALID",
+            "創作の設定と登録した原文を照合できません。",
+        )
+    };
+    if bundle.request.actor_id != state.actor_id
+        || bundle.request.case_id != state.case_id
+        || state.input_fingerprint.as_deref() != Some(identity(&bundle.request)?.as_str())
+        || !input::verified_fiction_input(bundle)?
+    {
+        return Err(invalid());
+    }
+    let Intent::DraftFiction { draft } = &bundle.meaning.intent else {
+        return Err(invalid());
+    };
+    crate::fiction::FictionMeaningPlan::from_draft(draft.clone(), bundle.fingerprint.clone())
+}
+
+pub(crate) fn verify_fiction_computation(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<String> {
+    let invalid = || {
+        failure(
+            "RECOVERY_DRAFT_FICTION_MISMATCH",
+            "原文の設定から保存した創作と生成の根拠を再現できません。",
+        )
+    };
+    let bundle = state.bundle.as_ref().ok_or_else(invalid)?;
+    let request = &bundle.request;
+    let meaning = resolve_fiction_plan(state, bundle)?;
+    let dependencies = meaning.dependencies();
+    if result.id != identity(request)?
+        || result.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || result.actor_memory_revision.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies != dependencies
+    {
+        return Err(invalid());
+    }
+
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(request.budget.deadline_ms))
+        .ok_or_else(|| failure("INVALID_DEADLINE", "創作の照合に使う締切が無効です。"))?;
+    let grammar = meaning.grammar(request.budget.max_evidence_bytes)?;
+    let mut replay = language::generate_semantic_meaning_until(&grammar, deadline)?;
+    validate_meaning_generation(&grammar, &dependencies, &replay.report)?;
+    meaning.verify_surface(&replay.report.text)?;
+    if result.text != replay.report.text {
+        return Err(invalid());
+    }
+    replay.report.model_artifact_ref = Some(digest(&canonical(&replay.model)?));
+    let artifact = crate::fiction::GeneratedFictionArtifact::new(meaning, replay.report);
+    let bytes = canonical(&artifact)?;
+    let compute_ref = digest(&bytes);
+    validate_generated_content_plan_adoption(
+        result,
+        &artifact.content_generation,
+        &replay.emission,
+        &dependencies,
+        &compute_ref,
+        &request.locale,
+        plan,
+    )?;
+    if store.get_bytes(&request.actor_id, &request.case_id, &compute_ref)? != bytes {
+        return Err(invalid());
+    }
+    verify_generated_model_artifacts(store, &request.actor_id, &request.case_id, plan)?;
+    Ok(compute_ref)
+}
+
+pub(crate) fn is_translation_intent(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::TranslateText { .. } | Intent::ReviseTranslation { .. }
+    )
+}
+
+fn translation_context_invalid() -> Error {
+    failure(
+        "TRANSLATION_CONTEXT_INVALID",
+        "同じ会話にある元の訳文と原文を照合できません。",
+    )
+}
+
+fn check_translation_deadline(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        return Err(failure(
+            "DEADLINE",
+            "元の訳文を確認する間に締切に達しました。",
+        ));
+    }
+    Ok(())
+}
+
+fn bound_generated_report_parent<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+    bundle: &InputBundle,
+    invalid: fn() -> Error,
+) -> Result<&'a ResultRecord> {
+    let parent = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .filter(|result| result.lifecycle == Lifecycle::Commit)
+        .ok_or_else(invalid)?;
+    if !registered_relation_context_matches(bundle, &state.prior_results, parent)? {
+        return Err(invalid());
+    }
+    if bundle.request.context_ref.is_none()
+        && store
+            .input_start_predecessor_revision(state)?
+            .and_then(|revision| revision.result)
+            .as_ref()
+            != Some(parent)
+    {
+        return Err(invalid());
+    }
+    Ok(parent)
+}
+
+fn resolve_translation_plan(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    deadline: Instant,
+) -> Result<crate::translation::TranslationMeaningPlan> {
+    use crate::translation::{TranslationMeaningPlan, TranslationRevisionProof};
+    if bundle.request.actor_id != state.actor_id
+        || bundle.request.case_id != state.case_id
+        || state.input_fingerprint.as_deref() != Some(identity(&bundle.request)?.as_str())
+        || !input::verified_translation_input(bundle)?
+    {
+        return Err(failure(
+            "TRANSLATION_SOURCE_INVALID",
+            "翻訳の指定と登録した原文を照合できません。",
+        ));
+    }
+    if let Intent::TranslateText { request } = &bundle.meaning.intent {
+        return TranslationMeaningPlan::from_request(
+            request.clone(),
+            bundle.fingerprint.clone(),
+            None,
+        );
+    }
+    let mut parent =
+        bound_generated_report_parent(store, state, bundle, translation_context_invalid)?.clone();
+    let budget = &bundle.request.budget;
+    store.with_verified_case_history(&state.actor_id, &state.case_id, |history| {
+        let mut ancestors = Vec::new();
+        let mut before = state.revision;
+        let max_ancestors = budget
+            .max_actions
+            .saturating_sub(3 + u32::from(bundle.request.output_path.is_some()));
+        let mut meaning = loop {
+            check_translation_deadline(deadline)?;
+            if ancestors.len() >= max_ancestors as usize {
+                return Err(failure(
+                    "ACTION_BUDGET_EXHAUSTED",
+                    "訳文の改訂履歴を確認する行動予算が不足しています。",
+                ));
+            }
+            let committed = history
+                .committed_result_revision(&parent)?
+                .filter(|revision| revision.revision < before)
+                .ok_or_else(translation_context_invalid)?;
+            let (_, input) = history
+                .input_bundle(&parent.input_id, parent.input_version)?
+                .ok_or_else(translation_context_invalid)?;
+            if committed.bundle.as_ref() != Some(&input)
+                || identity(&input.request)? != parent.id
+                || history
+                    .input_result(&parent.input_id, parent.input_version)?
+                    .as_ref()
+                    != Some(&parent)
+                || !input::verified_translation_input(&input)?
+            {
+                return Err(translation_context_invalid());
+            }
+            before = committed.revision;
+            match &input.meaning.intent {
+                Intent::TranslateText { request } => {
+                    let original = TranslationMeaningPlan::from_request(
+                        request.clone(),
+                        input.fingerprint.clone(),
+                        None,
+                    )?;
+                    ancestors.push((input, parent));
+                    break original;
+                }
+                Intent::ReviseTranslation { .. } => {
+                    let earlier = bound_generated_report_parent(
+                        store,
+                        &committed,
+                        &input,
+                        translation_context_invalid,
+                    )?
+                    .clone();
+                    ancestors.push((input, parent));
+                    parent = earlier;
+                }
+                _ => return Err(translation_context_invalid()),
+            }
+        };
+        let mut evidence_bytes = 0usize;
+        for index in (0..ancestors.len()).rev() {
+            check_translation_deadline(deadline)?;
+            let (input, result) = &ancestors[index];
+            let content = result
+                .content_plan
+                .as_ref()
+                .ok_or_else(translation_context_invalid)?;
+            let (prior_compute, bytes) =
+                verify_saved_translation(store, input, result, content, &meaning, deadline)?;
+            evidence_bytes = evidence_bytes.saturating_add(bytes);
+            if evidence_bytes > budget.max_evidence_bytes {
+                return Err(failure(
+                    "RESOURCE_LIMIT",
+                    "訳文の改訂履歴が証拠予算を超えています。",
+                ));
+            }
+            let prior_render = crate::document::revalidate_previous_document_render(
+                store,
+                &state.actor_id,
+                &state.case_id,
+                result,
+                Some(&prior_compute),
+                "TRANSLATION_CONTEXT_INVALID",
+                "translation",
+            )?;
+            let next = if index == 0 {
+                bundle
+            } else {
+                &ancestors[index - 1].0
+            };
+            let Intent::ReviseTranslation { register } = &next.meaning.intent else {
+                return Err(translation_context_invalid());
+            };
+            meaning = TranslationMeaningPlan::from_request(
+                meaning.request,
+                meaning.source_bundle,
+                Some(TranslationRevisionProof {
+                    request_bundle: next.fingerprint.clone(),
+                    prior_result: result.id.clone(),
+                    prior_compute,
+                    prior_render,
+                    register: *register,
+                }),
+            )?;
+        }
+        check_translation_deadline(deadline)?;
+        Ok(meaning)
+    })
+}
+
+fn verify_saved_translation(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    meaning: &crate::translation::TranslationMeaningPlan,
+    deadline: Instant,
+) -> Result<(String, usize)> {
+    let invalid = || {
+        failure(
+            "RECOVERY_TRANSLATION_MISMATCH",
+            "原文と設定から保存した訳文と生成の根拠を再現できません。",
+        )
+    };
+    let request = &bundle.request;
+    let dependencies = meaning.dependencies();
+    if result.id != identity(request)?
+        || result.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || result.actor_memory_revision.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies != dependencies
+    {
+        return Err(invalid());
+    }
+    let grammar = meaning.grammar(request.budget.max_evidence_bytes)?;
+    let mut replay = language::generate_semantic_meaning_until(&grammar, deadline)?;
+    validate_meaning_generation(&grammar, &dependencies, &replay.report)?;
+    meaning.verify_surface(&replay.report.text)?;
+    if result.text != replay.report.text {
+        return Err(invalid());
+    }
+    replay.report.model_artifact_ref = Some(digest(&canonical(&replay.model)?));
+    let artifact =
+        crate::translation::GeneratedTranslationArtifact::new(meaning.clone(), replay.report);
+    let bytes = canonical(&artifact)?;
+    let compute_ref = digest(&bytes);
+    validate_generated_content_plan_adoption(
+        result,
+        &artifact.content_generation,
+        &replay.emission,
+        &dependencies,
+        &compute_ref,
+        meaning.target_locale(),
+        plan,
+    )?;
+    if store.get_bytes(&request.actor_id, &request.case_id, &compute_ref)? != bytes {
+        return Err(invalid());
+    }
+    verify_generated_model_artifacts(store, &request.actor_id, &request.case_id, plan)?;
+    Ok((compute_ref, bytes.len()))
+}
+
+pub(crate) fn verify_translation_computation(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<String> {
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(translation_context_invalid)?;
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(bundle.request.budget.deadline_ms))
+        .ok_or_else(|| failure("INVALID_DEADLINE", "翻訳の照合に使う締切が無効です。"))?;
+    let meaning = resolve_translation_plan(store, state, bundle, deadline)?;
+    Ok(verify_saved_translation(store, bundle, result, plan, &meaning, deadline)?.0)
+}
+
+fn work_plan_context_invalid() -> Error {
+    failure(
+        "WORK_PLAN_CONTEXT_INVALID",
+        "同じ会話で確定した元の作業計画と根拠を照合できません。",
+    )
+}
+
+fn check_work_plan_deadline(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        return Err(failure(
+            "DEADLINE",
+            "作業計画を照合する間に締切に達しました。",
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_work_plan(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    deadline: Instant,
+) -> Result<crate::work_plan::WorkPlanMeaningPlan> {
+    use crate::work_plan::{WorkPlanMeaningPlan, WorkPlanRevisionProof};
+    if bundle.request.actor_id != state.actor_id
+        || bundle.request.case_id != state.case_id
+        || state.input_fingerprint.as_deref() != Some(identity(&bundle.request)?.as_str())
+        || !input::verified_work_plan_input(bundle)?
+    {
+        return Err(failure(
+            "WORK_PLAN_SOURCE_INVALID",
+            "作業計画の指定と封印済みの入力を照合できません。",
+        ));
+    }
+    if let Intent::PlanWork { request } = &bundle.meaning.intent {
+        return WorkPlanMeaningPlan::new(request.clone(), bundle.fingerprint.clone(), deadline);
+    }
+    let budget = &bundle.request.budget;
+    let allowance = budget
+        .max_actions
+        .saturating_sub(3 + u32::from(bundle.request.output_path.is_some()));
+    if allowance == 0 {
+        return Err(failure(
+            "ACTION_BUDGET_EXHAUSTED",
+            "作業計画の変更履歴を照合する行動予算が不足しています。",
+        ));
+    }
+    let mut parent =
+        bound_generated_report_parent(store, state, bundle, work_plan_context_invalid)?.clone();
+    store.with_verified_case_history(&state.actor_id, &state.case_id, |history| {
+        let mut ancestors = Vec::new();
+        let mut before = state.revision;
+        let mut meaning = loop {
+            check_work_plan_deadline(deadline)?;
+            if ancestors.len() >= allowance as usize {
+                return Err(failure(
+                    "ACTION_BUDGET_EXHAUSTED",
+                    "作業計画の変更履歴を照合する行動予算が不足しています。",
+                ));
+            }
+            let committed = history
+                .committed_result_revision(&parent)?
+                .filter(|revision| revision.revision < before)
+                .ok_or_else(work_plan_context_invalid)?;
+            let (_, saved_input) = history
+                .input_bundle(&parent.input_id, parent.input_version)?
+                .ok_or_else(work_plan_context_invalid)?;
+            if committed.bundle.as_ref() != Some(&saved_input)
+                || identity(&saved_input.request)? != parent.id
+                || history
+                    .input_result(&parent.input_id, parent.input_version)?
+                    .as_ref()
+                    != Some(&parent)
+                || !input::verified_work_plan_input(&saved_input)?
+            {
+                return Err(work_plan_context_invalid());
+            }
+            before = committed.revision;
+            match &saved_input.meaning.intent {
+                Intent::PlanWork { request } => {
+                    let original = WorkPlanMeaningPlan::new(
+                        request.clone(),
+                        saved_input.fingerprint.clone(),
+                        deadline,
+                    )?;
+                    ancestors.push((saved_input, parent));
+                    break original;
+                }
+                Intent::ReviseWorkPlan { .. } => {
+                    let earlier = bound_generated_report_parent(
+                        store,
+                        &committed,
+                        &saved_input,
+                        work_plan_context_invalid,
+                    )?
+                    .clone();
+                    ancestors.push((saved_input, parent));
+                    parent = earlier;
+                }
+                _ => return Err(work_plan_context_invalid()),
+            }
+        };
+        let mut evidence_bytes = 0usize;
+        for index in (0..ancestors.len()).rev() {
+            check_work_plan_deadline(deadline)?;
+            let (saved_input, previous) = &ancestors[index];
+            let content = previous
+                .content_plan
+                .as_ref()
+                .ok_or_else(work_plan_context_invalid)?;
+            let (prior_compute, bytes) =
+                verify_saved_work_plan(store, saved_input, previous, content, &meaning, deadline)?;
+            evidence_bytes = evidence_bytes.saturating_add(bytes);
+            if evidence_bytes > budget.max_evidence_bytes {
+                return Err(failure(
+                    "RESOURCE_LIMIT",
+                    "作業計画の変更履歴が証拠予算を超えています。",
+                ));
+            }
+            let prior_render = crate::document::revalidate_previous_document_render(
+                store,
+                &state.actor_id,
+                &state.case_id,
+                previous,
+                Some(&prior_compute),
+                "WORK_PLAN_CONTEXT_INVALID",
+                "work plan",
+            )?;
+            let next = if index == 0 {
+                bundle
+            } else {
+                &ancestors[index - 1].0
+            };
+            let Intent::ReviseWorkPlan { change } = &next.meaning.intent else {
+                return Err(work_plan_context_invalid());
+            };
+            meaning = WorkPlanMeaningPlan::revise(
+                &meaning,
+                WorkPlanRevisionProof {
+                    request_bundle: next.fingerprint.clone(),
+                    prior_result: previous.id.clone(),
+                    prior_compute,
+                    prior_render,
+                    change: change.clone(),
+                },
+                deadline,
+            )?;
+        }
+        check_work_plan_deadline(deadline)?;
+        Ok(meaning)
+    })
+}
+
+fn verify_saved_work_plan(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    meaning: &crate::work_plan::WorkPlanMeaningPlan,
+    deadline: Instant,
+) -> Result<(String, usize)> {
+    let invalid = || {
+        failure(
+            "RECOVERY_WORK_PLAN_MISMATCH",
+            "封印済みの入力から保存した作業計画と生成の根拠を再現できません。",
+        )
+    };
+    let request = &bundle.request;
+    let dependencies = meaning.dependencies();
+    if result.id != identity(request)?
+        || result.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || result.actor_memory_revision.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies != dependencies
+    {
+        return Err(invalid());
+    }
+    let grammar = meaning.grammar(request.budget.max_evidence_bytes)?;
+    let mut replay = language::generate_semantic_meaning_until(&grammar, deadline)?;
+    validate_meaning_generation(&grammar, &dependencies, &replay.report)?;
+    meaning.verify_surface(&replay.report.text)?;
+    if result.text != replay.report.text {
+        return Err(invalid());
+    }
+    replay.report.model_artifact_ref = Some(digest(&canonical(&replay.model)?));
+    let artifact = crate::work_plan::GeneratedWorkPlanArtifact::new(meaning.clone(), replay.report);
+    let bytes = canonical(&artifact)?;
+    let compute_ref = digest(&bytes);
+    validate_generated_content_plan_adoption(
+        result,
+        &artifact.content_generation,
+        &replay.emission,
+        &dependencies,
+        &compute_ref,
+        &request.locale,
+        plan,
+    )?;
+    if store.get_bytes(&request.actor_id, &request.case_id, &compute_ref)? != bytes {
+        return Err(invalid());
+    }
+    verify_generated_model_artifacts(store, &request.actor_id, &request.case_id, plan)?;
+    Ok((compute_ref, bytes.len()))
+}
+
+pub(crate) fn verify_work_plan_computation(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<String> {
+    let bundle = state
+        .bundle
+        .as_ref()
+        .ok_or_else(work_plan_context_invalid)?;
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(bundle.request.budget.deadline_ms))
+        .ok_or_else(|| failure("INVALID_DEADLINE", "作業計画の照合に使う締切が無効です。"))?;
+    let meaning = resolve_work_plan(store, state, bundle, deadline)?;
+    Ok(verify_saved_work_plan(store, bundle, result, plan, &meaning, deadline)?.0)
+}
+
+pub(crate) fn is_decision_intent(intent: &Intent) -> bool {
+    matches!(intent, Intent::CompareOptions { .. }) || decision_revision_named(intent).is_some()
+}
+
+fn decision_revision_named(intent: &Intent) -> Option<bool> {
+    match intent {
+        Intent::ReviseDecision { revision } => Some(revision.named),
+        Intent::ReviseDecisionFromAttachment { .. } => Some(true),
+        _ => None,
+    }
+}
+
+fn decision_context_invalid() -> Error {
+    failure(
+        "DECISION_CONTEXT_INVALID",
+        "同じ会話にある元の比較結果と根拠を照合できません。",
+    )
+}
+
+fn decision_history_deadline(deadline: Instant) -> Result<()> {
+    if Instant::now() >= deadline {
+        Err(failure(
+            "DEADLINE",
+            "前の比較を照合する間に実行の締切に達しました。",
+        ))
+    } else {
+        Ok(())
+    }
+}
+
+fn decision_is_revisable(result: &ResultRecord) -> bool {
+    result.content_plan.is_some()
+        && result.render.is_some()
+        && (result.lifecycle == Lifecycle::Commit
+            || result.lifecycle == Lifecycle::Suspend
+                && result.receipts.is_empty()
+                && result.reason.as_deref().is_some_and(|reason| {
+                    reason.starts_with("DECISION_UNDETERMINED:")
+                        || reason.starts_with("ACTION_BUDGET_EXHAUSTED:")
+                }))
+}
+
+fn decision_history_allowance(request: &RequestEnvelope) -> u32 {
+    request.budget.max_actions.saturating_sub(3)
+}
+
+type DecisionSelection = (Option<ResultRecord>, u32);
+
+fn recent_decision(
+    store: &Store,
+    request: &RequestEnvelope,
+    through_revision: u64,
+    max_inputs: u32,
+    deadline: Instant,
+) -> Result<(Option<ResultRecord>, u32)> {
+    decision_history_deadline(deadline)?;
+    store.recent_result_input_before(
+        &request.actor_id,
+        &request.case_id,
+        through_revision,
+        max_inputs,
+        true,
+        |bundle, result| {
+            decision_history_deadline(deadline)?;
+            Ok(is_decision_intent(&bundle.meaning.intent) && decision_is_revisable(result))
+        },
+    )
+}
+
+fn bound_decision_parent<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+    bundle: &InputBundle,
+    named: bool,
+    remaining: &mut u32,
+    selection: Option<&DecisionSelection>,
+    deadline: Instant,
+) -> Result<&'a ResultRecord> {
+    let parent = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .filter(|result| decision_is_revisable(result))
+        .ok_or_else(decision_context_invalid)?;
+    if !registered_relation_context_matches(bundle, &state.prior_results, parent)? {
+        return Err(decision_context_invalid());
+    }
+    if let Some((target, examined)) = selection {
+        if !named || bundle.request.context_ref.is_some() || target.as_ref() != Some(parent) {
+            return Err(decision_context_invalid());
+        }
+        *remaining = remaining.checked_sub(*examined).ok_or_else(|| {
+            failure(
+                "ACTION_BUDGET_EXHAUSTED",
+                "前の比較を確認する行動予算が不足しています。",
+            )
+        })?;
+        return Ok(parent);
+    }
+    if bundle.request.context_ref.is_none() {
+        let previous = store
+            .input_start_predecessor_revision(state)?
+            .ok_or_else(decision_context_invalid)?;
+        let actual = if named {
+            let (target, examined) = recent_decision(
+                store,
+                &bundle.request,
+                previous.revision,
+                *remaining,
+                deadline,
+            )?;
+            *remaining -= examined;
+            target
+        } else {
+            previous.result
+        };
+        if actual.as_ref() != Some(parent) {
+            return Err(decision_context_invalid());
+        }
+    }
+    Ok(parent)
+}
+
+fn same_decision_property(left: &str, right: &str) -> bool {
+    let left = crate::decision::property_key(left);
+    let right = crate::decision::property_key(right);
+    left == right
+        || matches!(
+            (left.as_str(), right.as_str()),
+            ("駅からの距離", "駅距離") | ("駅距離", "駅からの距離")
+        )
+}
+
+fn apply_decision_change(
+    prior: &minidora_domain::DecisionRequest,
+    change: &minidora_domain::DecisionChange,
+) -> Result<minidora_domain::DecisionRequest> {
+    use minidora_domain::{DecisionChange, DecisionPreference};
+    let invalid = || {
+        failure(
+            "DECISION_CHANGE_TARGET",
+            "元の比較にある変更先を一つに特定できません。候補名や条件名を確かめてください。",
+        )
+    };
+    let mut next = prior.clone();
+    match change {
+        DecisionChange::Fact { candidate, fact } => {
+            let name = crate::decision::property_key(&candidate.text);
+            let mut selected = next
+                .candidates
+                .iter_mut()
+                .filter(|item| crate::decision::property_key(&item.name.text) == name);
+            let selected = match (selected.next(), selected.next()) {
+                (Some(item), None) => item,
+                _ => return Err(invalid()),
+            };
+            let key = crate::decision::property_key(&fact.property.text);
+            let first = selected
+                .facts
+                .iter()
+                .position(|entry| crate::decision::property_key(&entry.property.text) == key);
+            selected
+                .facts
+                .retain(|entry| crate::decision::property_key(&entry.property.text) != key);
+            selected
+                .facts
+                .insert(first.unwrap_or(selected.facts.len()), fact.clone());
+        }
+        DecisionChange::Requirement {
+            property,
+            expected,
+            relation,
+        } => {
+            let mut selected = next
+                .requirements
+                .iter_mut()
+                .filter(|item| same_decision_property(&item.property.text, &property.text));
+            let selected = match (selected.next(), selected.next()) {
+                (Some(item), None) => item,
+                _ => return Err(invalid()),
+            };
+            if std::mem::discriminant(&selected.expected) != std::mem::discriminant(expected) {
+                return Err(failure(
+                    "DECISION_REQUIREMENT_VALUE_KIND",
+                    "元の必須条件に対応する種類の値を指定してください。",
+                ));
+            }
+            let mut replacement = expected.clone();
+            if let (
+                minidora_domain::DecisionValue::Quantity { unit: original, .. },
+                minidora_domain::DecisionValue::Quantity { unit: edited, .. },
+            ) = (&selected.expected, &mut replacement)
+                && edited.is_none()
+            {
+                *edited = original.clone();
+            }
+            selected.expected = replacement;
+            if let Some(relation) = relation {
+                selected.relation = *relation;
+            }
+        }
+        DecisionChange::Preference {
+            property,
+            direction,
+            only,
+        } => {
+            let matching = next
+                .preferences
+                .iter()
+                .enumerate()
+                .filter(|(_, item)| same_decision_property(&item.property.text, &property.text))
+                .map(|(index, _)| index)
+                .collect::<Vec<_>>();
+            let mut preference = match matching.as_slice() {
+                [index] => next.preferences.remove(*index),
+                [] if direction.is_some() => {
+                    let mut keys = BTreeMap::new();
+                    for observation in next.candidates.iter().flat_map(|item| &item.facts) {
+                        if same_decision_property(&observation.property.text, &property.text) {
+                            keys.entry(crate::decision::property_key(&observation.property.text))
+                                .or_insert(&observation.property);
+                        }
+                    }
+                    if keys.len() != 1 {
+                        return Err(invalid());
+                    }
+                    DecisionPreference {
+                        property: keys.into_values().next().ok_or_else(invalid)?.clone(),
+                        direction: direction.ok_or_else(invalid)?,
+                    }
+                }
+                _ => return Err(invalid()),
+            };
+            if let Some(direction) = direction {
+                preference.direction = *direction;
+            }
+            if *only {
+                next.preferences.clear();
+            }
+            next.preferences.insert(0, preference);
+        }
+    }
+    Ok(next)
+}
+
+fn attached_decision_change(
+    prior: &DecisionRequest,
+    bundle: &InputBundle,
+    deadline: Instant,
+) -> Result<(
+    DecisionChange,
+    crate::attached_document::DecisionFieldSource,
+)> {
+    use crate::decision::{compare_known_values, property_key};
+    use std::cmp::Ordering;
+
+    let Intent::ReviseDecisionFromAttachment { candidate, field } = &bundle.meaning.intent else {
+        return Err(decision_context_invalid());
+    };
+    let [file] = bundle.request.attachments.as_slice() else {
+        return Err(decision_context_invalid());
+    };
+    let candidate_key = property_key(&candidate.text);
+    let field_key = property_key(&field.text);
+    let mut matches = prior
+        .candidates
+        .iter()
+        .filter(|item| property_key(&item.name.text) == candidate_key);
+    let invalid_target = || {
+        failure(
+            "DECISION_CHANGE_TARGET",
+            "元の比較で指定された候補と更新項目を一つに確かめられません。",
+        )
+    };
+    let selected = match (matches.next(), matches.next()) {
+        (Some(item), None) => item,
+        _ => return Err(invalid_target()),
+    };
+    let field_matches = |fact: &DecisionFact| property_key(&fact.property.text) == field_key;
+    let required_values: Vec<_> = prior
+        .requirements
+        .iter()
+        .filter(|item| property_key(&item.property.text) == field_key)
+        .map(|item| &item.expected)
+        .collect();
+    if required_values.is_empty()
+        && !selected.facts.iter().any(field_matches)
+        && !prior
+            .preferences
+            .iter()
+            .any(|item| property_key(&item.property.text) == field_key)
+    {
+        return Err(invalid_target());
+    }
+
+    let source = crate::attached_document::decision_field_source(
+        file,
+        &candidate.text,
+        &field.text,
+        deadline,
+    )?;
+    let invalid_value = || {
+        failure(
+            "DECISION_ATTACHMENT_VALUE",
+            "添付の該当項目を確定した数値または有無として読めません。",
+        )
+    };
+    let mut observations = source.matches.iter().map(|entry| {
+        crate::decision_input::parse_attached_decision_value(
+            &entry.field.value,
+            entry.field.value_start,
+        )
+        .ok_or_else(invalid_value)
+    });
+    let value = observations.next().transpose()?.ok_or_else(invalid_value)?;
+    // This also validates a number whose field does not yet have a typed baseline.
+    compare_known_values(&value, &value).map_err(|_| invalid_value())?;
+    for observed in observations {
+        if compare_known_values(&value, &observed?).map_err(|_| invalid_value())?
+            != Some(Ordering::Equal)
+        {
+            return Err(failure(
+                "DECISION_ATTACHMENT_CONFLICT",
+                "添付内で同じ候補の同じ項目に異なる値があるため更新できません。",
+            ));
+        }
+    }
+
+    let incompatible = || {
+        failure(
+            "DECISION_ATTACHMENT_SCALE",
+            "添付の値の種類または単位を元の項目や必須条件と照合できません。",
+        )
+    };
+    if required_values.is_empty() {
+        let known_field = |fact: &&DecisionFact| {
+            field_matches(fact) && !matches!(fact.value, DecisionValue::Unknown { .. })
+        };
+        let mut comparable_with_prior = false;
+        let mut has_prior = false;
+        let mut known: Vec<_> = selected.facts.iter().filter(known_field).collect();
+        if known.is_empty() {
+            known.extend(
+                prior
+                    .candidates
+                    .iter()
+                    .flat_map(|item| &item.facts)
+                    .filter(known_field),
+            );
+        }
+        for fact in known {
+            has_prior = true;
+            comparable_with_prior |= compare_known_values(&value, &fact.value)?.is_some();
+        }
+        if has_prior && !comparable_with_prior {
+            return Err(incompatible());
+        }
+    } else {
+        for required in required_values {
+            if compare_known_values(&value, required)?.is_none() {
+                return Err(incompatible());
+            }
+        }
+    }
+    Ok((
+        DecisionChange::Fact {
+            candidate: candidate.clone(),
+            fact: DecisionFact {
+                property: field.clone(),
+                value,
+            },
+        },
+        source,
+    ))
+}
+
+fn base_decision_plan(
+    bundle: &InputBundle,
+    deadline: Instant,
+) -> Result<crate::decision_text::DecisionPlan> {
+    let Intent::CompareOptions { decision } = &bundle.meaning.intent else {
+        return Err(decision_context_invalid());
+    };
+    Ok(crate::decision_text::DecisionPlan {
+        source_bundle: bundle.fingerprint.clone(),
+        decision: decision.as_ref().clone(),
+        evaluation: crate::decision::evaluate(decision, deadline)?,
+        revision: None,
+    })
+}
+
+fn resolve_decision_plan(
+    store: &Store,
+    state: &CaseRevision,
+    bundle: &InputBundle,
+    selection: Option<&DecisionSelection>,
+    deadline: Instant,
+) -> Result<(crate::decision_text::DecisionPlan, u32)> {
+    if bundle.request.actor_id != state.actor_id
+        || bundle.request.case_id != state.case_id
+        || state.input_fingerprint.as_deref() != Some(identity(&bundle.request)?.as_str())
+        || !input::verified_decision_input(bundle)?
+    {
+        return Err(decision_context_invalid());
+    }
+    let Some(named) = decision_revision_named(&bundle.meaning.intent) else {
+        return Ok((base_decision_plan(bundle, deadline)?, 0));
+    };
+    let allowance = decision_history_allowance(&bundle.request);
+    let mut remaining = allowance;
+    if remaining == 0 {
+        return Err(failure(
+            "ACTION_BUDGET_EXHAUSTED",
+            "前の比較を確認する行動予算が不足しています。",
+        ));
+    }
+    let mut parent = bound_decision_parent(
+        store,
+        state,
+        bundle,
+        named,
+        &mut remaining,
+        selection,
+        deadline,
+    )?
+    .clone();
+    let budget = &bundle.request.budget;
+    store.with_verified_case_history(&state.actor_id, &state.case_id, |history| {
+        let mut ancestors = Vec::new();
+        let mut before = state.revision;
+        let mut plan = loop {
+            decision_history_deadline(deadline)?;
+            remaining = remaining.checked_sub(1).ok_or_else(|| {
+                failure(
+                    "ACTION_BUDGET_EXHAUSTED",
+                    "比較の変更履歴を確認する行動予算が不足しています。",
+                )
+            })?;
+            let recorded = match parent.lifecycle {
+                Lifecycle::Commit => history.committed_result_revision(&parent)?,
+                Lifecycle::Suspend => history.suspended_result_revision(&parent)?,
+                _ => None,
+            }
+            .filter(|revision| revision.revision < before)
+            .ok_or_else(decision_context_invalid)?;
+            let (_, input) = history
+                .input_bundle(&parent.input_id, parent.input_version)?
+                .ok_or_else(decision_context_invalid)?;
+            if recorded.bundle.as_ref() != Some(&input)
+                || identity(&input.request)? != parent.id
+                || history
+                    .input_result(&parent.input_id, parent.input_version)?
+                    .as_ref()
+                    != Some(&parent)
+                || !input::verified_decision_input(&input)?
+            {
+                return Err(decision_context_invalid());
+            }
+            before = recorded.revision;
+            match &input.meaning.intent {
+                Intent::CompareOptions { .. } => {
+                    let original = base_decision_plan(&input, deadline)?;
+                    ancestors.push((input, parent));
+                    break original;
+                }
+                intent if let Some(named) = decision_revision_named(intent) => {
+                    let earlier = bound_decision_parent(
+                        store,
+                        &recorded,
+                        &input,
+                        named,
+                        &mut remaining,
+                        None,
+                        deadline,
+                    )?
+                    .clone();
+                    ancestors.push((input, parent));
+                    parent = earlier;
+                }
+                _ => return Err(decision_context_invalid()),
+            }
+        };
+        let mut evidence_bytes = 0usize;
+        for index in (0..ancestors.len()).rev() {
+            decision_history_deadline(deadline)?;
+            let (input, result) = &ancestors[index];
+            let content = result
+                .content_plan
+                .as_ref()
+                .ok_or_else(decision_context_invalid)?;
+            let expected_preview_code = if plan.is_conditional() {
+                "DECISION_UNDETERMINED:"
+            } else {
+                "ACTION_BUDGET_EXHAUSTED:"
+            };
+            let historical_outcome_valid = match result.lifecycle {
+                Lifecycle::Commit => !plan.is_conditional(),
+                Lifecycle::Suspend => {
+                    result.receipts.is_empty()
+                        && result
+                            .reason
+                            .as_deref()
+                            .is_some_and(|reason| reason.starts_with(expected_preview_code))
+                        && result
+                            .render
+                            .as_ref()
+                            .is_some_and(|render| render.target == Some(RenderTarget::Display))
+                }
+                _ => false,
+            };
+            if !historical_outcome_valid {
+                return Err(decision_context_invalid());
+            }
+            let (computed, size) =
+                verify_saved_decision(store, input, result, content, &plan, deadline)?;
+            evidence_bytes = evidence_bytes.saturating_add(size);
+            if evidence_bytes > budget.max_evidence_bytes {
+                return Err(failure(
+                    "RESOURCE_LIMIT",
+                    "比較の変更履歴が証拠予算を超えました。",
+                ));
+            }
+            let render = crate::document::revalidate_previous_document_render(
+                store,
+                &state.actor_id,
+                &state.case_id,
+                result,
+                Some(&computed),
+                "DECISION_CONTEXT_INVALID",
+                "comparison",
+            )?;
+            let next_input = if index == 0 {
+                bundle
+            } else {
+                &ancestors[index - 1].0
+            };
+            let (change, attachment) = match &next_input.meaning.intent {
+                Intent::ReviseDecision { revision } => (revision.change.clone(), None),
+                Intent::ReviseDecisionFromAttachment { .. } => {
+                    remaining = remaining.checked_sub(1).ok_or_else(|| {
+                        failure(
+                            "ACTION_BUDGET_EXHAUSTED",
+                            "添付の訂正根拠を読み取る行動予算が不足しています。",
+                        )
+                    })?;
+                    let (change, source) =
+                        attached_decision_change(&plan.decision, next_input, deadline)?;
+                    evidence_bytes = evidence_bytes.saturating_add(canonical(&source)?.len());
+                    if evidence_bytes > budget.max_evidence_bytes {
+                        return Err(failure(
+                            "RESOURCE_LIMIT",
+                            "添付の訂正根拠が証拠予算を超えました。",
+                        ));
+                    }
+                    (change, Some(source))
+                }
+                _ => return Err(decision_context_invalid()),
+            };
+            let decision = apply_decision_change(&plan.decision, &change)?;
+            let (evaluation, reuse) = crate::decision::evaluate_revision(
+                &plan.decision,
+                &plan.evaluation,
+                &decision,
+                deadline,
+            )?;
+            plan = crate::decision_text::DecisionPlan {
+                source_bundle: next_input.fingerprint.clone(),
+                decision,
+                evaluation,
+                revision: Some(crate::decision_text::DecisionRevisionProof {
+                    prior_bundle: input.fingerprint.clone(),
+                    prior_result: result.id.clone(),
+                    prior_compute: computed,
+                    prior_render: render,
+                    change,
+                    reuse,
+                    attachment,
+                }),
+            };
+        }
+        Ok((plan, allowance - remaining))
+    })
+}
+
+pub(crate) fn verify_decision_computation(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<String> {
+    let bundle = state.bundle.as_ref().ok_or_else(decision_context_invalid)?;
+    let deadline = Instant::now()
+        .checked_add(Duration::from_millis(bundle.request.budget.deadline_ms))
+        .ok_or_else(decision_context_invalid)?;
+    let (decision, history_actions) = resolve_decision_plan(store, state, bundle, None, deadline)?;
+    if decision.is_conditional()
+        || bundle.request.budget.max_actions < history_actions.saturating_add(4)
+    {
+        return Err(decision_context_invalid());
+    }
+    Ok(verify_saved_decision(store, bundle, result, plan, &decision, deadline)?.0)
+}
+
+fn verify_saved_decision(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+    decision: &crate::decision_text::DecisionPlan,
+    deadline: Instant,
+) -> Result<(String, usize)> {
+    let invalid = || {
+        failure(
+            "RECOVERY_OPTION_DECISION_MISMATCH",
+            "候補と比較条件から保存済みの判断を再現できません。",
+        )
+    };
+    let dependencies = decision.dependencies();
+    if result.id != identity(&bundle.request)?
+        || result.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || result.actor_memory_revision.is_some()
+        || !result.evidence.is_empty()
+        || result.dependencies != dependencies
+    {
+        return Err(invalid());
+    }
+    let grammar = decision.grammar(bundle.request.budget.max_evidence_bytes)?;
+    let mut replay = language::generate_semantic_meaning_until(&grammar, deadline)?;
+    validate_meaning_generation(&grammar, &dependencies, &replay.report)?;
+    replay.report.model_artifact_ref = Some(digest(&canonical(&replay.model)?));
+    if result.text != replay.report.text {
+        return Err(invalid());
+    }
+    let artifact =
+        crate::decision_text::GeneratedDecisionArtifact::new(decision.clone(), replay.report);
+    let bytes = canonical(&artifact)?;
+    let compute_ref = digest(&bytes);
+    validate_generated_content_plan_adoption(
+        result,
+        &artifact.content_generation,
+        &replay.emission,
+        &dependencies,
+        &compute_ref,
+        &bundle.request.locale,
+        plan,
+    )?;
+    if store.get_bytes(
+        &bundle.request.actor_id,
+        &bundle.request.case_id,
+        &compute_ref,
+    )? != bytes
+    {
+        return Err(invalid());
+    }
+    verify_generated_model_artifacts(
+        store,
+        &bundle.request.actor_id,
+        &bundle.request.case_id,
+        plan,
+    )?;
+    Ok((compute_ref, bytes.len()))
 }
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
@@ -5145,11 +7240,276 @@ pub struct CounterfactualRelationReport {
     pub steps: u32,
 }
 
+pub(crate) fn evaluate_counterfactual_in_memory(
+    actor: &str,
+    case: &str,
+    load_memory: impl FnOnce() -> Result<MemoryState>,
+    assumptions: &[Proposition],
+    superseded_fact_ids: &[String],
+    target: &Proposition,
+    max_actions: u32,
+) -> Result<CounterfactualRelationReport> {
+    const MAX_ASSUMPTIONS: usize = 8;
+    const MAX_SUPERSEDED_FACTS: usize = 16;
+    const MAX_ACTIONS: u32 = 4096;
+
+    if assumptions.is_empty() || assumptions.len() > MAX_ASSUMPTIONS {
+        return Err(failure(
+            "COUNTERFACTUAL_ASSUMPTION_LIMIT",
+            "counterfactual evaluation requires one to eight explicit assumptions",
+        ));
+    }
+    if superseded_fact_ids.len() > MAX_SUPERSEDED_FACTS {
+        return Err(failure(
+            "COUNTERFACTUAL_OVERRIDE_LIMIT",
+            "counterfactual override list exceeds its bounded limit",
+        ));
+    }
+    if max_actions == 0 || max_actions > MAX_ACTIONS {
+        return Err(failure(
+            "COUNTERFACTUAL_BUDGET",
+            "counterfactual action budget must be between one and 4096",
+        ));
+    }
+    relations::validate(target)?;
+    if !relations::is_ground(target) {
+        return Err(failure(
+            "UNBOUND_VARIABLE",
+            "a counterfactual target requires bound subject and object",
+        ));
+    }
+
+    let mut unique_assumptions = BTreeSet::new();
+    for assumption in assumptions {
+        relations::validate(assumption)?;
+        if !relations::is_ground(assumption) || assumption.scope != target.scope {
+            return Err(failure(
+                "COUNTERFACTUAL_SCOPE_MISMATCH",
+                "assumptions must be ground propositions in the target scope",
+            ));
+        }
+        if !unique_assumptions.insert(assumption.clone())
+            || unique_assumptions.contains(&relations::opposition(assumption))
+        {
+            return Err(failure(
+                "COUNTERFACTUAL_ASSUMPTION_CONFLICT",
+                "assumptions must be unique and may not contain exact opposites",
+            ));
+        }
+    }
+
+    let mut unique_superseded = BTreeSet::new();
+    if superseded_fact_ids
+        .iter()
+        .any(|id| !unique_superseded.insert(id.clone()))
+    {
+        return Err(failure(
+            "COUNTERFACTUAL_OVERRIDE_DUPLICATE",
+            "a superseded fact identity may be listed only once",
+        ));
+    }
+
+    let mut memory = load_memory()?;
+    let base_memory_revision = memory.revision;
+    let record_count = memory
+        .facts
+        .len()
+        .checked_add(memory.rules.len())
+        .and_then(|count| count.checked_add(memory.conditions.len()))
+        .ok_or_else(|| failure("COUNTERFACTUAL_BUDGET", "memory scan count overflowed"))?;
+    let record_actions = u32::try_from(record_count).map_err(|_| {
+        failure(
+            "COUNTERFACTUAL_BUDGET",
+            "actor memory exceeds the bounded scan representation",
+        )
+    })?;
+    let preparation_actions = record_actions
+        .checked_add(u32::try_from(superseded_fact_ids.len()).unwrap_or(u32::MAX))
+        .and_then(|count| count.checked_add(u32::try_from(assumptions.len()).unwrap_or(u32::MAX)))
+        .ok_or_else(|| failure("COUNTERFACTUAL_BUDGET", "scenario preparation overflowed"))?;
+    if preparation_actions >= max_actions {
+        return Err(failure(
+            "COUNTERFACTUAL_BUDGET",
+            "memory scan and scenario setup consume the bounded action budget",
+        ));
+    }
+
+    for id in superseded_fact_ids {
+        let Some(fact) = memory.facts.iter().find(|fact| fact.id == *id) else {
+            return Err(failure(
+                "COUNTERFACTUAL_OVERRIDE_INVALID",
+                "each override must identify an active direct actor-memory fact",
+            ));
+        };
+        let exact_opposite = assumptions
+            .iter()
+            .any(|assumption| fact.proposition == relations::opposition(assumption));
+        if !fact.valid
+            || fact.guarantee != Guarantee::UserPremise
+            || !fact.dependencies.is_empty()
+            || fact.source_input.is_empty()
+            || !exact_opposite
+        {
+            return Err(failure(
+                "COUNTERFACTUAL_OVERRIDE_INVALID",
+                "only an active direct USER_PREMISE exactly opposite to an assumption may be superseded",
+            ));
+        }
+    }
+
+    let scenario_identity = identity(&(
+        "counterfactual-scenario-v1",
+        actor,
+        case,
+        base_memory_revision,
+        assumptions,
+        superseded_fact_ids,
+        target,
+    ))?;
+    let mut invalidated_record_ids = relations::invalidate_in_order(
+        &mut memory,
+        superseded_fact_ids.iter().map(String::as_str),
+    )?;
+    invalidated_record_ids.sort_unstable();
+    let mut hypothesis_ids = Vec::with_capacity(assumptions.len());
+    for (ordinal, assumption) in assumptions.iter().enumerate() {
+        let hypothesis = relations::add_hypothesis(
+            &mut memory,
+            assumption.clone(),
+            &scenario_identity,
+            ordinal,
+        )?;
+        hypothesis_ids.push(hypothesis.id);
+    }
+    let allowed_hypotheses: BTreeSet<_> = hypothesis_ids.iter().cloned().collect();
+    // The ordinary query path evaluates target conditions before inference.
+    // Reuse it here so a scenario cannot let a conflicting assumption
+    // bypass a FALSE, UNKNOWN, or CONFLICT condition boundary.
+    let outcome = relations::query_hypothetical(
+        &memory,
+        target,
+        max_actions - preparation_actions,
+        &allowed_hypotheses,
+    )?;
+    let outcome_dependencies = relations::answer_dependencies(&outcome);
+    let outcome_dependency_set: BTreeSet<_> = outcome_dependencies.iter().cloned().collect();
+    let outcome_hypothesis_ids_used: Vec<_> = hypothesis_ids
+        .iter()
+        .filter(|id| outcome_dependency_set.contains(*id))
+        .cloned()
+        .collect();
+    if outcome
+        .condition_status
+        .is_some_and(|status| status != ConditionStatus::True)
+    {
+        return Ok(CounterfactualRelationReport {
+            status: CounterfactualRelationStatus::Unknown,
+            target: target.clone(),
+            guarantee: Guarantee::Unknown,
+            facts: outcome.facts,
+            dependencies: outcome_dependencies,
+            condition_status: outcome.condition_status,
+            condition_evaluations: outcome.condition_evaluations,
+            hypothesis_ids,
+            hypothesis_ids_used: outcome_hypothesis_ids_used,
+            superseded_fact_ids: superseded_fact_ids.to_vec(),
+            invalidated_record_ids,
+            base_memory_revision,
+            scenario_memory_revision: memory.revision,
+            steps: outcome.steps.saturating_add(preparation_actions),
+        });
+    }
+    let conflicting_premises: Vec<_> = memory
+        .facts
+        .iter()
+        .filter(|fact| {
+            fact.valid
+                && !matches!(fact.guarantee, Guarantee::Unknown | Guarantee::Hypothesis)
+                && assumptions
+                    .iter()
+                    .any(|assumption| fact.proposition == relations::opposition(assumption))
+        })
+        .cloned()
+        .collect();
+    if !conflicting_premises.is_empty() {
+        let mut facts = conflicting_premises;
+        facts.extend(
+            memory
+                .facts
+                .iter()
+                .filter(|fact| allowed_hypotheses.contains(&fact.id))
+                .cloned(),
+        );
+        facts.extend(outcome.facts.iter().cloned());
+        facts.sort_by(|left, right| left.id.cmp(&right.id));
+        facts.dedup_by(|left, right| left.id == right.id);
+        let mut dependency_set: BTreeSet<_> = outcome_dependencies.into_iter().collect();
+        dependency_set.extend(facts.iter().flat_map(|fact| {
+            std::iter::once(fact.id.clone()).chain(fact.dependencies.iter().cloned())
+        }));
+        let dependencies: Vec<_> = dependency_set.iter().cloned().collect();
+        let hypothesis_ids_used = hypothesis_ids
+            .iter()
+            .filter(|id| dependency_set.contains(*id))
+            .cloned()
+            .collect();
+        return Ok(CounterfactualRelationReport {
+            status: CounterfactualRelationStatus::Conflict,
+            target: target.clone(),
+            guarantee: Guarantee::Unknown,
+            facts,
+            dependencies,
+            condition_status: outcome.condition_status,
+            condition_evaluations: outcome.condition_evaluations,
+            hypothesis_ids,
+            hypothesis_ids_used,
+            superseded_fact_ids: superseded_fact_ids.to_vec(),
+            invalidated_record_ids,
+            base_memory_revision,
+            scenario_memory_revision: memory.revision,
+            steps: outcome.steps.saturating_add(preparation_actions),
+        });
+    }
+    let dependencies = outcome_dependencies;
+    let hypothesis_ids_used = outcome_hypothesis_ids_used;
+    let status = match outcome.status.as_str() {
+        "SUPPORTED" => CounterfactualRelationStatus::Supported,
+        "CONTRADICTED" => CounterfactualRelationStatus::Contradicted,
+        "CONFLICT" => CounterfactualRelationStatus::Conflict,
+        _ => CounterfactualRelationStatus::Unknown,
+    };
+    let guarantee = match status {
+        CounterfactualRelationStatus::Conflict | CounterfactualRelationStatus::Unknown => {
+            Guarantee::Unknown
+        }
+        _ if !hypothesis_ids_used.is_empty() => Guarantee::Hypothesis,
+        _ => relations::answer_guarantee(&outcome),
+    };
+
+    Ok(CounterfactualRelationReport {
+        status,
+        target: target.clone(),
+        guarantee,
+        facts: outcome.facts,
+        dependencies,
+        condition_status: outcome.condition_status,
+        condition_evaluations: outcome.condition_evaluations,
+        hypothesis_ids,
+        hypothesis_ids_used,
+        superseded_fact_ids: superseded_fact_ids.to_vec(),
+        invalidated_record_ids,
+        base_memory_revision,
+        scenario_memory_revision: memory.revision,
+        steps: outcome.steps.saturating_add(preparation_actions),
+    })
+}
+
 /// Trusted frontends supply an authenticated local principal. A caller-controlled
 /// actor string is not remote authentication; the HTTP adapter binds it to its
 /// configured authenticated identity before entering this API.
 pub struct Engine {
     pub(crate) store: Store,
+    wasm_node: Option<crate::wasm_execution::NodeRuntime>,
     #[cfg(test)]
     pub(crate) expire_output_at: Option<OutputCheckpoint>,
 }
@@ -5168,6 +7528,7 @@ impl Engine {
     pub fn open(path: impl AsRef<Path>) -> Result<Self> {
         Ok(Self {
             store: Store::open(path)?,
+            wasm_node: None,
             #[cfg(test)]
             expire_output_at: None,
         })
@@ -5181,6 +7542,12 @@ impl Engine {
             deadline
         }
     }
+    /// Bind an operator-selected local runtime. Requests can only grant execution.
+    pub fn configure_wasm_node(&mut self, path: std::path::PathBuf) -> Result<()> {
+        self.wasm_node = Some(crate::wasm_execution::NodeRuntime::configure(path)?);
+        Ok(())
+    }
+
     pub fn reconcile_cancelled_effects(
         &mut self,
         actor: &str,
@@ -5197,6 +7564,16 @@ impl Engine {
 
     /// Read the durable result for an exact input and version of an actor-owned case.
     /// A missing result yields `None`.
+    /// Display the retained summary of a chart that was rendered to SVG.
+    pub fn csv_chart_summary(
+        &self,
+        actor: &str,
+        case: &str,
+        result: &ResultRecord,
+    ) -> Result<Option<String>> {
+        crate::csv_chart_context::console_summary(&self.store, actor, case, result)
+    }
+
     pub fn input_result(
         &self,
         actor: &str,
@@ -5240,266 +7617,24 @@ impl Engine {
         target: &Proposition,
         max_actions: u32,
     ) -> Result<CounterfactualRelationReport> {
-        const MAX_ASSUMPTIONS: usize = 8;
-        const MAX_SUPERSEDED_FACTS: usize = 16;
-        const MAX_ACTIONS: u32 = 4096;
-
         if self.store.load_case(actor, case)?.is_none() {
             return Err(failure(
                 "CASE_NOT_FOUND",
                 "counterfactual evaluation requires an actor-owned case",
             ));
         }
-        if assumptions.is_empty() || assumptions.len() > MAX_ASSUMPTIONS {
-            return Err(failure(
-                "COUNTERFACTUAL_ASSUMPTION_LIMIT",
-                "counterfactual evaluation requires one to eight explicit assumptions",
-            ));
-        }
-        if superseded_fact_ids.len() > MAX_SUPERSEDED_FACTS {
-            return Err(failure(
-                "COUNTERFACTUAL_OVERRIDE_LIMIT",
-                "counterfactual override list exceeds its bounded limit",
-            ));
-        }
-        if max_actions == 0 || max_actions > MAX_ACTIONS {
-            return Err(failure(
-                "COUNTERFACTUAL_BUDGET",
-                "counterfactual action budget must be between one and 4096",
-            ));
-        }
-        relations::validate(target)?;
-        if !relations::is_ground(target) {
-            return Err(failure(
-                "UNBOUND_VARIABLE",
-                "a counterfactual target requires bound subject and object",
-            ));
-        }
-
-        let mut unique_assumptions = BTreeSet::new();
-        for assumption in assumptions {
-            relations::validate(assumption)?;
-            if !relations::is_ground(assumption) || assumption.scope != target.scope {
-                return Err(failure(
-                    "COUNTERFACTUAL_SCOPE_MISMATCH",
-                    "assumptions must be ground propositions in the target scope",
-                ));
-            }
-            if !unique_assumptions.insert(assumption.clone())
-                || unique_assumptions.contains(&relations::opposition(assumption))
-            {
-                return Err(failure(
-                    "COUNTERFACTUAL_ASSUMPTION_CONFLICT",
-                    "assumptions must be unique and may not contain exact opposites",
-                ));
-            }
-        }
-
-        let mut unique_superseded = BTreeSet::new();
-        if superseded_fact_ids
-            .iter()
-            .any(|id| !unique_superseded.insert(id.clone()))
-        {
-            return Err(failure(
-                "COUNTERFACTUAL_OVERRIDE_DUPLICATE",
-                "a superseded fact identity may be listed only once",
-            ));
-        }
-
-        let mut memory = self.store.load_memory(actor)?;
-        let base_memory_revision = memory.revision;
-        let record_count = memory
-            .facts
-            .len()
-            .checked_add(memory.rules.len())
-            .and_then(|count| count.checked_add(memory.conditions.len()))
-            .ok_or_else(|| failure("COUNTERFACTUAL_BUDGET", "memory scan count overflowed"))?;
-        let record_actions = u32::try_from(record_count).map_err(|_| {
-            failure(
-                "COUNTERFACTUAL_BUDGET",
-                "actor memory exceeds the bounded scan representation",
-            )
-        })?;
-        let preparation_actions = record_actions
-            .checked_add(u32::try_from(superseded_fact_ids.len()).unwrap_or(u32::MAX))
-            .and_then(|count| {
-                count.checked_add(u32::try_from(assumptions.len()).unwrap_or(u32::MAX))
-            })
-            .ok_or_else(|| failure("COUNTERFACTUAL_BUDGET", "scenario preparation overflowed"))?;
-        if preparation_actions >= max_actions {
-            return Err(failure(
-                "COUNTERFACTUAL_BUDGET",
-                "memory scan and scenario setup consume the bounded action budget",
-            ));
-        }
-
-        for id in superseded_fact_ids {
-            let Some(fact) = memory.facts.iter().find(|fact| fact.id == *id) else {
-                return Err(failure(
-                    "COUNTERFACTUAL_OVERRIDE_INVALID",
-                    "each override must identify an active direct actor-memory fact",
-                ));
-            };
-            let exact_opposite = assumptions
-                .iter()
-                .any(|assumption| fact.proposition == relations::opposition(assumption));
-            if !fact.valid
-                || fact.guarantee != Guarantee::UserPremise
-                || !fact.dependencies.is_empty()
-                || fact.source_input.is_empty()
-                || !exact_opposite
-            {
-                return Err(failure(
-                    "COUNTERFACTUAL_OVERRIDE_INVALID",
-                    "only an active direct USER_PREMISE exactly opposite to an assumption may be superseded",
-                ));
-            }
-        }
-
-        let scenario_identity = identity(&(
-            "counterfactual-scenario-v1",
+        evaluate_counterfactual_in_memory(
             actor,
             case,
-            base_memory_revision,
+            || {
+                self.store
+                    .in_case_memory(actor, case, || self.store.load_memory(actor))
+            },
             assumptions,
             superseded_fact_ids,
             target,
-        ))?;
-        let mut invalidated_record_ids = relations::invalidate_in_order(
-            &mut memory,
-            superseded_fact_ids.iter().map(String::as_str),
-        )?;
-        invalidated_record_ids.sort_unstable();
-        let mut hypothesis_ids = Vec::with_capacity(assumptions.len());
-        for (ordinal, assumption) in assumptions.iter().enumerate() {
-            let hypothesis = relations::add_hypothesis(
-                &mut memory,
-                assumption.clone(),
-                &scenario_identity,
-                ordinal,
-            )?;
-            hypothesis_ids.push(hypothesis.id);
-        }
-        let allowed_hypotheses: BTreeSet<_> = hypothesis_ids.iter().cloned().collect();
-        // The ordinary query path evaluates target conditions before inference.
-        // Reuse it here so a scenario cannot let a conflicting assumption
-        // bypass a FALSE, UNKNOWN, or CONFLICT condition boundary.
-        let outcome = relations::query_hypothetical(
-            &memory,
-            target,
-            max_actions - preparation_actions,
-            &allowed_hypotheses,
-        )?;
-        let outcome_dependencies = relations::answer_dependencies(&outcome);
-        let outcome_dependency_set: BTreeSet<_> = outcome_dependencies.iter().cloned().collect();
-        let outcome_hypothesis_ids_used: Vec<_> = hypothesis_ids
-            .iter()
-            .filter(|id| outcome_dependency_set.contains(*id))
-            .cloned()
-            .collect();
-        if outcome
-            .condition_status
-            .is_some_and(|status| status != ConditionStatus::True)
-        {
-            return Ok(CounterfactualRelationReport {
-                status: CounterfactualRelationStatus::Unknown,
-                target: target.clone(),
-                guarantee: Guarantee::Unknown,
-                facts: outcome.facts,
-                dependencies: outcome_dependencies,
-                condition_status: outcome.condition_status,
-                condition_evaluations: outcome.condition_evaluations,
-                hypothesis_ids,
-                hypothesis_ids_used: outcome_hypothesis_ids_used,
-                superseded_fact_ids: superseded_fact_ids.to_vec(),
-                invalidated_record_ids,
-                base_memory_revision,
-                scenario_memory_revision: memory.revision,
-                steps: outcome.steps.saturating_add(preparation_actions),
-            });
-        }
-        let conflicting_premises: Vec<_> = memory
-            .facts
-            .iter()
-            .filter(|fact| {
-                fact.valid
-                    && assumptions
-                        .iter()
-                        .any(|assumption| fact.proposition == relations::opposition(assumption))
-            })
-            .cloned()
-            .collect();
-        if !conflicting_premises.is_empty() {
-            let mut facts = conflicting_premises;
-            facts.extend(
-                memory
-                    .facts
-                    .iter()
-                    .filter(|fact| allowed_hypotheses.contains(&fact.id))
-                    .cloned(),
-            );
-            facts.extend(outcome.facts.iter().cloned());
-            facts.sort_by(|left, right| left.id.cmp(&right.id));
-            facts.dedup_by(|left, right| left.id == right.id);
-            let mut dependency_set: BTreeSet<_> = outcome_dependencies.into_iter().collect();
-            dependency_set.extend(facts.iter().flat_map(|fact| {
-                std::iter::once(fact.id.clone()).chain(fact.dependencies.iter().cloned())
-            }));
-            let dependencies: Vec<_> = dependency_set.iter().cloned().collect();
-            let hypothesis_ids_used = hypothesis_ids
-                .iter()
-                .filter(|id| dependency_set.contains(*id))
-                .cloned()
-                .collect();
-            return Ok(CounterfactualRelationReport {
-                status: CounterfactualRelationStatus::Conflict,
-                target: target.clone(),
-                guarantee: Guarantee::Unknown,
-                facts,
-                dependencies,
-                condition_status: outcome.condition_status,
-                condition_evaluations: outcome.condition_evaluations,
-                hypothesis_ids,
-                hypothesis_ids_used,
-                superseded_fact_ids: superseded_fact_ids.to_vec(),
-                invalidated_record_ids,
-                base_memory_revision,
-                scenario_memory_revision: memory.revision,
-                steps: outcome.steps.saturating_add(preparation_actions),
-            });
-        }
-        let dependencies = outcome_dependencies;
-        let hypothesis_ids_used = outcome_hypothesis_ids_used;
-        let status = match outcome.status.as_str() {
-            "SUPPORTED" => CounterfactualRelationStatus::Supported,
-            "CONTRADICTED" => CounterfactualRelationStatus::Contradicted,
-            "CONFLICT" => CounterfactualRelationStatus::Conflict,
-            _ => CounterfactualRelationStatus::Unknown,
-        };
-        let guarantee = match status {
-            CounterfactualRelationStatus::Conflict | CounterfactualRelationStatus::Unknown => {
-                Guarantee::Unknown
-            }
-            _ if !hypothesis_ids_used.is_empty() => Guarantee::Hypothesis,
-            _ => relations::answer_guarantee(&outcome),
-        };
-
-        Ok(CounterfactualRelationReport {
-            status,
-            target: target.clone(),
-            guarantee,
-            facts: outcome.facts,
-            dependencies,
-            condition_status: outcome.condition_status,
-            condition_evaluations: outcome.condition_evaluations,
-            hypothesis_ids,
-            hypothesis_ids_used,
-            superseded_fact_ids: superseded_fact_ids.to_vec(),
-            invalidated_record_ids,
-            base_memory_revision,
-            scenario_memory_revision: memory.revision,
-            steps: outcome.steps.saturating_add(preparation_actions),
-        })
+            max_actions,
+        )
     }
 
     /// Build and adopt an explanation from one atomic, typed relation.
@@ -5553,7 +7688,9 @@ impl Engine {
         let mut source_ids = if request.budget.max_actions == 0 {
             Vec::new()
         } else {
-            let memory = self.store.load_memory(actor)?;
+            let memory = self
+                .store
+                .in_case_memory(actor, &request.case_id, || self.store.load_memory(actor))?;
             let answer = relations::query(&memory, &proposition, request.budget.max_actions)?;
             if matches!(answer.status.as_str(), "SUPPORTED" | "CONTRADICTED") {
                 relations::answer_dependencies(&answer)
@@ -5783,13 +7920,15 @@ impl Engine {
         let (mut source_ids_a, mut source_ids_b) = if per_subject_actions == 0 {
             (Vec::new(), Vec::new())
         } else {
-            let inventories = self.active_relation_comparison_inventories(
-                actor,
-                subject_a,
-                subject_b,
-                scope,
-                per_subject_actions,
-            )?;
+            let inventories = self.store.in_case_memory(actor, &request.case_id, || {
+                self.active_relation_comparison_inventories(
+                    actor,
+                    subject_a,
+                    subject_b,
+                    scope,
+                    per_subject_actions,
+                )
+            })?;
             let resolve_source_ids = |result: Result<relations::RelationInventory>| match result {
                 Ok(inventory) => Ok(inventory.dependencies),
                 Err(Error::Contract { code, .. }) if code == "RELATION_BUDGET" => Ok(Vec::new()),
@@ -6236,8 +8375,105 @@ impl Engine {
         Ok((memory, answer))
     }
 
+    pub fn fork_case(
+        &self,
+        actor: &str,
+        source_case: &str,
+        case: &str,
+        result_id: Option<&str>,
+    ) -> Result<CaseBranch> {
+        self.store
+            .create_case_branch(actor, source_case, case, result_id)
+    }
+
+    pub fn case_branch(&self, actor: &str, case: &str) -> Result<Option<CaseBranch>> {
+        self.store
+            .branch_source(actor, case)
+            .map(|anchor| anchor.map(|(branch, _)| branch))
+    }
+
+    pub fn branch_history(
+        &self,
+        actor: &str,
+        case: &str,
+        offset: usize,
+        limit: usize,
+    ) -> Result<Vec<BranchHistoryEntry>> {
+        self.store.branch_history(actor, case, offset, limit)
+    }
+
+    pub fn case_registered(&self, actor: &str, case: &str) -> Result<bool> {
+        self.store.case_registered(actor, case)
+    }
+
+    pub fn save_purpose_profile(&self, actor: &str, profile: &PurposeProfile) -> Result<String> {
+        self.store.save_purpose_profile(actor, profile)
+    }
+
+    pub fn purpose_profile(
+        &self,
+        actor: &str,
+        name: &str,
+    ) -> Result<Option<(String, PurposeProfile)>> {
+        crate::purpose_profile::validate_name(name)?;
+        self.store.load_purpose_profile(actor, name)
+    }
+
     pub fn execute(&mut self, actor: &str, request: RequestEnvelope) -> Result<ResultRecord> {
+        if request.speech.is_some() {
+            return Ok(rejected(
+                &request,
+                "SPEECH_INPUT_SCOPE",
+                "音声入力は、音声ファイルを明示して送信してください。",
+            ));
+        }
         self.execute_with_bundle(actor, request, None)
+    }
+
+    pub fn execute_wave_file(
+        &mut self,
+        actor: &str,
+        request: RequestEnvelope,
+        path: &Path,
+    ) -> Result<(String, ResultRecord)> {
+        self.execute_wave(actor, request, crate::speech_input::WaveSource::File(path))
+            .map(|(recognized, result)| (recognized.text, result))
+    }
+
+    /// Process one original WAV supplied as bytes through the normal speech turn.
+    pub fn execute_wave_bytes(
+        &mut self,
+        actor: &str,
+        request: RequestEnvelope,
+        wave: &[u8],
+    ) -> Result<(crate::RecognizedWave, ResultRecord)> {
+        self.execute_wave(actor, request, crate::speech_input::WaveSource::Bytes(wave))
+    }
+
+    fn execute_wave(
+        &mut self,
+        actor: &str,
+        request: RequestEnvelope,
+        source: crate::speech_input::WaveSource<'_>,
+    ) -> Result<(crate::RecognizedWave, ResultRecord)> {
+        if actor.is_empty() || actor != request.actor_id {
+            return Err(failure(
+                "ACTOR_MISMATCH",
+                "使用者と入力の主体が一致しません。",
+            ));
+        }
+        if request.case_id.trim().is_empty()
+            || request.case_id.len() > 256
+            || request.input_id.trim().is_empty()
+            || request.input_id.len() > 256
+        {
+            return Err(failure("INVALID_IDENTITY", "空または長すぎる識別子です。"));
+        }
+        let started = Instant::now();
+        let request = crate::speech_input::bind(&self.store, request, source, started)?;
+        let recognized = crate::RecognizedWave::from_bound_request(&request)?;
+        let result = self.execute_with_start(actor, request, None, Some(started))?;
+        Ok((recognized, result))
     }
 
     #[cfg(test)]
@@ -6265,7 +8501,66 @@ impl Engine {
         request: RequestEnvelope,
         direct_bundle: Option<InputBundle>,
     ) -> Result<ResultRecord> {
-        let attempt = self.execute_inner(actor, request.clone(), direct_bundle);
+        self.execute_with_start(actor, request, direct_bundle, None)
+    }
+
+    fn execute_with_start(
+        &mut self,
+        actor: &str,
+        mut request: RequestEnvelope,
+        direct_bundle: Option<InputBundle>,
+        started: Option<Instant>,
+    ) -> Result<ResultRecord> {
+        let started = started.or_else(|| request.purpose.as_ref().map(|_| Instant::now()));
+        if actor == request.actor_id && !actor.is_empty() && request.purpose.is_some() {
+            if direct_bundle.is_some() {
+                return Ok(rejected(
+                    &request,
+                    "PURPOSE_BINDING_INVALID",
+                    "用途を使うときは元の依頼から処理してください。",
+                ));
+            }
+            match crate::purpose_profile::bind(&self.store, &mut request) {
+                Ok(()) => {}
+                Err(Error::Contract { code, message }) => {
+                    return Ok(rejected(&request, &code, &message));
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if direct_bundle.is_some() && request.speech.is_some() {
+            return Ok(rejected(
+                &request,
+                "SPEECH_INPUT_SCOPE",
+                "直接指定した意味構造に音声観測は指定できません。",
+            ));
+        }
+        if actor == request.actor_id && !actor.is_empty() && !request.attachments.is_empty() {
+            if let Err(Error::Contract { code, message }) =
+                input::validate_request_attachments(&request)
+            {
+                return Ok(rejected(&request, &code, &message));
+            }
+            if direct_bundle.is_some() {
+                return Ok(rejected(
+                    &request,
+                    "ATTACHMENT_UNSUPPORTED",
+                    "添付を使う場合は、通常の会話入力からCSV集計や資料の要約・箇所抽出を指定してください。",
+                ));
+            }
+        }
+        let scope = if actor == request.actor_id && !actor.is_empty() {
+            Some(
+                self.store
+                    .start_memory_use(actor, &request.case_id, Some(identity(&request)?))?,
+            )
+        } else {
+            None
+        };
+        let attempt = self.execute_inner(actor, request.clone(), direct_bundle, started);
+        if let Some(scope) = scope {
+            self.store.restore_memory_use(scope);
+        }
         match attempt {
             Ok(value) => Ok(value),
             Err(error) => {
@@ -6306,9 +8601,27 @@ impl Engine {
                         Lifecycle::Fail
                     };
                     if state.lifecycle.permits(terminal)
-                        && let Ok(result) =
-                            self.stop(&mut state, terminal, "EXECUTION_ERROR", &error.to_string())
+                        && let Ok(mut result) = match &error {
+                            Error::Contract { code, message } if code.starts_with("MEMORY_") => {
+                                self.stop(&mut state, terminal, code, message)
+                            }
+                            _ => self.stop(
+                                &mut state,
+                                terminal,
+                                "EXECUTION_ERROR",
+                                &error.to_string(),
+                            ),
+                        }
                     {
+                        if matches!(&error, Error::Contract { code, .. } if code == "MEMORY_POLICY_CHANGED" || code == "MEMORY_CONTEXT_UNAVAILABLE")
+                        {
+                            result.text = result.reason.clone().unwrap_or_default();
+                            result.content_plan = None;
+                            result.render = None;
+                            result.evidence.clear();
+                            result.dependencies.clear();
+                            result.actor_memory_revision = None;
+                        }
                         return Ok(result);
                     }
                 }
@@ -6321,6 +8634,7 @@ impl Engine {
         actor: &str,
         request: RequestEnvelope,
         direct_bundle: Option<InputBundle>,
+        started: Option<Instant>,
     ) -> Result<ResultRecord> {
         if actor != request.actor_id || actor.is_empty() {
             return Ok(rejected(
@@ -6362,6 +8676,18 @@ impl Engine {
                 &request.input_id,
                 request.input_version,
             )? {
+                if !self
+                    .store
+                    .admit_memory_context(actor, &request.case_id, &saved)?
+                {
+                    let mut result = rejected(
+                        &request,
+                        "MEMORY_CONTEXT_UNAVAILABLE",
+                        "現在の記憶設定で処理し直すには新しい入力が必要です。過去の結果は履歴から確認できます。",
+                    );
+                    result.lifecycle = Lifecycle::Suspend;
+                    return Ok(result);
+                }
                 if matches!(
                     saved.lifecycle,
                     Lifecycle::Received
@@ -6429,7 +8755,7 @@ impl Engine {
             } else if current.lifecycle == Lifecycle::Suspend
                 && actions.iter().any(|action| {
                     current.input_fingerprint.as_ref() == Some(&action.input_fingerprint)
-                        && crate::recovery::is_unattempted_local_write(action)
+                        && crate::recovery::is_unattempted_effect(action)
                 })
             {
                 Some((
@@ -6475,7 +8801,7 @@ impl Engine {
             .as_ref()
             .filter(|prior| prior.lifecycle == Lifecycle::Cancel)
         {
-            crate::recovery::close_cancelled_file_preparations(&self.store, cancelled)?;
+            crate::recovery::close_cancelled_preparations(&self.store, cancelled)?;
         }
         let implicit_context = request.context_ref.is_none() && direct_bundle.is_none();
         let mut previous = if let Some(ref requested) = request.context_ref {
@@ -6488,6 +8814,19 @@ impl Engine {
         } else {
             latest.as_ref().and_then(|s| s.result.as_ref())
         };
+        if let Some(source) = previous
+            && !self
+                .store
+                .admit_memory_context(actor, &request.case_id, source)?
+        {
+            if request.context_ref.is_some() {
+                return stop_admission(
+                    "MEMORY_CONTEXT_UNAVAILABLE",
+                    "現在の記憶設定では、その回答を新しい根拠として使えません。過去の回答は履歴から確認できます。",
+                );
+            }
+            previous = None;
+        }
         let mut prior_results = latest
             .as_ref()
             .map(|s| s.prior_results.clone())
@@ -6532,7 +8871,7 @@ impl Engine {
             }
             return Err(error);
         }
-        let started = Instant::now();
+        let started = started.unwrap_or_else(Instant::now);
         let has_compute_budget = request.budget.max_actions > 0 && request.budget.deadline_ms > 0;
         let sealed = if let Some(bundle) = early_bundle {
             Ok(bundle)
@@ -6542,7 +8881,10 @@ impl Engine {
             let implicit_source_context = latest
                 .as_ref()
                 .filter(|case| {
-                    implicit_context && has_compute_budget && case.lifecycle == Lifecycle::Commit
+                    previous.is_some()
+                        && implicit_context
+                        && has_compute_budget
+                        && case.lifecycle == Lifecycle::Commit
                 })
                 .and_then(|case| case.bundle.as_ref())
                 .and_then(|bundle| match &bundle.meaning.intent {
@@ -6573,8 +8915,30 @@ impl Engine {
         let mut explicit_summary_question_scope = None;
         let mut hearing_answer = None;
         let sealed = sealed.and_then(|bundle| {
+            if bundle.meaning.parser_version == input::NAMED_CONVERSATION_PARSER_VERSION {
+                return Ok(bundle);
+            }
+            if has_compute_budget
+                && matches!(
+                    bundle.meaning.intent,
+                    Intent::Unknown { .. } | Intent::ExplainPrevious | Intent::ExplainPreviousStop
+                )
+                && input::asks_to_clarify_news_status(&request.text)
+                && let Some(prior) = previous
+                && let Some(origin) = current_news_origin(&self.store, &state, prior)?
+            {
+                return input::seal_current_news_explanation(&request, prior, &origin);
+            }
+            let can_continue_conversation = match &bundle.meaning.intent {
+                Intent::Unknown { .. } => true,
+                Intent::ReportConversationEvent {
+                    event,
+                    continue_topic: false,
+                } => event.greeting.is_none() && !event.report.text.starts_with("ところで"),
+                _ => false,
+            };
             let bundle = if has_compute_budget
-                && matches!(bundle.meaning.intent, Intent::Unknown { .. })
+                && can_continue_conversation
                 && let Some(prior) = previous
                 && registered_conversation_input(&self.store, &state, prior)?.is_some()
             {
@@ -7052,6 +9416,122 @@ impl Engine {
                 return self.stop(&mut state, Lifecycle::Fail, "INPUT_FAILURE", &e.to_string());
             }
         };
+        if implicit_context
+            && has_compute_budget
+            && let Intent::ReviseMessage { revision } = &bundle.meaning.intent
+            && revision.named
+            && let Some(before) = state.parent_revision
+        {
+            let deadline = started
+                .checked_add(Duration::from_millis(request.budget.deadline_ms))
+                .ok_or_else(|| {
+                    failure("INVALID_DEADLINE", "下書きの確認に使用する締切が無効です。")
+                })?;
+            match recent_message(&self.store, &request, revision, before, deadline) {
+                Ok(target) => bundle = input::seal(&request, target.as_ref())?,
+                Err(Error::Contract { code, message })
+                    if matches!(code.as_str(), "DEADLINE" | "ACTION_BUDGET_EXHAUSTED") =>
+                {
+                    state.bundle = Some(bundle);
+                    self.advance(&mut state, Lifecycle::Sealed, None)?;
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let mut named_conversation = None;
+        if bundle.meaning.unresolved.is_empty()
+            && let Intent::ResumeConversationTopic { topic, .. } = &bundle.meaning.intent
+        {
+            let deadline = started
+                .checked_add(Duration::from_millis(request.budget.deadline_ms))
+                .ok_or_else(|| {
+                    failure("INVALID_DEADLINE", "話題の履歴を確認する締切が無効です。")
+                })?;
+            match named_conversation_parent(
+                &self.store,
+                &state,
+                &request,
+                topic,
+                state.parent_revision,
+                deadline,
+            ) {
+                Ok((parent, examined)) => {
+                    let Some(named) = crate::conversation_history_input::parse(&request.text)
+                    else {
+                        return Err(failure(
+                            "CONVERSATION_SOURCE_INVALID",
+                            "元の話題指定を確認できません。",
+                        ));
+                    };
+                    bundle = input::seal_named_conversation_return(&request, named, Some(&parent))?;
+                    named_conversation = Some((parent, examined));
+                }
+                Err(Error::Contract { code, message })
+                    if matches!(
+                        code.as_str(),
+                        "CONVERSATION_TOPIC_NOT_FOUND"
+                            | "CONVERSATION_TOPIC_AMBIGUOUS"
+                            | "CONVERSATION_CONTEXT_INVALID"
+                            | "DEADLINE"
+                            | "ACTION_BUDGET_EXHAUSTED"
+                    ) =>
+                {
+                    state.bundle = Some(bundle);
+                    self.advance(&mut state, Lifecycle::Sealed, None)?;
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let mut decision_selection = None;
+        if implicit_context
+            && has_compute_budget
+            && decision_revision_named(&bundle.meaning.intent) == Some(true)
+            && let Some(before) = state.parent_revision
+        {
+            let deadline = started
+                .checked_add(Duration::from_millis(request.budget.deadline_ms))
+                .ok_or_else(|| failure("INVALID_DEADLINE", "比較の照合締切が無効です。"))?;
+            match recent_decision(
+                &self.store,
+                &request,
+                before,
+                decision_history_allowance(&request),
+                deadline,
+            ) {
+                Ok(selection) => {
+                    bundle = input::seal(&request, selection.0.as_ref())?;
+                    decision_selection = Some(selection);
+                }
+                Err(Error::Contract { code, message })
+                    if matches!(code.as_str(), "DEADLINE" | "ACTION_BUDGET_EXHAUSTED") =>
+                {
+                    state.bundle = Some(bundle);
+                    self.advance(&mut state, Lifecycle::Sealed, None)?;
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if let Some(source) = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            && !self
+                .store
+                .admit_memory_context(actor, &request.case_id, source)?
+        {
+            state.bundle = Some(bundle);
+            self.advance(&mut state, Lifecycle::Sealed, None)?;
+            return self.stop(
+                &mut state,
+                Lifecycle::Suspend,
+                "MEMORY_CONTEXT_UNAVAILABLE",
+                "現在の記憶設定では、前の回答を新しい根拠として使えません。",
+            );
+        }
         let mut probed_topic_inventory = None;
         let mut autonomous_topic_lookup = None;
         let mut topic_actions = 0;
@@ -7104,6 +9584,8 @@ impl Engine {
         }
         state.bundle = Some(bundle.clone());
         self.advance(&mut state, Lifecycle::Sealed, None)?;
+        self.store
+            .bind_memory_policy(&request, self.store.bound_memory_policy(actor)?)?;
         if let Some(reason) = bundle
             .meaning
             .unresolved
@@ -7205,6 +9687,45 @@ impl Engine {
         };
         let mut nodes = Vec::new();
         let mut compute_requires = Vec::new();
+        let statistics_explanation_unavailable = matches!(
+            &bundle.meaning.intent,
+            Intent::DescribeStatistics {
+                explanation: Some(ExplanationRequest {
+                    audience: ExplanationAudience::Unresolved(_),
+                    ..
+                }),
+                ..
+            }
+        );
+        let statistics_explanation_budget_blocked = !statistics_explanation_unavailable
+            && matches!(
+                &bundle.meaning.intent,
+                Intent::DescribeStatistics {
+                    explanation: Some(_),
+                    ..
+                }
+            )
+            && request.budget.max_actions < STATISTICS_EXPLANATION_ACTIONS;
+        let statistics_explanation_blocked =
+            statistics_explanation_unavailable || statistics_explanation_budget_blocked;
+        if let Intent::DescribeStatistics { explanation, .. } = &bundle.meaning.intent {
+            nodes.push(GoalNode {
+                id: STATISTICS_VALUES_NODE.into(),
+                kind: GoalNodeKind::ComputedValue,
+                requires: Vec::new(),
+            });
+            compute_requires.push(STATISTICS_VALUES_NODE.into());
+            if explanation.is_some() {
+                nodes.push(GoalNode {
+                    id: STATISTICS_EXPLANATION_NODE.into(),
+                    kind: GoalNodeKind::ContentPlan,
+                    requires: vec![STATISTICS_VALUES_NODE.into()],
+                });
+                if !statistics_explanation_blocked {
+                    compute_requires.push(STATISTICS_EXPLANATION_NODE.into());
+                }
+            }
+        }
         let source_followup_indices = if matches!(
             bundle.meaning.intent,
             Intent::SummarizePreviousSource
@@ -7668,11 +10189,9 @@ impl Engine {
                 }
             }
             let artifact = match crate::text_summary::summarize_previous_result_with_limits(
-                &identity(&request)?,
-                &prior.id,
-                &plan.id,
-                &render.actual_sha256,
-                &prior.text,
+                &self.store,
+                &request,
+                prior,
                 limits,
             ) {
                 Ok(value) => value,
@@ -7842,9 +10361,26 @@ impl Engine {
                 requires: Vec::new(),
             });
         }
+        let news_publishers = if matches!(bundle.meaning.intent, Intent::AskCurrentNews { .. }) {
+            let publishers = crate::news::admitted_publishers(&request.permissions);
+            for publisher in &publishers {
+                nodes.extend(publisher.nodes());
+                compute_requires.push(publisher.review_node().into());
+            }
+            publishers
+        } else {
+            Vec::new()
+        };
         if matches!(bundle.meaning.intent, Intent::AskWeb { .. }) {
             nodes.extend(crate::web_answer::nodes());
             compute_requires.push(crate::web_answer::ANSWER_NODE.into());
+        }
+        if let Intent::CompareWebResearch { expression, .. } = &bundle.meaning.intent {
+            nodes.extend(crate::research_goal::nodes(expression.is_some()));
+            compute_requires.push(crate::research_goal::REPORT_NODE.into());
+            if expression.is_some() {
+                compute_requires.push(crate::research_goal::CALC_NODE.into());
+            }
         }
         if let Intent::FetchPreviousSearchCandidate { rank } = &bundle.meaning.intent {
             let listing_id = search::SEARCH_CANDIDATE_LISTING_NODE.to_string();
@@ -8026,6 +10562,39 @@ impl Engine {
             compute_requires.extend(sequence_nodes.iter().map(|node| node.id.clone()));
             nodes.extend(sequence_nodes);
         }
+        let additional_source_node = match &bundle.meaning.intent {
+            Intent::ExplainPreviousStop => Some(crate::clarification::SOURCE_NODE),
+            Intent::SpeakPreviousAnswer => Some(crate::speech::SOURCE_NODE),
+            intent if crate::branch_text::handles(intent) => Some(crate::branch_text::SOURCE_NODE),
+            intent if input::is_attached_document_intent(intent) => {
+                Some(crate::attached_document::SOURCE_NODE)
+            }
+            _ => None,
+        };
+        if let Some(node) = crate::csv_chart_context::source_evidence_node(&bundle.meaning.intent)
+            .or(additional_source_node)
+        {
+            let id = node.to_owned();
+            nodes.push(GoalNode {
+                id: id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            compute_requires.push(id);
+        }
+        if crate::wasm_execution::handles(&bundle.meaning.intent) {
+            let id = "wasm-run".to_owned();
+            nodes.push(GoalNode {
+                id: id.clone(),
+                kind: GoalNodeKind::Evidence,
+                requires: Vec::new(),
+            });
+            compute_requires.push(id);
+        }
+        if matches!(bundle.meaning.intent, Intent::AnalyzeAttachments { .. }) {
+            nodes.extend(attached_analysis_nodes());
+            compute_requires.push(ATTACHED_ANALYSIS_TABLE.into());
+        }
         nodes.extend([
             GoalNode {
                 id: "compute".into(),
@@ -8061,8 +10630,25 @@ impl Engine {
             });
         }
         let required_graph_ref = self.store.put_artifact(actor, &request.case_id, &nodes)?;
-        let required_actions = nodes.len()
+        let statistics_file_budget_blocked =
+            matches!(&bundle.meaning.intent, Intent::DescribeStatistics { .. })
+                && effective_output_path.is_some()
+                && !statistics_explanation_blocked
+                && request.budget.max_actions as usize == nodes.len() - 1;
+        let statistics_preview = statistics_explanation_blocked || statistics_file_budget_blocked;
+        let mut decision_file_budget_blocked = is_decision_intent(&bundle.meaning.intent)
+            && effective_output_path.is_some()
+            && request.budget.max_actions as usize == nodes.len() - 1;
+        let blocked_nodes = usize::from(statistics_explanation_blocked)
+            + usize::from(
+                (statistics_preview || decision_file_budget_blocked)
+                    && effective_output_path.is_some(),
+            );
+        let required_actions = nodes.len() - blocked_nodes
             + topic_actions
+            + named_conversation
+                .as_ref()
+                .map_or(0, |(_, examined)| *examined as usize)
             + previous_sequence
                 .as_ref()
                 .map_or(0, PreviousCalculationSequence::context_actions)
@@ -8091,7 +10677,18 @@ impl Engine {
                         .as_ref()
                         .map(|_| crate::code_generation::VERIFICATION_EXPLANATION_PREDICATE)),
             ),
-            renderer_version: Some(output::RENDERER_VERSION.into()),
+            renderer_version: Some(
+                match bundle.meaning.intent {
+                    Intent::SpeakPreviousAnswer => {
+                        crate::speech::renderer_version(effective_output_path.as_deref())
+                    }
+                    Intent::ProduceImage { .. } => {
+                        crate::image_delivery::renderer_version(effective_output_path.as_deref())
+                    }
+                    _ => output::RENDERER_VERSION,
+                }
+                .into(),
+            ),
         };
         state.goal_sha256 = Some(self.store.put_artifact(actor, &request.case_id, &goal)?);
         let mut result = base_result(&request);
@@ -8109,6 +10706,8 @@ impl Engine {
                 | Intent::SearchWithFallback { .. }
                 | Intent::FetchPreviousSearchCandidate { .. }
                 | Intent::AskWeb { .. }
+                | Intent::CompareWebResearch { .. }
+                | Intent::AskCurrentNews { .. }
         ) {
             state.result = Some(result.clone());
         }
@@ -8140,7 +10739,9 @@ impl Engine {
                 "取消を記録しました。既発生・未確定の作用は消去せず保持しています。",
             );
         }
-        if !supports_japanese_output_locale(&request.locale) {
+        let translation_locale = is_translation_intent(&goal.intent)
+            && matches!(request.locale.as_str(), "en" | "en-US");
+        if !supports_japanese_output_locale(&request.locale) && !translation_locale {
             return self.stop(
                 &mut state,
                 Lifecycle::Suspend,
@@ -8187,6 +10788,23 @@ impl Engine {
         ) && let Some((code, message)) = required_file_permission_stop(&goal)
         {
             return self.stop(&mut state, Lifecycle::Suspend, code, message);
+        }
+        let binary_target = match goal.intent {
+            Intent::SpeakPreviousAnswer => {
+                Some(crate::speech::check_target(goal.output_path.as_deref()))
+            }
+            Intent::ProduceImage { .. } => Some(crate::image_delivery::check_target(
+                goal.output_path.as_deref(),
+            )),
+            _ => None,
+        };
+        if let Some(target) = binary_target {
+            if let Err(Error::Contract { code, message }) = target {
+                return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+            }
+            if let Some((code, message)) = required_file_permission_stop(&goal) {
+                return self.stop(&mut state, Lifecycle::Suspend, code, message);
+            }
         }
         // Each explanation probe below consumes the same authenticated prior
         // input. Read it once, without rescanning the journal for each probe.
@@ -8248,6 +10866,11 @@ impl Engine {
         let mut pending_hearing = false;
         let mut approved_surfaces = None;
         let mut report_goal_content = None;
+        enum MediaOutput {
+            Wave(Vec<u8>),
+            Png(Vec<u8>),
+        }
+        let mut media_output = None;
         let mut adopted_relation_meaning = None;
         let mut relation_proof_dependencies = None;
         let mut relation_meaning_plan = None;
@@ -8257,6 +10880,15 @@ impl Engine {
         let mut generation_proof_ids = None;
         let mut calculation_meaning_plan = None;
         let mut conversation_meaning_plan = None;
+        let mut message_meaning_plan = None;
+        let mut fiction_meaning_plan = None;
+        let mut translation_meaning_plan = None;
+        let mut translation_output_locale = None;
+        let mut work_plan_meaning = None;
+        let mut decision_plan = None;
+        let mut decision_pending = false;
+        let mut news_partial = false;
+        let mut web_research_partial = false;
         let mut applied_rule_adaptation = None;
         let mut generation_model = None;
         let mut generation_emission = None;
@@ -8538,19 +11170,33 @@ impl Engine {
                     units: units.clone(),
                 });
             }
-            Intent::CorrectCalculation { .. } | Intent::ConvertPreviousLength { .. } => {
-                let correcting = matches!(goal.intent, Intent::CorrectCalculation { .. });
+            Intent::CorrectCalculation { .. }
+            | Intent::ConvertPreviousLength { .. }
+            | Intent::ScalePreviousCalculation { .. } => {
+                let (predicate, missing_message, unsupported_code) = match &goal.intent {
+                    Intent::CorrectCalculation { .. } => (
+                        CALCULATION_CORRECTION_PREDICATE,
+                        "訂正対象となる実際の計算結果がありません。",
+                        "CORRECTION_UNSUPPORTED",
+                    ),
+                    Intent::ScalePreviousCalculation { .. } => (
+                        PREVIOUS_CALCULATION_SCALE_PREDICATE,
+                        "同じ会話に倍率を適用できる確定済み計算結果がありません。",
+                        "CALCULATION_SCALE_UNSUPPORTED",
+                    ),
+                    _ => (
+                        PREVIOUS_LENGTH_CONVERSION_PREDICATE,
+                        "換算対象となる実際の計算結果がありません。",
+                        "LENGTH_CONVERSION_UNSUPPORTED",
+                    ),
+                };
                 let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
                 else {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "MISSING_ACTUAL_RESULT",
-                        if correcting {
-                            "訂正対象となる実際の計算結果がありません。"
-                        } else {
-                            "換算対象となる実際の計算結果がありません。"
-                        },
+                        missing_message,
                     );
                 };
                 if prior.calculation.is_none() {
@@ -8574,11 +11220,7 @@ impl Engine {
                         result.calculation = Some(calculation);
                         result.guarantee = Guarantee::Computed;
                         report_goal_content = Some(ReportGoalContent {
-                            predicate: if correcting {
-                                CALCULATION_CORRECTION_PREDICATE
-                            } else {
-                                PREVIOUS_LENGTH_CONVERSION_PREDICATE
-                            },
+                            predicate,
                             guarantee: Guarantee::Computed,
                             dependencies: result.dependencies.clone(),
                             units: units.clone(),
@@ -8591,11 +11233,7 @@ impl Engine {
                         return self.stop(
                             &mut state,
                             Lifecycle::Suspend,
-                            if correcting {
-                                "CORRECTION_UNSUPPORTED"
-                            } else {
-                                "LENGTH_CONVERSION_UNSUPPORTED"
-                            },
+                            unsupported_code,
                             &error.to_string(),
                         );
                     }
@@ -8675,10 +11313,15 @@ impl Engine {
                 }
                 result.guarantee = Guarantee::Computed;
             }
-            Intent::Statistics { .. } | Intent::FiniteProbabilityStatistics { .. }
-                if bundle.meaning.parser_version == input::CONVERSATIONAL_MATH_PARSER_VERSION =>
+            Intent::Statistics { .. }
+            | Intent::FiniteProbabilityStatistics { .. }
+            | Intent::DescribeStatistics { .. }
+                if input::is_conversational_math_version(&bundle.meaning.parser_version) =>
             {
-                let report = match crate::math::conversational_math_report(&goal.intent) {
+                let report = match crate::math::conversational_math_report(
+                    &goal.intent,
+                    !statistics_explanation_budget_blocked,
+                ) {
                     Ok(report) => report,
                     Err(Error::Contract { code, message }) => {
                         return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
@@ -8698,11 +11341,23 @@ impl Engine {
                         "数理の計算記録と日本語の回答が証拠予算を超えています。",
                     );
                 }
-                result.dependencies.push(self.store.put_bytes(
-                    actor,
-                    &request.case_id,
-                    &report.bytes,
-                )?);
+                let values_ref = self
+                    .store
+                    .put_bytes(actor, &request.case_id, &report.bytes)?;
+                if matches!(goal.intent, Intent::DescribeStatistics { .. }) {
+                    graph.observe(STATISTICS_VALUES_NODE, &values_ref, &BTreeMap::new())?;
+                    if let Some(explanation) = report.requested_explanation.as_ref() {
+                        let explanation_ref =
+                            self.store
+                                .put_artifact(actor, &request.case_id, explanation)?;
+                        graph.observe(
+                            STATISTICS_EXPLANATION_NODE,
+                            &explanation_ref,
+                            &BTreeMap::from([(STATISTICS_VALUES_NODE.into(), values_ref.clone())]),
+                        )?;
+                    }
+                }
+                result.dependencies.push(values_ref);
                 result.guarantee = Guarantee::Computed;
                 units = report.units;
                 report_goal_content = Some(ReportGoalContent {
@@ -8711,6 +11366,14 @@ impl Engine {
                     dependencies: result.dependencies.clone(),
                     units: units.clone(),
                 });
+            }
+            Intent::DescribeStatistics { .. } => {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "STATISTICS_REQUEST_UNVERIFIED",
+                    "統計の依頼と出力条件を確認できなかったため、結果の表示を保留しました。",
+                );
             }
             Intent::Statistics {
                 values,
@@ -8900,6 +11563,181 @@ impl Engine {
                 result.dependencies.push(artifact);
                 units.push(value.text);
                 result.guarantee = Guarantee::Computed;
+            }
+            Intent::CreateCsvChart { .. }
+            | Intent::CreateCsvChartFromExecution { .. }
+            | Intent::CreateCsvChartFromExecutionValues { .. }
+            | Intent::CreateCsvChartFromAttachments { .. }
+            | Intent::FilterPreviousCsvChart { .. } => {
+                let chart = match crate::csv_chart_context::produce(
+                    &self.store,
+                    &state,
+                    &bundle,
+                    started,
+                ) {
+                    Ok(chart) => chart,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                self.store
+                    .put_bytes(actor, &request.case_id, &chart.report_bytes)?;
+                if let Some(evidence) = &chart.source_evidence {
+                    if let Some(bytes) = &evidence.new_bytes {
+                        let reference = self.store.put_bytes(actor, &request.case_id, bytes)?;
+                        if reference != evidence.reference {
+                            return Err(failure("INTEGRITY_FAILURE", "添付の記録が一致しません。"));
+                        }
+                    }
+                    graph.observe(evidence.node, &evidence.reference, &BTreeMap::new())?;
+                }
+                result.dependencies = chart.dependencies;
+                result.guarantee = Guarantee::Computed;
+                units = chart.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: CSV_CHART_PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
+            Intent::SummarizeAttachedDocuments
+            | Intent::FindInAttachedDocuments { .. }
+            | Intent::FindInPreviousAttachedDocuments { .. }
+            | Intent::ReviewAttachedDocumentFields { .. } => {
+                let document = match crate::attached_document::produce(
+                    &self.store,
+                    &state,
+                    &bundle,
+                    started,
+                    None,
+                ) {
+                    Ok(document) => document,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let manifest =
+                    self.store
+                        .put_bytes(actor, &request.case_id, &document.manifest_bytes)?;
+                let report =
+                    self.store
+                        .put_bytes(actor, &request.case_id, &document.report_bytes)?;
+                if manifest != document.manifest_ref
+                    || document.dependencies.last() != Some(&report)
+                {
+                    return Err(failure(
+                        "INTEGRITY_FAILURE",
+                        "添付資料の根拠を保存結果と照合できません。",
+                    ));
+                }
+                graph.observe(
+                    crate::attached_document::SOURCE_NODE,
+                    &manifest,
+                    &BTreeMap::new(),
+                )?;
+                result.dependencies = document.dependencies;
+                result.guarantee = Guarantee::SourceReport;
+                units = document.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: ATTACHED_DOCUMENT_PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
+            Intent::AnalyzeAttachments { .. } => {
+                let analysis = match crate::attachment_analysis::produce(&bundle, started) {
+                    Ok(analysis) => analysis,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let condition =
+                    self.store
+                        .put_bytes(actor, &request.case_id, &analysis.condition_bytes)?;
+                let table = self
+                    .store
+                    .put_bytes(actor, &request.case_id, &analysis.table_bytes)?;
+                observe_attached_analysis(&mut graph, &condition, &table)?;
+                result.dependencies = vec![condition, table];
+                result.guarantee = Guarantee::Derived;
+                units = analysis.units;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: ATTACHED_ANALYSIS_PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
+            Intent::SummarizeBranchSource { .. } | Intent::ReplaceBranchSource { .. } => {
+                let output = match crate::branch_text::produce(&self.store, &bundle, started) {
+                    Ok(output) => output,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                graph.observe(
+                    crate::branch_text::SOURCE_NODE,
+                    &output.dependencies[0],
+                    &BTreeMap::new(),
+                )?;
+                units = output.units;
+                result.dependencies = output.dependencies;
+                result.guarantee = output.guarantee;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: crate::branch_text::PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
+            Intent::ProduceImage { .. } => {
+                let image = match crate::image_delivery::produce(&self.store, &bundle, started) {
+                    Ok(image) => image,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                units = image.units;
+                media_output = Some(MediaOutput::Png(image.png));
+                result.dependencies = image.dependencies;
+                result.guarantee = Guarantee::Computed;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: crate::image_delivery::PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
+            Intent::SpeakPreviousAnswer => {
+                let speech = match crate::speech::produce(&self.store, &state, &bundle, started) {
+                    Ok(speech) => speech,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                graph.observe(
+                    crate::speech::SOURCE_NODE,
+                    &speech.source_render_ref,
+                    &BTreeMap::new(),
+                )?;
+                units = vec![speech.text];
+                media_output = Some(MediaOutput::Wave(speech.wave));
+                result.dependencies = speech.dependencies;
+                result.guarantee = speech.guarantee;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: crate::speech::PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
             }
             Intent::CsvGroupStatistics {
                 document,
@@ -9306,6 +12144,347 @@ impl Engine {
                 result.dependencies.push(artifact);
                 units.push(display);
                 result.guarantee = Guarantee::UserPremise;
+            }
+            Intent::ExplainCurrentNews { origin } => {
+                if goal.output_path.is_some() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "NEWS_FILE_DELIVERY_UNAVAILABLE",
+                        "ニュースの説明はチャットに表示できます。保存先の指定を外して依頼してください。",
+                    );
+                }
+                let linked = if let Some(previous) = previous {
+                    current_news_origin(&self.store, &state, previous)?.as_ref() == Some(origin)
+                        && bundle.meaning.context_result_ref.as_deref()
+                            == Some(previous.id.as_str())
+                        && bundle.context_sha256 == identity(&Some(previous))?
+                } else {
+                    false
+                };
+                let Some(original) = state.prior_results.get(origin).filter(|_| linked) else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "NEWS_CONTEXT_REQUIRED",
+                        "この会話で、説明できるニュースの依頼を確認できません。",
+                    );
+                };
+                units = crate::news::explanation_units(original);
+                result.dependencies.push(self.store.put_artifact(
+                    actor,
+                    &request.case_id,
+                    original,
+                )?);
+                result.guarantee = Guarantee::Computed;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: crate::news::EXPLANATION_PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
+            Intent::AskCurrentNews { topic, period } => {
+                use crate::{
+                    news::{self, NewsCitation, NewsReport, NewsReview, NewsWindow},
+                    ports::NewsWebFormat,
+                };
+                if bundle.meaning.parser_version == crate::news_input::NATURAL_PARSER_VERSION
+                    && !input::verified_current_news_input(&bundle)?
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "NEWS_SOURCE_INVALID",
+                        "ニュース依頼の原文と時間・話題を照合できません。",
+                    );
+                }
+                if news_publishers.is_empty() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        ports::READ_PERMISSION_REQUIRED,
+                        "ニュースの確認にはWeb接続が必要です。起動時に --allow-read-host で news.web.nhk または www.sankei.com を許可し、通信設定を /net で確認してください。",
+                    );
+                }
+                if goal.output_path.is_some() {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "NEWS_FILE_DELIVERY_UNAVAILABLE",
+                        "ニュースの回答はチャットに表示できます。保存先の指定を外して依頼してください。",
+                    );
+                }
+                let window = NewsWindow::new(*period)?;
+                let mut budget =
+                    match retrieval_budget(2 * news_publishers.len(), &state, &self.store) {
+                        Ok(budget) => budget,
+                        Err(Error::Contract { code, .. }) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                &code,
+                                "現在の通信条件と実行予算では、ニュースを確認できません。",
+                            );
+                        }
+                        Err(error) => return Err(error),
+                    };
+                let candidate_limit = (1
+                    + (goal.budget.max_actions as usize - required_actions)
+                        / news_publishers.len())
+                .min(news::MAX_CANDIDATES_PER_PUBLISHER);
+                let mut reviews = Vec::new();
+                for publisher in news_publishers {
+                    let mut review = NewsReview::new(publisher);
+                    let permissions = publisher.read_permissions();
+                    let listing = (|| {
+                        let listed = ports::fetch_news_with_budget(
+                            publisher.listing_url(),
+                            publisher.listing_format(),
+                            &permissions,
+                            &mut budget,
+                            &read_admission(&state)?,
+                        )?;
+                        let packet = listed.observation;
+                        review.listing_ref =
+                            Some(self.retain_news_packet(&mut state, &mut result, &packet)?);
+                        if let Some(wait) = listed.redirect_wait {
+                            return Err(failure(ports::RETRY_DEFERRED, wait));
+                        }
+                        if let Some(code) = &packet.failure {
+                            return Err(failure(code, "公開記事一覧を取得できませんでした。"));
+                        }
+                        ports::validate_news_packet(
+                            &packet,
+                            publisher.listing_format(),
+                            &permissions,
+                        )?;
+                        if packet.request_uri != publisher.listing_url()
+                            || packet.final_uri != publisher.listing_url()
+                        {
+                            return Err(failure(
+                                "NEWS_LISTING_ROUTE",
+                                "公開記事一覧の取得元を確認できません。",
+                            ));
+                        }
+                        publisher.listing(packet.extracted_text.as_deref().unwrap_or_default())
+                    })();
+                    match listing {
+                        Err(error) if read_case_changed(&error) => return Err(error),
+                        Err(Error::Contract { code, .. }) => review.unavailable(code),
+                        Err(error) => return Err(error),
+                        Ok(mut candidates) => {
+                            window.prioritize_candidates(
+                                publisher,
+                                &mut candidates,
+                                topic.as_deref(),
+                            );
+                            for candidate in candidates.into_iter().take(candidate_limit) {
+                                let article = (|| {
+                                    if !publisher.valid_article_uri(&candidate.uri) {
+                                        return Err(failure(
+                                            "NEWS_ARTICLE_ROUTE",
+                                            "記事候補の接続先を確認できません。",
+                                        ));
+                                    }
+                                    let fetched = ports::fetch_news_with_budget(
+                                        &candidate.uri,
+                                        NewsWebFormat::ArticleHtml,
+                                        &permissions,
+                                        &mut budget,
+                                        &read_admission(&state)?,
+                                    )?;
+                                    let packet = fetched.observation;
+                                    let body_ref =
+                                        self.retain_news_packet(&mut state, &mut result, &packet)?;
+                                    review.attempted_articles.push(body_ref.clone());
+                                    if let Some(wait) = fetched.redirect_wait {
+                                        return Err(failure(ports::RETRY_DEFERRED, wait));
+                                    }
+                                    if let Some(code) = &packet.failure {
+                                        return Err(failure(
+                                            code,
+                                            "記事の本文を取得できませんでした。",
+                                        ));
+                                    }
+                                    ports::validate_news_packet(
+                                        &packet,
+                                        NewsWebFormat::ArticleHtml,
+                                        &permissions,
+                                    )?;
+                                    if packet.request_uri != candidate.uri
+                                        || packet.final_uri != candidate.uri
+                                    {
+                                        return Err(failure(
+                                            "NEWS_ARTICLE_ROUTE",
+                                            "一覧で見つけた記事と取得した記事を照合できません。",
+                                        ));
+                                    }
+                                    let article = publisher.article(
+                                        &packet.final_uri,
+                                        packet.extracted_text.as_deref().unwrap_or_default(),
+                                        topic.as_deref(),
+                                    )?;
+                                    let published_at_unix_ms = window.admits(&article, &packet)?;
+                                    if !news::matches_topic(&article, topic.as_deref()) {
+                                        return Err(failure(
+                                            "NEWS_TOPIC_UNCONFIRMED",
+                                            "指定された話題を記事本文と照合できません。",
+                                        ));
+                                    }
+                                    Ok(NewsCitation {
+                                        source: publisher,
+                                        body_ref,
+                                        uri: packet.final_uri,
+                                        observed_at_unix_ms: packet.observed_at_unix_ms,
+                                        published_at_unix_ms,
+                                        candidate,
+                                        article,
+                                    })
+                                })();
+                                match article {
+                                    Ok(citation) => {
+                                        review.status = "NEWS_ARTICLE_CONFIRMED";
+                                        review.diagnostic = None;
+                                        review.citation = Some(citation);
+                                        break;
+                                    }
+                                    Err(error) if read_case_changed(&error) => return Err(error),
+                                    Err(Error::Contract { code, .. }) => {
+                                        let end_publisher = matches!(
+                                            code.as_str(),
+                                            ports::DEADLINE_EXCEEDED
+                                                | ports::RETRY_DEFERRED
+                                                | ports::REDIRECT_RETRY_DEFERRED
+                                                | "HTTP_RATE_LIMITED"
+                                                | "HTTP_START_BUDGET_EXHAUSTED"
+                                                | "RESOURCE_LIMIT"
+                                        );
+                                        review.unavailable(code);
+                                        if end_publisher {
+                                            break;
+                                        }
+                                    }
+                                    Err(error) => return Err(error),
+                                }
+                            }
+                        }
+                    }
+                    let review_ref = self.store.put_artifact(actor, &request.case_id, &review)?;
+                    let listing_observation_ref = review
+                        .listing_ref
+                        .clone()
+                        .unwrap_or_else(|| review_ref.clone());
+                    graph.observe(
+                        publisher.listing_node(),
+                        &listing_observation_ref,
+                        &BTreeMap::new(),
+                    )?;
+                    graph.observe(
+                        publisher.review_node(),
+                        &review_ref,
+                        &BTreeMap::from([(
+                            publisher.listing_node().into(),
+                            listing_observation_ref,
+                        )]),
+                    )?;
+                    result.dependencies.push(review_ref);
+                    reviews.push(review);
+                }
+                let report = NewsReport {
+                    kind: "minidora.core.current-news.v1",
+                    window: &window,
+                    topic: topic.as_deref(),
+                    reviews: &reviews,
+                };
+                if !reviews.iter().any(|review| review.citation.is_some()) {
+                    let mut message = report.unavailable_units().join(" ");
+                    if bundle.meaning.parser_version == crate::news_input::NATURAL_PARSER_VERSION {
+                        message = format!(
+                            "{}のニュースについて、今回の確認範囲では該当記事を確定できませんでした。 {message}",
+                            report.requested_scope()
+                        );
+                        let bytes = canonical(&report)?;
+                        if bytes.len().saturating_add(message.len())
+                            <= goal.budget.max_evidence_bytes
+                        {
+                            result.dependencies.push(self.store.put_bytes(
+                                actor,
+                                &request.case_id,
+                                &bytes,
+                            )?);
+                        }
+                    }
+                    state.result = Some(result);
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "NEWS_ARTICLES_UNAVAILABLE",
+                        &message,
+                    );
+                }
+                units = report.units();
+                let report_bytes = canonical(&report)?;
+                if report_bytes.len().saturating_add(units.join("\n").len())
+                    > goal.budget.max_evidence_bytes
+                {
+                    state.result = Some(result);
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "ニュース記事の照合結果が出力予算を超えました。",
+                    );
+                }
+                result.dependencies.push(self.store.put_bytes(
+                    actor,
+                    &request.case_id,
+                    &report_bytes,
+                )?);
+                result.guarantee = Guarantee::SourceReport;
+                news_partial = reviews.iter().any(|review| review.citation.is_none());
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: news::PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
+            Intent::CompareWebResearch { .. } => {
+                use crate::research_goal::{self, CALC_NODE, READ_NODE, REPORT_NODE};
+                let observed = match research_goal::produce(
+                    &self.store,
+                    &bundle,
+                    retrieval_budget(1, &state, &self.store),
+                    &read_admission(&state)?,
+                ) {
+                    Ok(observed) => observed,
+                    Err(error) if read_case_changed(&error) => return Err(error),
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                if let Some(reference) = &observed.calculation {
+                    graph.observe(CALC_NODE, reference, &BTreeMap::new())?;
+                }
+                graph.observe(READ_NODE, &observed.observation, &BTreeMap::new())?;
+                graph.observe(
+                    REPORT_NODE,
+                    &observed.comparison,
+                    &BTreeMap::from([(READ_NODE.into(), observed.observation.clone())]),
+                )?;
+                result.dependencies = observed.dependencies();
+                result.evidence = observed.evidence;
+                units = observed.units;
+                web_research_partial = !observed.complete;
+                result.guarantee = Guarantee::SourceReport;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: research_goal::PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
             }
             Intent::AskWeb {
                 topic,
@@ -9884,6 +13063,40 @@ impl Engine {
                 units = explanation.units;
                 result.dependencies = explanation.dependencies;
                 result.guarantee = Guarantee::SourceReport;
+            }
+            Intent::ExplainPreviousStop => {
+                let explanation =
+                    match crate::clarification::explain_previous_stop(&self.store, &state, &bundle)
+                    {
+                        Ok(explanation) => explanation,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                let source_ref =
+                    self.store
+                        .put_bytes(actor, &request.case_id, &explanation.source_bytes)?;
+                if source_ref != explanation.source_ref {
+                    return Err(failure(
+                        "INTEGRITY_FAILURE",
+                        "停止記録の保存ハッシュが一致しません。",
+                    ));
+                }
+                graph.observe(
+                    crate::clarification::SOURCE_NODE,
+                    &source_ref,
+                    &BTreeMap::new(),
+                )?;
+                units = explanation.units;
+                result.dependencies = explanation.dependencies;
+                result.guarantee = Guarantee::Derived;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: crate::clarification::PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
             }
             Intent::ExplainPrevious => {
                 let Some(prior) = previous.filter(|p| p.lifecycle == Lifecycle::Commit) else {
@@ -12589,6 +15802,68 @@ impl Engine {
                     units: units.clone(),
                 });
             }
+            Intent::AskCounterfactualRelation { .. } => {
+                use crate::counterfactual;
+                if !input::verified_counterfactual_relation_input(&bundle)? {
+                    state.result = Some(result);
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "COUNTERFACTUAL_INPUT_UNVERIFIED",
+                        "入力文から、仮定する前提と確かめたい結論を照合できませんでした。",
+                    );
+                }
+                let proof = match counterfactual::compute(
+                    &bundle,
+                    self.store.load_memory(actor)?,
+                    counterfactual::available_actions(goal.budget.max_actions, required_actions),
+                ) {
+                    Ok(proof) => proof,
+                    Err(Error::Contract { code, .. }) => {
+                        let message = match code.as_str() {
+                            "COUNTERFACTUAL_BUDGET" | "RELATION_BUDGET" => {
+                                "利用できる実行予算の範囲で、仮定の前後を比較できませんでした。"
+                            }
+                            "COUNTERFACTUAL_ASSUMPTION_CONFLICT" => {
+                                "仮定の中に重複した前提や互いに矛盾する前提があります。"
+                            }
+                            "COUNTERFACTUAL_OVERRIDE_LIMIT" => {
+                                "この仮定の中で置き換えられる前提の数を超えています。"
+                            }
+                            _ => "仮定と結論の照合に失敗し、比較を保留しました。",
+                        };
+                        state.result = Some(result);
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                units = proof.units();
+                let proof_bytes = canonical(&proof)?;
+                if proof_bytes.len().saturating_add(units.join("\n").len())
+                    > goal.budget.max_evidence_bytes
+                {
+                    state.result = Some(result);
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "仮定の比較結果と根拠が出力予算を超えました。",
+                    );
+                }
+                result.actor_memory_revision = Some(proof.scenario.base_memory_revision);
+                result.dependencies.push(self.store.put_bytes(
+                    actor,
+                    &request.case_id,
+                    &proof_bytes,
+                )?);
+                result.guarantee = proof.scenario.guarantee;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: counterfactual::PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
             Intent::InspectPremises { subject } => {
                 let (memory_revision, inventory) = match probed_topic_inventory.take() {
                     Some(observed) => observed,
@@ -12825,9 +16100,14 @@ impl Engine {
                 result.guarantee = Guarantee::SourceReport;
                 state.result = Some(result.clone());
             }
-            Intent::GenerateCode { .. } | Intent::GenerateReturnFunction { .. } => {
+            Intent::GenerateCode { .. }
+            | Intent::GenerateReturnFunction { .. }
+            | Intent::GenerateFunctionFromSpec { .. } => {
                 let generated = match &goal.intent {
                     Intent::GenerateCode { document } => crate::code_generation::generate(document),
+                    Intent::GenerateFunctionFromSpec { .. } => {
+                        crate::code_generation::generate_function_from_spec(&bundle)
+                    }
                     _ => crate::code_generation::generate_return_function(&bundle),
                 };
                 let report = match generated {
@@ -12852,7 +16132,10 @@ impl Engine {
                 result.dependencies.push(artifact);
                 units.push(report.source);
                 result.guarantee = Guarantee::Computed;
-                if matches!(goal.intent, Intent::GenerateReturnFunction { .. }) {
+                if matches!(
+                    goal.intent,
+                    Intent::GenerateReturnFunction { .. } | Intent::GenerateFunctionFromSpec { .. }
+                ) {
                     report_goal_content = Some(ReportGoalContent {
                         predicate: RETURN_FUNCTION_PREDICATE,
                         guarantee: result.guarantee.clone(),
@@ -13009,6 +16292,85 @@ impl Engine {
                 units = explanation;
                 report_goal_content = Some(ReportGoalContent {
                     predicate: CODE_EXPLANATION_PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
+            Intent::ExecuteWasm { .. } | Intent::ExecuteAttachedCsvAggregation { .. } => {
+                let Some(deadline) =
+                    started.checked_add(Duration::from_millis(request.budget.deadline_ms))
+                else {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "隔離実行の期限を表現できません。",
+                    );
+                };
+                let outcome = match crate::wasm_execution::execute(
+                    &self.store,
+                    &state,
+                    &bundle,
+                    self.wasm_node.as_ref(),
+                    deadline,
+                ) {
+                    Ok(outcome) => outcome,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                result.dependencies.push(outcome.artifact.clone());
+                result.receipts.push(outcome.receipt.clone());
+                result.text = outcome.summary.clone();
+                state.result = Some(result.clone());
+                if outcome.receipt.phase != EffectPhase::Confirmed {
+                    let code = if outcome.receipt.phase == EffectPhase::Unknown {
+                        "WASM_EXECUTION_UNCONFIRMED"
+                    } else {
+                        "WASM_NOT_LAUNCHED"
+                    };
+                    return self.stop(&mut state, Lifecycle::Suspend, code, &outcome.summary);
+                }
+                graph.observe("wasm-run", &outcome.artifact, &BTreeMap::new())?;
+                units.push(outcome.summary);
+                result.guarantee = Guarantee::Computed;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: WASM_EXECUTION_PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
+            Intent::RepairCode { .. } => {
+                let document = input::verified_code_repair_document(&bundle)?;
+                let deadline =
+                    started.checked_add(Duration::from_millis(request.budget.deadline_ms));
+                let report = match crate::code_capability::repair_source(document, deadline) {
+                    Ok(report) => report,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                units = crate::code_capability::repair_lines(&report)?;
+                let bytes = canonical(&report)?;
+                if bytes.len().saturating_add(units.join("\n").len())
+                    > goal.budget.max_evidence_bytes
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "RESOURCE_LIMIT",
+                        "コードの修正記録が証拠予算を超えました。",
+                    );
+                }
+                let report_ref = self.store.put_bytes(actor, &request.case_id, &bytes)?;
+                result.dependencies.push(report_ref);
+                result.guarantee = Guarantee::Computed;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: CODE_REPAIR_PREDICATE,
                     guarantee: result.guarantee.clone(),
                     dependencies: result.dependencies.clone(),
                     units: units.clone(),
@@ -13525,17 +16887,20 @@ impl Engine {
                 result.dependencies.push(condition.id);
                 result.guarantee = Guarantee::UserPremise;
             }
-            Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. } => {
-                let meaning_plan =
-                    match ConversationMeaningPlan::resolve(&self.store, &state, &bundle) {
-                        Ok(plan) => plan,
-                        Err(Error::Contract { code, message }) => {
-                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
-                        }
-                        Err(error) => return Err(error),
-                    };
-                let dependencies = meaning_plan.dependencies();
-                let grammar = meaning_plan.generation_request(goal.budget.max_evidence_bytes)?;
+            Intent::OpenConversationTopic { .. }
+            | Intent::RespondOnConversationTopic { .. }
+            | Intent::ReportConversationEvent { .. }
+            | Intent::ResumeConversationTopic { .. }
+            | Intent::DraftMessage { .. }
+            | Intent::DraftFiction { .. }
+            | Intent::TranslateText { .. }
+            | Intent::ReviseTranslation { .. }
+            | Intent::PlanWork { .. }
+            | Intent::ReviseWorkPlan { .. }
+            | Intent::ReviseMessage { .. }
+            | Intent::CompareOptions { .. }
+            | Intent::ReviseDecision { .. }
+            | Intent::ReviseDecisionFromAttachment { .. } => {
                 let deadline = started
                     .checked_add(Duration::from_millis(goal.budget.deadline_ms))
                     .ok_or_else(|| {
@@ -13544,6 +16909,113 @@ impl Engine {
                             "execution deadline overflows this clock",
                         )
                     })?;
+                let (dependencies, grammar, predicate) = if is_decision_intent(&goal.intent) {
+                    let (plan, history_actions) = match resolve_decision_plan(
+                        &self.store,
+                        &state,
+                        &bundle,
+                        decision_selection.as_ref(),
+                        deadline,
+                    ) {
+                        Ok(plan) => plan,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    decision_file_budget_blocked |= goal.output_path.is_some()
+                        && goal.budget.max_actions < history_actions.saturating_add(4);
+                    let dependencies = plan.dependencies();
+                    let grammar = plan.grammar(goal.budget.max_evidence_bytes)?;
+                    decision_pending = plan.is_conditional();
+                    decision_plan = Some(plan);
+                    (dependencies, grammar, OPTION_DECISION_PREDICATE)
+                } else if is_message_intent(&goal.intent) {
+                    let plan = match resolve_message_plan(&self.store, &state, &bundle, deadline) {
+                        Ok(plan) => plan,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let dependencies = plan.dependencies();
+                    let grammar = plan.grammar(goal.budget.max_evidence_bytes)?;
+                    message_meaning_plan = Some(plan);
+                    let predicate = if matches!(&goal.intent, Intent::ReviseMessage { .. }) {
+                        MESSAGE_REVISION_PREDICATE
+                    } else {
+                        DRAFT_MESSAGE_PREDICATE
+                    };
+                    (dependencies, grammar, predicate)
+                } else if matches!(goal.intent, Intent::DraftFiction { .. }) {
+                    let prepared = resolve_fiction_plan(&state, &bundle).and_then(|plan| {
+                        let grammar = plan.grammar(goal.budget.max_evidence_bytes)?;
+                        Ok((plan, grammar))
+                    });
+                    let (plan, grammar) = match prepared {
+                        Ok(prepared) => prepared,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let dependencies = plan.dependencies();
+                    fiction_meaning_plan = Some(plan);
+                    (dependencies, grammar, DRAFT_FICTION_PREDICATE)
+                } else if is_translation_intent(&goal.intent) {
+                    let prepared = resolve_translation_plan(&self.store, &state, &bundle, deadline)
+                        .and_then(|plan| {
+                            let grammar = plan.grammar(goal.budget.max_evidence_bytes)?;
+                            Ok((plan, grammar))
+                        });
+                    let (plan, grammar) = match prepared {
+                        Ok(prepared) => prepared,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let dependencies = plan.dependencies();
+                    translation_output_locale = Some(plan.target_locale());
+                    translation_meaning_plan = Some(plan);
+                    (dependencies, grammar, TRANSLATION_PREDICATE)
+                } else if matches!(
+                    goal.intent,
+                    Intent::PlanWork { .. } | Intent::ReviseWorkPlan { .. }
+                ) {
+                    let prepared = resolve_work_plan(&self.store, &state, &bundle, deadline)
+                        .and_then(|meaning| {
+                            let grammar = meaning.grammar(goal.budget.max_evidence_bytes)?;
+                            Ok((meaning, grammar))
+                        });
+                    let (meaning, grammar) = match prepared {
+                        Ok(prepared) => prepared,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let dependencies = meaning.dependencies();
+                    work_plan_meaning = Some(meaning);
+                    (dependencies, grammar, WORK_PLAN_PREDICATE)
+                } else {
+                    let plan = match ConversationMeaningPlan::resolve(
+                        &self.store,
+                        &state,
+                        &bundle,
+                        named_conversation.as_ref().map(|(parent, _)| parent),
+                    ) {
+                        Ok(plan) => plan,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    let dependencies = plan.dependencies();
+                    let grammar = plan.generation_request(goal.budget.max_evidence_bytes)?;
+                    conversation_meaning_plan = Some(plan);
+                    (dependencies, grammar, CONVERSATION_PREDICATE)
+                };
                 let mut generation = match language::generate_semantic_meaning_with_rules_until(
                     &grammar,
                     &[],
@@ -13577,13 +17049,48 @@ impl Engine {
                 units.extend(generation.report.units.iter().map(|unit| unit.text.clone()));
                 result.guarantee = Guarantee::Computed;
                 result.dependencies = dependencies;
+                if let Some(plan) = &message_meaning_plan
+                    && let Err(Error::Contract { code, message }) =
+                        plan.verify_surface(&generation.report.text)
+                {
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                if let Some(plan) = &fiction_meaning_plan
+                    && let Err(error) = plan.verify_surface(&generation.report.text)
+                {
+                    match error {
+                        Error::Contract { code, message } => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        error => return Err(error),
+                    }
+                }
+                if let Some(plan) = &translation_meaning_plan
+                    && let Err(error) = plan.verify_surface(&generation.report.text)
+                {
+                    match error {
+                        Error::Contract { code, message } => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        error => return Err(error),
+                    }
+                }
+                if let Some(meaning) = &work_plan_meaning
+                    && let Err(error) = meaning.verify_surface(&generation.report.text)
+                {
+                    match error {
+                        Error::Contract { code, message } => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        error => return Err(error),
+                    }
+                }
                 report_goal_content = Some(ReportGoalContent {
-                    predicate: CONVERSATION_PREDICATE,
+                    predicate,
                     guarantee: Guarantee::Computed,
                     dependencies: result.dependencies.clone(),
                     units: units.clone(),
                 });
-                conversation_meaning_plan = Some(meaning_plan);
                 content_generation = Some(generation.report);
                 generation_model = Some(generation.model);
                 generation_emission = Some(generation.emission);
@@ -13610,6 +17117,45 @@ impl Engine {
                     "教えてもらった事実や規則を、同じ利用者との後続の会話で使えます。".into(),
                 ]);
                 result.guarantee = Guarantee::Computed;
+            }
+            Intent::InspectMemorySettings | Intent::SetMemorySharing { .. } => {
+                if goal.output_path.is_some() {
+                    return self.stop(&mut state, Lifecycle::Suspend, "MEMORY_SETTINGS_FILE_UNAVAILABLE", "記憶設定の確認または変更はこの会話に表示します。保存先の指定を外して依頼してください。");
+                }
+                if crate::input::memory_settings_intent(&request.text).as_ref()
+                    != Some(&goal.intent)
+                    || bundle.meaning.parser_version != crate::input::MEMORY_SETTINGS_PARSER_VERSION
+                {
+                    return self.stop(
+                        &mut state,
+                        Lifecycle::Suspend,
+                        "MEMORY_POLICY_UNAUTHORIZED",
+                        "記憶設定の依頼を原文から確認できません。",
+                    );
+                }
+                let policy = match &goal.intent {
+                    Intent::SetMemorySharing { enabled } => {
+                        let current = self.store.bound_memory_policy(actor)?;
+                        crate::store::MemoryPolicy {
+                            enabled: *enabled,
+                            revision: current.revision.checked_add(1).ok_or_else(|| {
+                                failure(
+                                    "MEMORY_POLICY_REVISION_LIMIT",
+                                    "記憶設定の版上限に達しました。",
+                                )
+                            })?,
+                        }
+                    }
+                    _ => self.store.memory_policy(actor)?,
+                };
+                let proof = self.store.put_artifact(actor, &request.case_id, &policy)?;
+                result.dependencies.push(proof);
+                result.guarantee = Guarantee::Computed;
+                units.push(if policy.enabled {
+                    "会話をまたぐ記憶はオンです。同じ利用者の別の会話で保存した記憶を使えます。".into()
+                } else {
+                    "会話をまたぐ記憶はオフです。新しく答えるときは、この会話に由来する記憶を使います。".into()
+                });
             }
             Intent::AskLocalCapabilities => {
                 units.extend([
@@ -13639,6 +17185,26 @@ impl Engine {
             );
         }
         state.result = Some(result.clone());
+        if let Some(source) = bundle
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            && (result.dependencies.contains(&source.id)
+                || matches!(
+                    goal.intent,
+                    Intent::ExplainPrevious
+                        | Intent::ReplacePreviousText { .. }
+                        | Intent::SummarizePreviousResult { .. }
+                        | Intent::SummarizePreviousResultLines { .. }
+                ))
+        {
+            self.store
+                .inherit_memory_context(actor, &request.case_id, source)?;
+        }
+        if self.store.verify_memory_use(actor)? {
+            self.store.record_memory_consumption(&request)?;
+        }
         let compute_artifact = if let (Some(meaning_plan), Some(content_generation)) =
             (conversation_meaning_plan, &content_generation)
         {
@@ -13650,6 +17216,60 @@ impl Engine {
                     meaning_plan,
                     content_generation: content_generation.clone(),
                 },
+            )?
+        } else if let (Some(plan), Some(content_generation)) = (decision_plan, &content_generation)
+        {
+            self.store.put_artifact(
+                actor,
+                &request.case_id,
+                &crate::decision_text::GeneratedDecisionArtifact::new(
+                    plan,
+                    content_generation.clone(),
+                ),
+            )?
+        } else if let (Some(meaning_plan), Some(content_generation)) =
+            (message_meaning_plan, &content_generation)
+        {
+            self.store.put_artifact(
+                actor,
+                &request.case_id,
+                &crate::writing::GeneratedMessageArtifact::new(
+                    meaning_plan,
+                    content_generation.clone(),
+                ),
+            )?
+        } else if let (Some(meaning_plan), Some(content_generation)) =
+            (fiction_meaning_plan, &content_generation)
+        {
+            self.store.put_artifact(
+                actor,
+                &request.case_id,
+                &crate::fiction::GeneratedFictionArtifact::new(
+                    meaning_plan,
+                    content_generation.clone(),
+                ),
+            )?
+        } else if let (Some(meaning_plan), Some(content_generation)) =
+            (translation_meaning_plan, &content_generation)
+        {
+            self.store.put_artifact(
+                actor,
+                &request.case_id,
+                &crate::translation::GeneratedTranslationArtifact::new(
+                    meaning_plan,
+                    content_generation.clone(),
+                ),
+            )?
+        } else if let (Some(meaning), Some(content_generation)) =
+            (work_plan_meaning, &content_generation)
+        {
+            self.store.put_artifact(
+                actor,
+                &request.case_id,
+                &crate::work_plan::GeneratedWorkPlanArtifact::new(
+                    meaning,
+                    content_generation.clone(),
+                ),
             )?
         } else if let (Some(meaning_plan), Some(content_generation)) =
             (&calculation_meaning_plan, &content_generation)
@@ -13844,10 +17464,11 @@ impl Engine {
         let model_observation_ref = self
             .store
             .put_artifact(actor, &request.case_id, &emission)?;
+        let output_locale = translation_output_locale.unwrap_or(request.locale.as_str());
         let mut plan = ContentPlan {
             id: String::new(),
             text: emission.text.clone(),
-            locale: request.locale.clone(),
+            locale: output_locale.into(),
             guarantee: result.guarantee.clone(),
             required_units: units,
             dependencies: result.dependencies.clone(),
@@ -13865,7 +17486,7 @@ impl Engine {
                     .as_deref()
                     .unwrap_or(&result.dependencies),
                 &compute_artifact,
-                &request.locale,
+                output_locale,
                 &plan,
             )
         {
@@ -13926,17 +17547,26 @@ impl Engine {
             );
         }
         // A preview is displayed without preparing the requested final write.
-        let preview_goal = pending_hearing.then(|| {
-            let mut preview = goal.clone();
-            preview.output_path = None;
-            preview
-        });
+        let preview_goal = (pending_hearing
+            || statistics_preview
+            || decision_pending
+            || decision_file_budget_blocked
+            || web_research_partial)
+            .then(|| {
+                let mut preview = goal.clone();
+                preview.output_path = None;
+                preview
+            });
         let render_goal = preview_goal.as_ref().unwrap_or(&goal);
         let target = match &render_goal.output_path {
             Some(path) => RenderTarget::LocalFile { path: path.clone() },
             None => RenderTarget::Display,
         };
-        let render = output::render_to(&plan, target)?;
+        let render = match media_output {
+            Some(MediaOutput::Wave(bytes)) => output::render_wave_to(&plan, target, bytes)?,
+            Some(MediaOutput::Png(bytes)) => output::render_png_to(&plan, target, bytes)?,
+            None => output::render_to(&plan, target)?,
+        };
         if !validate_goal_render(render_goal, &plan, &render) {
             return self.stop(
                 &mut state,
@@ -13969,7 +17599,13 @@ impl Engine {
                 "描画の照合後に元Goalの締切へ達しました。",
             );
         }
-        if pending_hearing {
+        if pending_hearing
+            || statistics_preview
+            || decision_pending
+            || decision_file_budget_blocked
+            || news_partial
+            || web_research_partial
+        {
             result.execution_graph_ref = Some(store_execution_graph(
                 &self.store,
                 actor,
@@ -13977,6 +17613,59 @@ impl Engine {
                 &graph,
             )?);
             state.result = Some(result);
+            if web_research_partial {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "WEB_RESEARCH_INCOMPLETE",
+                    "比較または別件の計算に未確定の部分があります。確認できた結果は本文に示しました。",
+                );
+            }
+            if news_partial {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "NEWS_PARTIALLY_CONFIRMED",
+                    "確認できた記事と、確認できなかった配信元を本文に示しました。",
+                );
+            }
+            if decision_pending {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "DECISION_UNDETERMINED",
+                    "結論に影響する条件や数値を本文に示しました。",
+                );
+            }
+            if decision_file_budget_blocked {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "ACTION_BUDGET_EXHAUSTED",
+                    "比較結果を表示しました。保存に必要な行動予算に達しました。",
+                );
+            }
+            if statistics_explanation_unavailable {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    STATISTICS_EXPLANATION_BLOCKED,
+                    "計算は済みました。指定された読者向けの説明は、対応する表現がないため保留しました。",
+                );
+            }
+            if statistics_preview {
+                let message = if statistics_explanation_budget_blocked {
+                    "計算は済みました。説明に必要な行動予算がないため保留しました。"
+                } else {
+                    "表示できる結果を返しました。保存に必要な行動予算がないため、ファイルは書き込んでいません。"
+                };
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "ACTION_BUDGET_EXHAUSTED",
+                    message,
+                );
+            }
             return self.stop(
                 &mut state,
                 Lifecycle::Suspend,
@@ -14313,6 +18002,30 @@ impl Engine {
         self.stop(state, Lifecycle::Suspend, code, message)
     }
 
+    fn retain_news_packet(
+        &self,
+        state: &mut CaseRevision,
+        result: &mut ResultRecord,
+        packet: &EvidencePacket,
+    ) -> Result<String> {
+        let reference = self
+            .store
+            .put_artifact(&state.actor_id, &state.case_id, packet)?;
+        // Complete publisher bytes are retained once, in the scoped packet.
+        // Only the small status-only retry observation travels with case history.
+        if packet.retry_after.is_some() {
+            result.evidence.push(packet.clone());
+        }
+        result.dependencies.push(reference.clone());
+        state.result = Some(result.clone());
+        self.advance(
+            state,
+            Lifecycle::Running,
+            Some("NEWS_SOURCE_OBSERVED".into()),
+        )?;
+        Ok(reference)
+    }
+
     fn stop(
         &self,
         state: &mut CaseRevision,
@@ -14327,6 +18040,18 @@ impl Engine {
                 base_result(&req)
             })
         });
+        if state
+            .bundle
+            .as_ref()
+            .is_some_and(|bundle| matches!(bundle.meaning.intent, Intent::SetMemorySharing { .. }))
+        {
+            // A policy event is published only together with the terminal case
+            // commit. A stopped request must never display the prepared mode.
+            result.text.clear();
+            result.dependencies.clear();
+            result.content_plan = None;
+            result.render = None;
+        }
         result.lifecycle = lifecycle;
         result.reason = Some(format!("{code}: {message}"));
         if result.text.is_empty() {
@@ -14749,7 +18474,7 @@ fn apply_premise_correction(
 }
 const READ_CASE_CHANGED: &str = "HTTP_CASE_REVISION_CHANGED";
 
-fn read_case_changed(error: &Error) -> bool {
+pub(crate) fn read_case_changed(error: &Error) -> bool {
     matches!(error, Error::Contract { code, .. } if code == READ_CASE_CHANGED)
 }
 
@@ -14781,6 +18506,38 @@ pub(crate) fn verify_retained_retry_source(
         || packet.redirect_chain.last() != Some(&packet.final_uri)
     {
         return Err(invalid());
+    }
+    if let Some((_, bundle)) = read_input()?
+        && matches!(bundle.meaning.intent, Intent::CompareWebResearch { .. })
+    {
+        if identity(&bundle.request)? != result.id {
+            return Err(invalid());
+        }
+        return crate::research_goal::verify_retry_source(store, &bundle, result, packet);
+    }
+    if ports::is_news_packet(packet) {
+        let (_, bundle) = read_input()?.ok_or_else(invalid)?;
+        let bytes = canonical(packet)?;
+        let reference = digest(&bytes);
+        let Some(publisher) = crate::news::admitted_publishers(&bundle.request.permissions)
+            .into_iter()
+            .find(|publisher| {
+                packet.request_uri == publisher.listing_url()
+                    || publisher.valid_article_uri(&packet.request_uri)
+            })
+        else {
+            return Err(invalid());
+        };
+        if !matches!(bundle.meaning.intent, Intent::AskCurrentNews { .. })
+            || identity(&bundle.request)? != result.id
+            || packet.packet_kind != "FETCH_FAILURE"
+            || packet.id != ports::fetch_packet_identity(packet)?
+            || !result.dependencies.contains(&reference)
+            || store.get_bytes(&state.actor_id, &state.case_id, &reference)? != bytes
+        {
+            return Err(invalid());
+        }
+        return ports::validate_observed_route(packet, &publisher.read_permissions());
     }
     if result.actor_memory_revision.is_some()
         && let Some((_, bundle)) = read_input()?
@@ -14923,7 +18680,7 @@ pub(crate) fn verify_retained_retry_source(
     Ok(())
 }
 
-fn base_result(request: &RequestEnvelope) -> ResultRecord {
+pub(crate) fn base_result(request: &RequestEnvelope) -> ResultRecord {
     ResultRecord {
         id: identity(request).unwrap_or_default(),
         input_id: request.input_id.clone(),
@@ -15236,7 +18993,7 @@ pub(crate) fn verify_conversational_math_report(
     {
         return Err(invalid());
     }
-    let report = crate::math::conversational_math_report(&bundle.meaning.intent)?;
+    let report = crate::math::conversational_math_report(&bundle.meaning.intent, true)?;
     let reference = digest(&report.bytes);
     let plan = result.content_plan.as_ref().ok_or_else(invalid)?;
     if result.dependencies.as_slice() != [reference.as_str()]
@@ -15279,6 +19036,7 @@ pub(crate) fn registered_math_report_explanation(
     if !matches!(
         bundle.meaning.intent,
         Intent::Statistics { .. }
+            | Intent::DescribeStatistics { .. }
             | Intent::NormalizeProbabilityWeights { .. }
             | Intent::FiniteProbabilityStatistics { .. }
             | Intent::FiniteEventProbability { .. }
@@ -15296,7 +19054,7 @@ pub(crate) fn registered_math_report_explanation(
             "the previous mathematical result does not match its registered input identity",
         ));
     }
-    if bundle.meaning.parser_version == input::CONVERSATIONAL_MATH_PARSER_VERSION {
+    if input::is_conversational_math_version(&bundle.meaning.parser_version) {
         return Ok(Some(
             verify_conversational_math_report(store, &bundle, previous)?.explanation_units,
         ));
@@ -21041,7 +24799,7 @@ fn guarantee_label(guarantee: &Guarantee) -> &'static str {
         Guarantee::Unknown => "未確定",
     }
 }
-fn describe(p: &Proposition) -> String {
+pub(crate) fn describe(p: &Proposition) -> String {
     let surface = if p.predicate == "is" {
         format!(
             "{}は{}{}",
@@ -22323,7 +26081,7 @@ fn require_record_source_actions(goal: &GoalContract, reads: u32) -> Result<()> 
 pub(crate) fn record_source_memory_at_head(store: &Store, actor: &str) -> Result<MemoryState> {
     // Read validity from the authoritative snapshot, including for retained
     // inactive records that are omitted by normal evidence selection.
-    let (snapshot, head) = store.load_memory_with_reference(actor)?;
+    let (snapshot, head) = store.load_memory_for_source(actor)?;
     if head.is_some_and(|(revision, _)| u64::try_from(revision).ok() != Some(snapshot.revision)) {
         return Err(failure(
             "INTEGRITY_FAILURE",
@@ -22458,19 +26216,19 @@ pub(crate) fn validate_goal_render(
     plan: &ContentPlan,
     render: &RenderObservation,
 ) -> bool {
+    let exact_target =
+        output::matches_render_target(goal.output_path.as_deref(), render.target.as_ref());
+    let exact_version = goal.renderer_version.as_deref() == Some(render.renderer_version.as_str());
+    if matches!(goal.intent, Intent::SpeakPreviousAnswer) {
+        return exact_target && exact_version && output::validate_wave_render(plan, render);
+    }
+    if matches!(goal.intent, Intent::ProduceImage { .. }) {
+        return exact_target && exact_version && output::validate_png_render(plan, render);
+    }
     validate_render(plan, render)
         && match goal.renderer_version.as_deref() {
             None => render.renderer_version == output::LEGACY_RENDERER_VERSION,
-            Some(output::RENDERER_VERSION) => {
-                render.renderer_version == output::RENDERER_VERSION
-                    && match (&goal.output_path, &render.target) {
-                        (None, Some(RenderTarget::Display)) => true,
-                        (Some(expected), Some(RenderTarget::LocalFile { path })) => {
-                            expected.as_os_str() == path.as_os_str()
-                        }
-                        _ => false,
-                    }
-            }
+            Some(output::RENDERER_VERSION) => exact_target && exact_version,
             Some(_) => false,
         }
 }

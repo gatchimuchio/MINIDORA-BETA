@@ -3,13 +3,16 @@
 use aho_corasick::AhoCorasick;
 use minidora_domain::*;
 use regex::Regex;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use std::sync::LazyLock;
 use unicode_normalization::UnicodeNormalization;
 use unicode_normalization::char::{canonical_combining_class, compose};
 
 pub const PARSER_VERSION: &str = "declarative-ja-en-v89-sealed-relation-boundary";
 const LOCAL_CONVERSATION_PARSER_VERSION: &str = "declarative-ja-v155-local-conversation";
 pub(crate) const WEB_QUESTION_PARSER_VERSION: &str = "declarative-ja-v156-web-question";
+const WEB_RESEARCH_PARSER_VERSION: &str = "declarative-ja-v238-compare-web-research";
+const STATISTICS_GOAL_PARSER_VERSION: &str = "declarative-ja-v218-statistics-goal";
 pub(crate) const LOCAL_FIRST_TOPIC_PARSER_VERSION: &str = "declarative-ja-v216-local-first-topic";
 pub(crate) const AUTONOMOUS_TOPIC_WEB_PARSER_VERSION: &str =
     "declarative-ja-v217-autonomous-topic-web";
@@ -35,9 +38,30 @@ pub(crate) const PASTED_SUMMARY_BODY_REPLACEMENT_PARSER_VERSION: &str =
     "declarative-ja-v197-pasted-summary-body-replacement";
 const LOCAL_IDENTITY_PARSER_VERSION: &str = "declarative-ja-v157-engine-identity";
 const CODE_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v158-code-explanation";
+const CODE_REPAIR_PARSER_VERSION: &str = "declarative-ja-v226-code-repair";
+const CODE_REPAIR_DOCUMENT_ROLE: &str = "/RepairCode/document";
+const WASM_EXECUTION_PARSER_VERSION: &str = "declarative-ja-v229-wasm-execution";
+const WASM_EXECUTION_DOCUMENT_ROLE: &str = "/ExecuteWasm/document";
+const CSV_AGGREGATION_PARSER_VERSION: &str = "declarative-ja-v249-attached-csv-aggregation-wasm";
+const EXECUTION_CSV_VALUES_CHART_PARSER_VERSION: &str =
+    "declarative-ja-v250-execution-csv-chart-values";
+const CSV_CHART_PARSER_VERSION: &str = "declarative-ja-v227-csv-grouped-mean-chart";
+const EXECUTION_CSV_CHART_PARSER_VERSION: &str = "declarative-ja-v230-execution-csv-chart";
+const ATTACHED_CSV_CHART_PARSER_VERSION: &str = "declarative-ja-v231-attached-csv-chart";
+const ATTACHED_DOCUMENT_PARSER_VERSION: &str = "declarative-ja-v232-attached-document";
+pub(crate) const DOCUMENT_REVIEW_PARSER_VERSION: &str =
+    "declarative-ja-v246-attached-document-fields";
+pub(crate) const PURPOSE_DOCUMENT_PARSER_VERSION: &str = "declarative-ja-v239-purpose-document";
+const BRANCH_TEXT_PARSER_VERSION: &str = "declarative-ja-v240-branch-source-text";
+const ATTACHED_ANALYSIS_PARSER_VERSION: &str = "declarative-ja-v233-attached-analysis";
+const ATTACHED_TABLE_PARSER_VERSION: &str = "declarative-ja-v234-attached-table";
+const SPEECH_PARSER_VERSION: &str = "declarative-ja-v235-speak-adopted-answer";
+const IMAGE_PARSER_VERSION: &str = "declarative-ja-v237-image-draw-fill";
+const CSV_CHART_FILTER_PARSER_VERSION: &str = "declarative-ja-v228-previous-csv-chart-filter";
 pub(crate) const PASTED_TEXT_SUMMARY_PARSER_VERSION: &str =
     "declarative-ja-v159-pasted-text-summary";
 const RETURN_FUNCTION_PARSER_VERSION: &str = "declarative-ja-v160-python-return-function";
+const FUNCTION_SPEC_PARSER_VERSION: &str = "declarative-ja-v225-python-functional-spec";
 pub(crate) const PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION: &str =
     "declarative-ja-v165-generated-code-single-case";
 pub(crate) const EXPLAINED_CODE_SINGLE_CASE_PARSER_VERSION: &str =
@@ -58,6 +82,7 @@ pub(crate) const RELATION_SUBJECT_QUESTION_PARSER_VERSION: &str =
     "declarative-ja-v211-relation-subject-query";
 const COPULAR_SUBJECT_QUESTION_PARSER_VERSION: &str = "declarative-ja-v212-copular-subject-query";
 const CONVERSATION_TOPIC_PARSER_VERSION: &str = "declarative-ja-v213-conversation-topic";
+const CONVERSATION_EVENT_PARSER_VERSION: &str = "declarative-ja-v251-conversation-event";
 pub(crate) const HEARING_PARSER_VERSION: &str = "declarative-ja-v214-hearing";
 const HEARING_ANSWER_ROLE: &str = "/SupplyHearingAnswer/answer";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
@@ -99,6 +124,8 @@ pub(crate) const CALCULATION_CORRECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v118-verified-calculation-correction";
 pub(crate) const PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION: &str =
     "declarative-ja-v177-previous-length-conversion";
+pub(crate) const PREVIOUS_CALCULATION_SCALE_PARSER_VERSION: &str =
+    "declarative-ja-v241-previous-calculation-scale";
 pub(crate) const SEQUENCE_CORRECTION_PARSER_VERSION: &str =
     "declarative-ja-en-v119-calculation-sequence-correction";
 pub(crate) const SEQUENCE_REWIRE_PARSER_VERSION: &str =
@@ -538,10 +565,170 @@ pub(crate) fn verified_multi_condition_relation_source(bundle: &InputBundle) -> 
     Ok(!roles.is_empty() && bundle.meaning.source_roles == roles)
 }
 
+pub(crate) const NAMED_CONVERSATION_PARSER_VERSION: &str =
+    "declarative-ja-v255-named-conversation-return";
+
+fn named_conversation_intent(
+    text: &str,
+    named: crate::conversation_history_input::NamedConversationReturn,
+) -> Result<(Intent, BTreeMap<String, Vec<SourceSpan>>)> {
+    let mut roles = BTreeMap::from([(
+        "/ResumeConversationTopic/topic".into(),
+        vec![named.topic.clone()],
+    )]);
+    let mut event = None;
+    if let Some(remark) = named.remark {
+        let parsed = crate::conversation_input::parse(&remark.text);
+        let accepted = match parsed {
+            Some(event)
+                if event.greeting.is_none()
+                    && crate::conversation_input::admits_event(
+                        &interpret(&remark.text)?,
+                        &remark.text,
+                        &event,
+                    ) =>
+            {
+                Some(event)
+            }
+            _ => None,
+        };
+        let Some(mut report) = accepted else {
+            return Ok((
+                Intent::Unknown {
+                    reason: "話題に戻る文の後には、続けたい出来事を一つだけ書いてください。".into(),
+                },
+                roles,
+            ));
+        };
+        for (role, span) in [
+            ("report", Some(&mut report.report)),
+            ("predicate", Some(&mut report.predicate)),
+            ("target", report.target.as_mut()),
+        ] {
+            if let Some(span) = span {
+                span.start += remark.start;
+                span.end += remark.start;
+                if source_span_at(text, span.start, span.end).as_ref() != Some(span) {
+                    return Err(failure(
+                        "CONVERSATION_SOURCE_SPAN",
+                        "会話の根拠が発話の原文と一致しません。",
+                    ));
+                }
+                roles.insert(
+                    format!("/ResumeConversationTopic/event/{role}"),
+                    vec![span.clone()],
+                );
+            }
+        }
+        event = Some(report);
+    }
+    Ok((
+        Intent::ResumeConversationTopic {
+            topic: named.topic,
+            event,
+        },
+        roles,
+    ))
+}
+
+fn named_conversation_scope_supported(request: &RequestEnvelope) -> bool {
+    matches!(request.locale.as_str(), "ja" | "ja-JP")
+        && request.attachments.is_empty()
+        && request.output_path.is_none()
+        && request.purpose.is_none()
+        && request.speech.is_none()
+}
+
+pub(crate) fn seal_named_conversation_return(
+    request: &RequestEnvelope,
+    named: crate::conversation_history_input::NamedConversationReturn,
+    selected: Option<&ResultRecord>,
+) -> Result<InputBundle> {
+    let (intent, roles) = named_conversation_intent(&request.text, named)?;
+    let unresolved = if !named_conversation_scope_supported(request) {
+        vec!["話題に戻る質問は、日本語の本文だけを指定してください。".into()]
+    } else if let Intent::Unknown { reason } = &intent {
+        vec![reason.clone()]
+    } else {
+        Vec::new()
+    };
+    seal_user_input(
+        request,
+        selected,
+        NAMED_CONVERSATION_PARSER_VERSION,
+        intent,
+        roles,
+        unresolved,
+    )
+}
+
 pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> {
     let request = &bundle.request;
     let meaning = &bundle.meaning;
     let text = &request.text;
+    if meaning.parser_version == NAMED_CONVERSATION_PARSER_VERSION {
+        let Some(named) = crate::conversation_history_input::parse(text) else {
+            return Ok(false);
+        };
+        let (intent, roles) = named_conversation_intent(text, named)?;
+        return Ok(matches!(intent, Intent::ResumeConversationTopic { .. })
+            && meaning.intent == intent
+            && named_conversation_scope_supported(request)
+            && meaning.source_kind == "USER_REQUEST"
+            && meaning.unresolved.is_empty()
+            && meaning.source_roles == roles
+            && meaning.context_result_ref.is_some()
+            && request
+                .context_ref
+                .as_ref()
+                .is_none_or(|id| meaning.context_result_ref.as_ref() == Some(id))
+            && text.len() <= request.budget.max_input_bytes
+            && matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+            && bundle.raw_sha256 == digest(text.as_bytes())
+            && bundle.semantic_signature == identity(meaning)?
+            && bundle.fingerprint
+                == identity(&(
+                    request,
+                    &bundle.raw_sha256,
+                    &bundle.context_sha256,
+                    NAMED_CONVERSATION_PARSER_VERSION,
+                ))?);
+    }
+    if meaning.parser_version == CONVERSATION_EVENT_PARSER_VERSION {
+        let Intent::ReportConversationEvent {
+            event,
+            continue_topic,
+        } = &meaning.intent
+        else {
+            return Ok(false);
+        };
+        return Ok(meaning.source_kind == "USER_REQUEST"
+            && meaning.unresolved.is_empty()
+            && matches!(request.locale.as_str(), "ja" | "ja-JP")
+            && request.attachments.is_empty()
+            && request.output_path.is_none()
+            && *continue_topic == meaning.context_result_ref.is_some()
+            && request
+                .context_ref
+                .as_ref()
+                .is_none_or(|reference| meaning.context_result_ref.as_ref() == Some(reference))
+            && (*continue_topic
+                || bundle.context_sha256 == identity(&Option::<&ResultRecord>::None)?)
+            && text.len() <= request.budget.max_input_bytes
+            && matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+            && bundle.raw_sha256 == digest(text.as_bytes())
+            && bundle.semantic_signature == identity(meaning)?
+            && bundle.fingerprint
+                == identity(&(
+                    request,
+                    &bundle.raw_sha256,
+                    &bundle.context_sha256,
+                    CONVERSATION_EVENT_PARSER_VERSION,
+                ))?
+            && crate::conversation_input::parse(text).as_ref() == Some(event)
+            && crate::conversation_input::admits_event(&interpret(text)?, text, event)
+            && meaning.source_roles == source_role_spans(text, &meaning.intent)?);
+    }
     if meaning.parser_version != CONVERSATION_TOPIC_PARSER_VERSION
         || meaning.source_kind != "USER_REQUEST"
         || !meaning.unresolved.is_empty()
@@ -573,8 +760,457 @@ pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> 
     Ok(parsed == meaning.intent && source_role_spans(text, &parsed)? == meaning.source_roles)
 }
 
+pub(crate) fn verified_message_input(bundle: &InputBundle) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    let version = match &meaning.intent {
+        Intent::DraftMessage { .. } => crate::writing::PARSER_VERSION,
+        Intent::ReviseMessage { .. } => crate::message_revision::PARSER_VERSION,
+        _ => return Ok(false),
+    };
+    if meaning.parser_version != version
+        || meaning.source_kind != "USER_REQUEST"
+        || !meaning.unresolved.is_empty()
+        || !matches!(request.locale.as_str(), "ja" | "ja-JP")
+        || text.len() > request.budget.max_input_bytes
+        || !matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        || bundle.raw_sha256 != digest(text.as_bytes())
+        || bundle.semantic_signature != identity(meaning)?
+        || bundle.fingerprint
+            != identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
+    {
+        return Ok(false);
+    }
+    match &meaning.intent {
+        Intent::DraftMessage { draft } => Ok(crate::writing::parse(text)?.is_some_and(|parsed| {
+            &parsed.draft == draft.as_ref() && parsed.roles == meaning.source_roles
+        })),
+        Intent::ReviseMessage { revision } => Ok(crate::message_revision::parse(text)?
+            .is_some_and(|parsed| {
+                &parsed.revision == revision && parsed.roles == meaning.source_roles
+            })),
+        _ => Ok(false),
+    }
+}
+
+pub(crate) fn verified_decision_input(bundle: &InputBundle) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    let version = match meaning.intent {
+        Intent::CompareOptions { .. } => crate::decision_input::PARSER_VERSION,
+        Intent::ReviseDecision { .. } => crate::decision_input::REVISION_PARSER_VERSION,
+        Intent::ReviseDecisionFromAttachment { .. } => {
+            crate::decision_input::ATTACHED_REVISION_PARSER_VERSION
+        }
+        _ => return Ok(false),
+    };
+    if meaning.parser_version != version
+        || meaning.source_kind != "USER_REQUEST"
+        || !meaning.unresolved.is_empty()
+        || !matches!(request.locale.as_str(), "ja" | "ja-JP")
+        || text.len() > request.budget.max_input_bytes
+        || !matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        || bundle.raw_sha256 != digest(text.as_bytes())
+        || bundle.semantic_signature != identity(meaning)?
+        || bundle.fingerprint
+            != identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
+    {
+        return Ok(false);
+    }
+    match &meaning.intent {
+        Intent::CompareOptions { decision } => {
+            Ok(crate::decision_input::parse(text)?.is_some_and(|parsed| {
+                &parsed.decision == decision.as_ref() && parsed.roles == meaning.source_roles
+            }))
+        }
+        Intent::ReviseDecision { revision } => Ok(crate::decision_input::parse_revision(text)
+            .is_some_and(|parsed| {
+                &parsed.revision == revision && parsed.roles == meaning.source_roles
+            })),
+        Intent::ReviseDecisionFromAttachment { candidate, field } => {
+            if !attached_decision_revision_media(request)
+                || meaning.context_result_ref.is_none()
+                || request
+                    .context_ref
+                    .as_ref()
+                    .is_some_and(|reference| meaning.context_result_ref.as_ref() != Some(reference))
+            {
+                return Ok(false);
+            }
+            validate_request_attachments(request)?;
+            Ok(
+                crate::decision_input::parse_attached_revision(text).is_some_and(|parsed| {
+                    &parsed.candidate == candidate
+                        && &parsed.field == field
+                        && parsed.roles == meaning.source_roles
+                }),
+            )
+        }
+        _ => Ok(false),
+    }
+}
+
+fn attached_decision_revision_media(request: &RequestEnvelope) -> bool {
+    matches!(
+        request.attachments.as_slice(),
+        [file] if RequestAttachment::is_text_name(&file.name)
+            || RequestAttachment::is_pdf_name(&file.name)
+    )
+}
+
+pub(crate) fn verified_fiction_input(bundle: &InputBundle) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    let Intent::DraftFiction { draft } = &meaning.intent else {
+        return Ok(false);
+    };
+    let version = crate::fiction_input::PARSER_VERSION;
+    if meaning.parser_version != version
+        || meaning.source_kind != "USER_REQUEST"
+        || !meaning.unresolved.is_empty()
+        || !matches!(request.locale.as_str(), "ja" | "ja-JP")
+        || !request.attachments.is_empty()
+        || request.context_ref.is_some()
+        || meaning.context_result_ref.is_some()
+        || text.len() > request.budget.max_input_bytes
+        || bundle.context_sha256 != identity(&None::<&ResultRecord>)?
+        || !matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        || bundle.raw_sha256 != digest(text.as_bytes())
+        || bundle.semantic_signature != identity(meaning)?
+        || bundle.fingerprint
+            != identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
+    {
+        return Ok(false);
+    }
+    Ok(crate::fiction_input::parse(text)?
+        .is_some_and(|parsed| &parsed.draft == draft && parsed.roles == meaning.source_roles))
+}
+
+fn counterfactual_scope_issue(request: &RequestEnvelope) -> Option<&'static str> {
+    if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+        Some("仮定を含む関係の質問は、日本語で入力してください。")
+    } else if !request.attachments.is_empty()
+        || request.speech.is_some()
+        || request.purpose.is_some()
+        || request.output_path.is_some()
+        || request.context_ref.is_some()
+    {
+        Some("仮定を含む質問は、前提と質問だけを入力欄に書いてください。")
+    } else {
+        None
+    }
+}
+
+pub(crate) fn verified_counterfactual_relation_input(bundle: &InputBundle) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    let version = crate::counterfactual_input::PARSER_VERSION;
+    if !matches!(meaning.intent, Intent::AskCounterfactualRelation { .. })
+        || meaning.parser_version != version
+        || meaning.source_kind != "USER_REQUEST"
+        || !meaning.unresolved.is_empty()
+        || counterfactual_scope_issue(request).is_some()
+        || meaning.context_result_ref.is_some()
+        || text.len() > request.budget.max_input_bytes
+        || bundle.context_sha256 != identity(&None::<&ResultRecord>)?
+        || !matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        || bundle.raw_sha256 != digest(text.as_bytes())
+        || bundle.semantic_signature != identity(meaning)?
+        || bundle.fingerprint
+            != identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
+    {
+        return Ok(false);
+    }
+    Ok(crate::counterfactual_input::parse(text)?
+        .is_some_and(|(intent, roles)| intent == meaning.intent && roles == meaning.source_roles))
+}
+
+pub(crate) fn verified_translation_input(bundle: &InputBundle) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    let Some(version) = crate::translation_input::parser_version(&meaning.intent) else {
+        return Ok(false);
+    };
+    let no_context = bundle.context_sha256 == identity(&None::<&ResultRecord>)?;
+    let scope_matches = match &meaning.intent {
+        Intent::TranslateText { .. } => {
+            no_context && request.context_ref.is_none() && meaning.context_result_ref.is_none()
+        }
+        Intent::ReviseTranslation { .. } => {
+            !no_context
+                && meaning
+                    .context_result_ref
+                    .as_ref()
+                    .is_some_and(|context| !context.is_empty())
+                && request
+                    .context_ref
+                    .as_ref()
+                    .is_none_or(|reference| Some(reference) == meaning.context_result_ref.as_ref())
+        }
+        _ => false,
+    };
+    if !scope_matches
+        || meaning.parser_version != version
+        || meaning.source_kind != "USER_REQUEST"
+        || !meaning.unresolved.is_empty()
+        || !matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        || !request.attachments.is_empty()
+        || text.len() > request.budget.max_input_bytes
+        || !matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        || bundle.raw_sha256 != digest(text.as_bytes())
+        || bundle.semantic_signature != identity(meaning)?
+        || bundle.fingerprint
+            != identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
+    {
+        return Ok(false);
+    }
+    Ok(
+        crate::translation_input::parse(text)?.is_some_and(|parsed| {
+            parsed.intent == meaning.intent && parsed.roles == meaning.source_roles
+        }),
+    )
+}
+
+pub(crate) fn verified_work_plan_input(bundle: &InputBundle) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    let Some(version) = crate::work_plan_input::parser_version(&meaning.intent) else {
+        return Ok(false);
+    };
+    let has_context = bundle.context_sha256 != identity(&None::<&ResultRecord>)?;
+    let scope_matches = match &meaning.intent {
+        Intent::PlanWork { .. } => {
+            !has_context && request.context_ref.is_none() && meaning.context_result_ref.is_none()
+        }
+        Intent::ReviseWorkPlan { .. } => {
+            has_context
+                && meaning
+                    .context_result_ref
+                    .as_ref()
+                    .is_some_and(|reference| !reference.is_empty())
+                && request
+                    .context_ref
+                    .as_ref()
+                    .is_none_or(|reference| Some(reference) == meaning.context_result_ref.as_ref())
+        }
+        _ => false,
+    };
+    if !scope_matches
+        || meaning.parser_version != version
+        || meaning.source_kind != "USER_REQUEST"
+        || !meaning.unresolved.is_empty()
+        || !matches!(request.locale.as_str(), "ja" | "ja-JP")
+        || !request.attachments.is_empty()
+        || text.len() > request.budget.max_input_bytes
+        || !matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        || bundle.raw_sha256 != digest(text.as_bytes())
+        || bundle.semantic_signature != identity(meaning)?
+        || bundle.fingerprint
+            != identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
+    {
+        return Ok(false);
+    }
+    Ok(crate::work_plan_input::parse(text)?.is_some_and(|parsed| {
+        parsed.intent == meaning.intent && parsed.roles == meaning.source_roles
+    }))
+}
+
+pub(crate) const MEMORY_SETTINGS_PARSER_VERSION: &str = "declarative-ja-v224-memory-settings";
+
+pub(crate) fn memory_settings_intent(text: &str) -> Option<Intent> {
+    let text = text
+        .trim()
+        .trim_end_matches(['。', '？', '?', '！', '!'])
+        .trim_end();
+    match text {
+        "記憶の設定を確認して"
+        | "記憶の設定を教えて"
+        | "記憶の設定は"
+        | "会話をまたぐ記憶の設定を確認して"
+        | "横断記憶の設定を確認して" => Some(Intent::InspectMemorySettings),
+        "会話をまたぐ記憶をオンにして"
+        | "横断記憶をオンにして"
+        | "会話をまたぐ記憶を有効にして" => {
+            Some(Intent::SetMemorySharing { enabled: true })
+        }
+        "会話をまたぐ記憶をオフにして"
+        | "横断記憶をオフにして"
+        | "会話をまたぐ記憶を無効にして" => {
+            Some(Intent::SetMemorySharing { enabled: false })
+        }
+        _ => None,
+    }
+}
+
+pub(crate) const NEWS_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v222-news-explanation";
+pub(crate) const PREVIOUS_STOP_EXPLANATION_PARSER_VERSION: &str =
+    "declarative-ja-v236-previous-stop-explanation";
+
+fn asks_contextual_clarification(text: &str) -> bool {
+    static QUESTION: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"\A(?:(?:(?:それ|(?:この|その|前の|前回の|直前の|さっきの)(?:回答|答え|返答|結果|説明))(?:は|って)?[、\s]*)?",
+            r"(?:どう(?:いう|言う)|どんな|何の)\s*(?:こと|事|意味|話)(?:ですか|なんですか|なのですか|なのか|なの|でしょうか)?",
+            r"|(?:もう少し|もうちょっと)(?:詳しく|分かりやすく|わかりやすく)?(?:説明|解説)(?:して(?:ください)?|してくれますか)",
+            r"|(?:この|その|前の|前回の|直前の|さっきの)(?:回答|答え|返答|結果|説明)(?:の意味)?を(?:詳しく)?(?:説明|解説)(?:して(?:ください)?|せよ)",
+            r"|なんで(?:ですか)?",
+            r"|(?:なんで|どうして|なぜ)[ \t　]*そう(?:なる|なった)(?:の(?:ですか)?|んですか|か|のでしょうか)?",
+            r"|(?:この|その|前の|前回の|直前の|先ほどの|さっきの)(?:計算結果|結果|答え|回答)になった理由(?:は(?:何|なに)?(?:ですか|でしょうか)?|を(?:教えて|説明して)(?:ください)?))\z"
+        ))
+        .expect("previous clarification grammar")
+    });
+    QUESTION.is_match(terminal_trim(text))
+}
+
+fn asks_with_question_mark(text: &str) -> bool {
+    matches!(text.trim(), "?" | "？")
+}
+
+pub(crate) fn asks_to_clarify_news_status(text: &str) -> bool {
+    let text = text.trim();
+    asks_with_question_mark(text)
+        || asks_contextual_clarification(text)
+        || matches!(
+            text.trim_end_matches(['？', '?', '。', '.']),
+            "どういうこと" | "どういうことですか" | "なぜ" | "なんで" | "もう少し説明して"
+        )
+}
+
+pub(crate) fn seal_current_news_explanation(
+    request: &RequestEnvelope,
+    previous: &ResultRecord,
+    origin: &str,
+) -> Result<InputBundle> {
+    validate_user_seal_request(request, Some(previous))?;
+    if !asks_to_clarify_news_status(&request.text) {
+        return Err(failure(
+            "NEWS_EXPLANATION_INPUT",
+            "直前のニュースへの追問を確認できません。",
+        ));
+    }
+    seal_user_input(
+        request,
+        Some(previous),
+        NEWS_EXPLANATION_PARSER_VERSION,
+        Intent::ExplainCurrentNews {
+            origin: origin.into(),
+        },
+        BTreeMap::new(),
+        Vec::new(),
+    )
+}
+
+pub(crate) fn verified_current_news_input(bundle: &InputBundle) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    let matches_input = match &meaning.intent {
+        Intent::AskCurrentNews { .. } => {
+            (meaning.parser_version == crate::news_input::PARSER_VERSION
+                || (request.attachments.is_empty()
+                    && meaning.context_result_ref == request.context_ref
+                    && (request.context_ref.is_some()
+                        || bundle.context_sha256 == identity(&None::<&ResultRecord>)?)))
+                && crate::news_input::source_roles_for(
+                    text,
+                    &meaning.intent,
+                    &meaning.parser_version,
+                )
+                .as_ref()
+                    == Some(&meaning.source_roles)
+        }
+        Intent::ExplainCurrentNews { .. } => {
+            meaning.parser_version == NEWS_EXPLANATION_PARSER_VERSION
+                && meaning.source_roles.is_empty()
+                && meaning.context_result_ref.is_some()
+                && asks_to_clarify_news_status(text)
+        }
+        _ => return Ok(false),
+    };
+    Ok(matches_input
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.unresolved.is_empty()
+        && matches!(request.locale.as_str(), "ja" | "ja-JP")
+        && text.len() <= request.budget.max_input_bytes
+        && matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        && bundle.raw_sha256 == digest(text.as_bytes())
+        && bundle.semantic_signature == identity(meaning)?
+        && bundle.fingerprint
+            == identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                &meaning.parser_version,
+            ))?)
+}
+
 pub fn seal(request: &RequestEnvelope, previous: Option<&ResultRecord>) -> Result<InputBundle> {
     seal_with_source_context(request, previous, None)
+}
+
+pub(crate) fn validate_request_attachments(request: &RequestEnvelope) -> Result<()> {
+    validate_attachment_snapshots(&request.attachments, request.input_bytes(), &request.budget)
+}
+
+pub(crate) fn validate_purpose_attachments(
+    request: &RequestEnvelope,
+    attachments: &[RequestAttachment],
+) -> Result<()> {
+    if attachments.is_empty() || !request.attachments.is_empty() {
+        return Err(attached_document_input_error());
+    }
+    let input_bytes = attachments
+        .iter()
+        .fold(request.input_bytes(), |bytes, file| {
+            bytes
+                .saturating_add(file.name.len())
+                .saturating_add(file.payload_bytes())
+        });
+    validate_attachment_snapshots(attachments, input_bytes, &request.budget)
+}
+
+fn validate_attachment_snapshots(
+    attachments: &[RequestAttachment],
+    input_bytes: usize,
+    budget: &ResourceBudget,
+) -> Result<()> {
+    if attachments.is_empty() {
+        return Ok(());
+    }
+    if attachments.len() > MAX_REQUEST_ATTACHMENTS
+        || input_bytes
+            > budget
+                .max_input_bytes
+                .min(ResourceBudget::development().max_input_bytes)
+    {
+        return Err(failure(
+            "ATTACHMENT_LIMIT",
+            "添付の件数または発話と添付の合計バイト数が上限を超えました。",
+        ));
+    }
+    let mut names = BTreeSet::new();
+    for file in attachments {
+        if !RequestAttachment::is_supported_name(&file.name)
+            || !names.insert(file.name.to_lowercase())
+            || (file.pdf_bytes()?.is_none()
+                && file.xlsx_bytes()?.is_none()
+                && file.image_bytes()?.is_none()
+                && (file.text.trim_start_matches('\u{feff}').trim().is_empty()
+                    || file.text.contains('\0')))
+        {
+            return Err(failure(
+                "ATTACHMENT_INVALID",
+                "添付には、互いに名前が異なるPDF、XLSX、PNG、JPEG、または空でないUTF-8のCSV、TXT、Markdownが必要です。",
+            ));
+        }
+    }
+    Ok(())
 }
 
 fn validate_user_seal_request(
@@ -596,6 +1232,7 @@ fn validate_user_seal_request(
             "input is empty or exceeds its byte budget",
         ));
     }
+    validate_request_attachments(request)?;
     if let Some(reference) = &request.context_ref
         && previous.is_none_or(|result| result.id != *reference)
     {
@@ -613,7 +1250,243 @@ pub(crate) fn seal_with_source_context(
     source_context: Option<SourceContext>,
 ) -> Result<InputBundle> {
     validate_user_seal_request(request, previous)?;
-    let intent = if matches!(request.locale.as_str(), "ja" | "en" | "ja-JP" | "en-US") {
+    if let Some(named) = crate::conversation_history_input::parse(&request.text) {
+        return seal_named_conversation_return(request, named, None);
+    }
+    if crate::conversation_history_input::has_return_prefix(&request.text) {
+        let reason = "戻る話題の名前を指定し、続きを話す場合は読点で区切ってください。".to_owned();
+        return seal_user_input(
+            request,
+            None,
+            NAMED_CONVERSATION_PARSER_VERSION,
+            Intent::Unknown {
+                reason: reason.clone(),
+            },
+            BTreeMap::new(),
+            vec![reason],
+        );
+    }
+    if let Some((intent, roles)) = crate::counterfactual_input::parse(&request.text)? {
+        let unresolved = counterfactual_scope_issue(request)
+            .into_iter()
+            .map(str::to_owned)
+            .collect();
+        return seal_user_input(
+            request,
+            None,
+            crate::counterfactual_input::PARSER_VERSION,
+            intent,
+            roles,
+            unresolved,
+        );
+    }
+    if crate::counterfactual_input::explicitly_hypothetical(&request.text) {
+        let reason =
+            "「仮に」の後に前提を、「だとすると」の後に結果についての質問を書いてください。"
+                .to_string();
+        return seal_user_input(
+            request,
+            None,
+            crate::counterfactual_input::PARSER_VERSION,
+            Intent::Unknown {
+                reason: reason.clone(),
+            },
+            BTreeMap::new(),
+            vec![reason],
+        );
+    }
+    if matches!(request.locale.as_str(), "ja" | "ja-JP")
+        && let Some((intent, roles)) = branch_text_request(&request.text)?
+    {
+        check_branch_text_scope(request)?;
+        return seal_user_input(
+            request,
+            None,
+            BRANCH_TEXT_PARSER_VERSION,
+            intent,
+            roles,
+            Vec::new(),
+        );
+    }
+    if is_purpose_document_request(&request.text)
+        && matches!(request.locale.as_str(), "ja" | "ja-JP")
+    {
+        return seal_user_input(
+            request,
+            previous,
+            PURPOSE_DOCUMENT_PARSER_VERSION,
+            purpose_document_intent(request)?,
+            BTreeMap::new(),
+            Vec::new(),
+        );
+    }
+    if let Some(intent) = review_attached_document_intent(&request.text)? {
+        let use_previous = is_previous_attached_document_intent(&intent);
+        let unresolved = if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+            vec!["添付文書の項目別要約と比較は、日本語で依頼してください。".into()]
+        } else if use_previous && !request.attachments.is_empty() {
+            vec!["同じ添付資料を使う場合は、新しい添付を外してください。".into()]
+        } else if use_previous
+            && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
+        {
+            vec!["同じ会話に照合できる確定済みの添付資料結果がありません。".into()]
+        } else if !use_previous && request.context_ref.is_some() {
+            vec!["今回添付する資料を使う場合は、前の回答指定を外してください。".into()]
+        } else if !use_previous && request.attachments.is_empty() {
+            vec!["要約または比較する資料を今回の依頼に添付してください。".into()]
+        } else {
+            Vec::new()
+        };
+        let roles = attached_document_roles(&intent).expect("document review roles");
+        return seal_user_input(
+            request,
+            if use_previous { previous } else { None },
+            DOCUMENT_REVIEW_PARSER_VERSION,
+            intent,
+            roles,
+            unresolved,
+        );
+    }
+    if let Some(parsed) = crate::decision_input::parse_attached_revision(&request.text) {
+        let unresolved = if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+            vec!["添付資料を使う比較の更新は、日本語で依頼してください。".into()]
+        } else if !attached_decision_revision_media(request) {
+            vec!["更新の根拠となるTXT・Markdown・文字PDFを1件添付してください。".into()]
+        } else if previous.is_none() {
+            vec!["同じ会話で行った前の候補比較を確認できません。".into()]
+        } else {
+            Vec::new()
+        };
+        return seal_user_input(
+            request,
+            previous,
+            crate::decision_input::ATTACHED_REVISION_PARSER_VERSION,
+            Intent::ReviseDecisionFromAttachment {
+                candidate: parsed.candidate,
+                field: parsed.field,
+            },
+            parsed.roles,
+            unresolved,
+        );
+    }
+    if let Some(intent) = csv_aggregation_intent(&request.text)? {
+        let roles = csv_aggregation_roles(&intent).expect("CSV aggregation intent roles");
+        let unresolved =
+            csv_aggregation_scope(request).map_or_else(Vec::new, |problem| vec![problem.into()]);
+        return seal_user_input(
+            request,
+            None,
+            CSV_AGGREGATION_PARSER_VERSION,
+            intent,
+            roles,
+            unresolved,
+        );
+    }
+    if let Some(parsed) = crate::work_plan_input::parse(&request.text)? {
+        let revising = matches!(parsed.intent, Intent::ReviseWorkPlan { .. });
+        let unresolved = if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+            vec!["作業計画は日本語で依頼してください。".into()]
+        } else if !request.attachments.is_empty() {
+            vec!["作業や条件を依頼に直接書き、添付を外してください。".into()]
+        } else if !revising && request.context_ref.is_some() {
+            vec!["新しい計画を立てる場合は、前の回答指定を外してください。".into()]
+        } else if revising && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit) {
+            vec!["条件を変えるには、同じ会話で確定した作業計画が必要です。".into()]
+        } else {
+            Vec::new()
+        };
+        let version = crate::work_plan_input::parser_version(&parsed.intent)
+            .expect("work plan parser intent version");
+        return seal_user_input(
+            request,
+            if revising { previous } else { None },
+            version,
+            parsed.intent,
+            parsed.roles,
+            unresolved,
+        );
+    }
+    if let Some(parsed) = crate::translation_input::parse(&request.text)? {
+        let revising = matches!(parsed.intent, Intent::ReviseTranslation { .. });
+        if !matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+            || !request.attachments.is_empty()
+            || (!revising && request.context_ref.is_some())
+        {
+            let reason = "翻訳する原文は依頼に直接書いてください。新規の翻訳では前の回答指定と添付を外してください。";
+            return seal_user_input(
+                request,
+                None,
+                PARSER_VERSION,
+                Intent::Unknown {
+                    reason: reason.into(),
+                },
+                BTreeMap::new(),
+                vec![reason.into()],
+            );
+        }
+        let unresolved =
+            if revising && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit) {
+                vec!["文体を変えるには、同じ会話で確定した翻訳結果が必要です。".into()]
+            } else {
+                Vec::new()
+            };
+        let version = crate::translation_input::parser_version(&parsed.intent)
+            .expect("translation parser intent version");
+        return seal_user_input(
+            request,
+            if revising { previous } else { None },
+            version,
+            parsed.intent,
+            parsed.roles,
+            unresolved,
+        );
+    }
+    if matches!(request.locale.as_str(), "ja" | "ja-JP")
+        && request.attachments.is_empty()
+        && request.context_ref.is_none()
+        && let Some(parsed) = crate::fiction_input::parse(&request.text)?
+    {
+        return seal_user_input(
+            request,
+            None,
+            crate::fiction_input::PARSER_VERSION,
+            Intent::DraftFiction {
+                draft: parsed.draft,
+            },
+            parsed.roles,
+            Vec::new(),
+        );
+    }
+    if matches!(request.locale.as_str(), "ja" | "ja-JP")
+        && let Some((version, intent)) = crate::news_input::parse_user(&request.text)
+        && version != crate::news_input::PARSER_VERSION
+    {
+        let roles = crate::news_input::source_roles_for(&request.text, &intent, version)
+            .ok_or_else(|| {
+                failure(
+                    "NEWS_SOURCE_INVALID",
+                    "ニュース依頼の原文と役割を照合できません。",
+                )
+            })?;
+        let unresolved = if request.attachments.is_empty() {
+            Vec::new()
+        } else {
+            vec!["公開ニュースを調べる場合は、添付を外して依頼してください。".into()]
+        };
+        return seal_user_input(
+            request,
+            if request.context_ref.is_some() {
+                previous
+            } else {
+                None
+            },
+            version,
+            intent,
+            roles,
+            unresolved,
+        );
+    }
+    let mut intent = if matches!(request.locale.as_str(), "ja" | "en" | "ja-JP" | "en-US") {
         if asks_for_previous_answer_source(&request.text)? {
             if previous.is_some_and(|result| {
                 result.lifecycle == Lifecycle::Commit
@@ -630,7 +1503,96 @@ pub(crate) fn seal_with_source_context(
                 }
             }
         } else {
-            let intent = interpret(&request.text)?;
+            let mut intent = interpret(&request.text)?;
+            if matches!(request.locale.as_str(), "ja" | "ja-JP") {
+                if matches!(intent, Intent::AskCurrentNews { .. })
+                    && crate::news_input::parse_user(&request.text).is_none()
+                {
+                    let reason = "ニュースの日時や条件を確定できません。今日・今朝・昨日・直近24時間のいずれかと、必要なら一つの話題を指定してください。";
+                    return seal_user_input(
+                        request,
+                        None,
+                        PARSER_VERSION,
+                        Intent::Unknown {
+                            reason: reason.into(),
+                        },
+                        BTreeMap::new(),
+                        vec![reason.into()],
+                    );
+                }
+                if let Some(event) = crate::conversation_input::parse(&request.text)
+                    && crate::conversation_input::admits_event(&intent, &request.text, &event)
+                {
+                    let continue_topic =
+                        matches!(source_context, Some(SourceContext::ConversationTopic))
+                            && previous.is_some_and(|prior| prior.lifecycle == Lifecycle::Commit);
+                    let obstacle = if !request.attachments.is_empty()
+                        || request.output_path.is_some()
+                    {
+                        Some(
+                            "体験や観察の話には、添付や保存先を指定せず、本文だけを送ってください。",
+                        )
+                    } else if request.context_ref.is_some() && !continue_topic {
+                        Some("指定された前の回答が、続けられる会話の話題か確認できません。")
+                    } else {
+                        None
+                    };
+                    if let Some(reason) = obstacle {
+                        return seal_user_input(
+                            request,
+                            None,
+                            PARSER_VERSION,
+                            Intent::Unknown {
+                                reason: reason.into(),
+                            },
+                            BTreeMap::new(),
+                            vec![reason.into()],
+                        );
+                    }
+                    let report = Intent::ReportConversationEvent {
+                        event,
+                        continue_topic,
+                    };
+                    let roles = source_role_spans(&request.text, &report)?;
+                    return seal_user_input(
+                        request,
+                        if continue_topic { previous } else { None },
+                        CONVERSATION_EVENT_PARSER_VERSION,
+                        report,
+                        roles,
+                        Vec::new(),
+                    );
+                }
+                if crate::conversation_input::pseudo_copula(&intent, &request.text) {
+                    return seal_user_input(
+                        request,
+                        None,
+                        PARSER_VERSION,
+                        Intent::Unknown {
+                            reason:
+                                "体験や行動として書かれた内容を、対象の属性としては保存できません。"
+                                    .into(),
+                        },
+                        BTreeMap::new(),
+                        vec![
+                            "体験や行動として書かれた内容を、対象の属性としては保存できません。"
+                                .into(),
+                        ],
+                    );
+                }
+            }
+            if matches!(request.locale.as_str(), "ja" | "ja-JP") && previous.is_some() {
+                if matches!(intent, Intent::Unknown { .. })
+                    && asks_with_question_mark(&request.text)
+                {
+                    intent = Intent::ExplainPrevious;
+                }
+                if matches!(intent, Intent::ExplainPrevious)
+                    && previous.is_some_and(|p| p.lifecycle == Lifecycle::Suspend)
+                {
+                    intent = Intent::ExplainPreviousStop;
+                }
+            }
             if matches!(source_context, Some(SourceContext::ConversationTopic))
                 && previous.is_some_and(|result| result.lifecycle == Lifecycle::Commit)
             {
@@ -654,12 +1616,50 @@ pub(crate) fn seal_with_source_context(
                 .into(),
         }
     };
+    if matches!(intent, Intent::DraftFiction { .. }) {
+        intent = Intent::Unknown {
+            reason: "新しい物語は、前の回答の指定や添付を外して日本語で依頼してください。".into(),
+        };
+    } else if matches!(intent, Intent::ScalePreviousCalculation { .. })
+        && !matches!(request.locale.as_str(), "ja" | "ja-JP")
+    {
+        intent = Intent::Unknown {
+            reason: "前の計算結果に対する倍率の指定は日本語の設定で受け付けます。".into(),
+        };
+    } else if let Intent::ProduceImage { operation } = &intent
+        && !image_attachments_match(operation, &request.attachments)
+    {
+        intent = Intent::Unknown {
+            reason: match operation {
+                ImageOperation::Draw { .. } => "新しく描く場合は、添付を外してください。",
+                ImageOperation::Fill { .. } => {
+                    "範囲を編集する元のPNGまたはJPEG画像を1枚添付してください。"
+                }
+            }
+            .into(),
+        };
+    } else if !request.attachments.is_empty()
+        && !matches!(
+            intent,
+            Intent::CreateCsvChartFromAttachments { .. }
+                | Intent::SummarizeAttachedDocuments
+                | Intent::FindInAttachedDocuments { .. }
+                | Intent::AnalyzeAttachments { .. }
+                | Intent::ProduceImage { .. }
+                | Intent::Cancel
+        )
+    {
+        intent = Intent::Unknown {
+            reason: "添付を使うには、CSVの集計か、添付資料の要約・箇所抽出を指定してください。"
+                .into(),
+        };
+    }
     let mut unresolved = match &intent {
         Intent::Unknown { reason } => vec![reason.clone()],
         _ => Vec::new(),
     };
     if matches!(intent, Intent::ExplainPrevious) && previous.is_none() {
-        unresolved.push("no actual adopted previous result is available".into());
+        unresolved.push("説明できる前の回答がありません。聞きたい内容を書いてください。".into());
     }
     if matches!(intent, Intent::ReplacePreviousText { .. })
         && previous.is_none_or(|result| result.lifecycle != Lifecycle::Commit)
@@ -738,6 +1738,13 @@ pub(crate) fn seal_with_source_context(
     {
         unresolved.push("no actual committed calculation is available to correct".into());
     }
+    if matches!(intent, Intent::ScalePreviousCalculation { .. })
+        && previous.is_none_or(|result| {
+            result.lifecycle != Lifecycle::Commit || result.calculation.is_none()
+        })
+    {
+        unresolved.push("同じ会話に使える確定済みの計算結果がありません。".into());
+    }
     if matches!(intent, Intent::ConvertPreviousLength { .. })
         && previous.is_none_or(|result| {
             result.lifecycle != Lifecycle::Commit
@@ -796,6 +1803,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::AutonomousTopicWeb => None,
     });
     let parser_version = match &intent {
+        Intent::ExplainPreviousStop => PREVIOUS_STOP_EXPLANATION_PARSER_VERSION,
         Intent::ExplainPrevious
             if matches!(
                 source_context,
@@ -832,6 +1840,9 @@ pub(crate) fn seal_with_source_context(
         }
         Intent::AskRelationSubjects { .. } => RELATION_SUBJECT_QUESTION_PARSER_VERSION,
         Intent::AskLocalIdentity => LOCAL_IDENTITY_PARSER_VERSION,
+        Intent::InspectMemorySettings | Intent::SetMemorySharing { .. } => {
+            MEMORY_SETTINGS_PARSER_VERSION
+        }
         Intent::InspectPremises { subject }
             if local_first_topic_span(&request.text)?
                 .is_some_and(|topic| topic.text == *subject) =>
@@ -847,12 +1858,30 @@ pub(crate) fn seal_with_source_context(
             AUTONOMOUS_TOPIC_WEB_PARSER_VERSION
         }
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
+        Intent::CompareWebResearch { .. } => WEB_RESEARCH_PARSER_VERSION,
+        Intent::AskCurrentNews { .. } => crate::news_input::PARSER_VERSION,
         Intent::FetchPreviousSearchCandidate { .. } if resumes_partial_web_candidate => {
             PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION
         }
         Intent::ExplainCode { .. } => CODE_EXPLANATION_PARSER_VERSION,
+        Intent::RepairCode { .. } => CODE_REPAIR_PARSER_VERSION,
+        Intent::ExecuteWasm { .. } => WASM_EXECUTION_PARSER_VERSION,
+        Intent::ExecuteAttachedCsvAggregation { .. } => CSV_AGGREGATION_PARSER_VERSION,
+        Intent::CreateCsvChart { .. } => CSV_CHART_PARSER_VERSION,
+        Intent::CreateCsvChartFromExecution { .. } => EXECUTION_CSV_CHART_PARSER_VERSION,
+        Intent::CreateCsvChartFromExecutionValues { .. } => {
+            EXECUTION_CSV_VALUES_CHART_PARSER_VERSION
+        }
+        Intent::CreateCsvChartFromAttachments { .. } => ATTACHED_CSV_CHART_PARSER_VERSION,
+        Intent::ReviewAttachedDocumentFields { .. } => DOCUMENT_REVIEW_PARSER_VERSION,
+        intent if is_attached_document_intent(intent) => ATTACHED_DOCUMENT_PARSER_VERSION,
+        Intent::ProduceImage { .. } => IMAGE_PARSER_VERSION,
+        Intent::SpeakPreviousAnswer => SPEECH_PARSER_VERSION,
+        Intent::AnalyzeAttachments { table_media, .. } => analysis_parser_version(table_media),
+        Intent::FilterPreviousCsvChart { .. } => CSV_CHART_FILTER_PARSER_VERSION,
         Intent::SummarizePastedText { .. } => PASTED_TEXT_SUMMARY_PARSER_VERSION,
         Intent::GenerateReturnFunction { .. } => RETURN_FUNCTION_PARSER_VERSION,
+        Intent::GenerateFunctionFromSpec { .. } => FUNCTION_SPEC_PARSER_VERSION,
         Intent::VerifyPreviousCode { .. }
             if source_roles.contains_key(PREVIOUS_CODE_CASE_EXPECTED_ROLE)
                 && let Some((_, version)) =
@@ -867,7 +1896,18 @@ pub(crate) fn seal_with_source_context(
         {
             CONVERSATIONAL_MATH_PARSER_VERSION
         }
+        Intent::DraftMessage { .. } => crate::writing::PARSER_VERSION,
+        Intent::ReviseMessage { .. } => crate::message_revision::PARSER_VERSION,
+        Intent::CompareOptions { .. } => crate::decision_input::PARSER_VERSION,
+        Intent::ReviseDecision { .. } => crate::decision_input::REVISION_PARSER_VERSION,
+        Intent::DescribeStatistics { .. } => STATISTICS_GOAL_PARSER_VERSION,
+        Intent::Statistics { units: None, .. }
+            if parse_statistics_goal(&request.text)?.is_some() =>
+        {
+            STATISTICS_GOAL_PARSER_VERSION
+        }
         Intent::CorrectCalculation { .. } => CALCULATION_CORRECTION_PARSER_VERSION,
+        Intent::ScalePreviousCalculation { .. } => PREVIOUS_CALCULATION_SCALE_PARSER_VERSION,
         Intent::ConvertPreviousLength { .. }
             if matches!(source_context, Some(SourceContext::PreviousWebLength)) =>
         {
@@ -1490,6 +2530,20 @@ fn japanese_assertion_source_roles(
     japanese_assertion_source_roles_with_root(text, proposition, "/Assert/proposition")
 }
 
+pub(crate) fn counterfactual_proposition_roles(
+    text: &str,
+    proposition: &Proposition,
+    role_root: &str,
+) -> Result<Option<BTreeMap<String, Vec<SourceSpan>>>> {
+    if proposition.predicate != "is" {
+        return japanese_transitive_assertion_source_roles_with_root(text, proposition, role_root);
+    }
+    if let Some(roles) = japanese_assertion_source_roles_with_root(text, proposition, role_root)? {
+        return Ok(Some(roles));
+    }
+    english_assertion_source_roles_with_root(text, proposition, role_root)
+}
+
 fn japanese_assertion_source_roles_with_root(
     text: &str,
     proposition: &Proposition,
@@ -1759,7 +2813,7 @@ fn english_assertion_source_roles_with_root(
     Ok(Some(roles))
 }
 
-fn source_span_at(text: &str, start: usize, end: usize) -> Option<SourceSpan> {
+pub(crate) fn source_span_at(text: &str, start: usize, end: usize) -> Option<SourceSpan> {
     Some(SourceSpan {
         start,
         end,
@@ -2535,6 +3589,140 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 /// comes from the untouched original byte slice. Unknown's generated reason
 /// is deliberately excluded from source evidence.
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    if let Intent::CompareWebResearch { topic, expression } = intent {
+        return web_research_source_roles(text, topic, expression.as_deref());
+    }
+    if matches!(intent, Intent::ScalePreviousCalculation { .. }) {
+        return previous_calculation_scale(text)?
+            .filter(|(parsed, _)| parsed == intent)
+            .map(|(_, roles)| roles)
+            .ok_or_else(previous_calculation_scale_mismatch);
+    }
+    if let Intent::ProduceImage { operation } = intent {
+        return image_instruction(text)
+            .filter(|instruction| instruction.operation == *operation)
+            .map(|instruction| instruction.roles)
+            .ok_or_else(image_input_error);
+    }
+    if let Some(roles) = attached_analysis_roles(intent) {
+        return if attached_analysis_intent(text)?.as_ref() == Some(intent) {
+            Ok(roles)
+        } else {
+            Err(attached_analysis_input_error())
+        };
+    }
+    if let Some(roles) = attached_document_roles(intent) {
+        return if attached_document_intent(text)?.as_ref() == Some(intent) {
+            Ok(roles)
+        } else {
+            Err(attached_document_input_error())
+        };
+    }
+    if let Some((_, roles)) = csv_chart_source_roles(intent) {
+        return if csv_chart_intent(text)?.as_ref() == Some(intent) {
+            Ok(roles)
+        } else {
+            Err(csv_chart_input_error())
+        };
+    }
+    if let Intent::ExecuteWasm { document } = intent {
+        return match wasm_execution_intent(text) {
+            Some(Intent::ExecuteWasm { document: parsed }) if parsed == *document => Ok(
+                BTreeMap::from([(WASM_EXECUTION_DOCUMENT_ROLE.into(), vec![parsed])]),
+            ),
+            _ => Err(wasm_execution_input_error()),
+        };
+    }
+    if let Intent::RepairCode { document } = intent {
+        return match code_repair_intent(text) {
+            Some(Intent::RepairCode { document: parsed }) if parsed == *document => Ok(
+                BTreeMap::from([(CODE_REPAIR_DOCUMENT_ROLE.into(), vec![parsed])]),
+            ),
+            _ => Err(code_repair_input_mismatch()),
+        };
+    }
+    if matches!(intent, Intent::AskCurrentNews { .. }) {
+        return crate::news_input::source_roles(text, intent).ok_or_else(|| {
+            failure(
+                "NEWS_SOURCE_INVALID",
+                "ニュースの期間と対象を依頼の原文から確認できません。",
+            )
+        });
+    }
+    if let Intent::GenerateFunctionFromSpec { spec } = intent {
+        if crate::code_intent::parse(text)?.as_ref() == Some(spec.as_ref()) {
+            return Ok(function_spec_roles(spec));
+        }
+        return Err(failure(
+            "CODE_GENERATION_SOURCE_MISMATCH",
+            "関数の仕様を依頼の原文から照合できません。",
+        ));
+    }
+    if let Intent::ReviseDecision { revision } = intent {
+        if let Some(parsed) = crate::decision_input::parse_revision(text)
+            && &parsed.revision == revision
+        {
+            return Ok(parsed.roles);
+        }
+        return Err(failure(
+            "DECISION_SOURCE_INVALID",
+            "変更する比較条件を依頼の原文から照合できません。",
+        ));
+    }
+    if let Intent::ReviseDecisionFromAttachment { candidate, field } = intent {
+        if let Some(parsed) = crate::decision_input::parse_attached_revision(text)
+            && &parsed.candidate == candidate
+            && &parsed.field == field
+        {
+            return Ok(parsed.roles);
+        }
+        return Err(failure(
+            "DECISION_SOURCE_INVALID",
+            "添付資料で変更する候補と項目を、依頼の原文から照合できません。",
+        ));
+    }
+    if let Intent::CompareOptions { decision } = intent {
+        if let Some(parsed) = crate::decision_input::parse(text)?
+            && &parsed.decision == decision.as_ref()
+        {
+            return Ok(parsed.roles);
+        }
+        return Err(failure(
+            "DECISION_SOURCE_INVALID",
+            "候補と条件を原文から照合できません。",
+        ));
+    }
+    if let Intent::ReviseMessage { revision } = intent {
+        if let Some(parsed) = crate::message_revision::parse(text)?
+            && &parsed.revision == revision
+        {
+            return Ok(parsed.roles);
+        }
+        return Err(failure(
+            "MESSAGE_SOURCE_INVALID",
+            "文案の変更箇所を原文から照合できません。",
+        ));
+    }
+    if let Intent::DraftMessage { draft } = intent {
+        if let Some(parsed) = crate::writing::parse(text)?
+            && &parsed.draft == draft.as_ref()
+        {
+            return Ok(parsed.roles);
+        }
+        return Err(failure(
+            "MESSAGE_SOURCE_INVALID",
+            "下書きの役割を原文から照合できません。",
+        ));
+    }
+    if matches!(
+        intent,
+        Intent::DescribeStatistics { .. } | Intent::Statistics { units: None, .. }
+    ) && !conversational_math_matches(text, intent)?
+        && let Some((candidate, roles)) = parse_statistics_goal(text)?
+        && &candidate == intent
+    {
+        return Ok(roles);
+    }
     let topic_role = match intent {
         Intent::InspectPremises { subject } => Some(("/InspectPremises/subject", subject)),
         Intent::AskWeb {
@@ -2563,6 +3751,35 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
             ));
         }
         return Ok(BTreeMap::from([(role.into(), vec![span.clone()])]));
+    }
+    if let Intent::ReportConversationEvent { event, .. } = intent {
+        let mut roles = BTreeMap::new();
+        for (role, span) in [
+            ("/ReportConversationEvent/event/report", Some(&event.report)),
+            (
+                "/ReportConversationEvent/event/predicate",
+                Some(&event.predicate),
+            ),
+            (
+                "/ReportConversationEvent/event/target",
+                event.target.as_ref(),
+            ),
+            (
+                "/ReportConversationEvent/event/greeting",
+                event.greeting.as_ref(),
+            ),
+        ] {
+            if let Some(span) = span {
+                if source_span_at(text, span.start, span.end).as_ref() != Some(span) {
+                    return Err(failure(
+                        "CONVERSATION_SOURCE_SPAN",
+                        "会話の根拠が発話の原文と一致しません。",
+                    ));
+                }
+                roles.insert(role.into(), vec![span.clone()]);
+            }
+        }
+        return Ok(roles);
     }
     if matches!(intent, Intent::AskRelationSubjects { .. }) {
         return relation_subject_question(text)?
@@ -3402,6 +4619,29 @@ fn json_object_key_path_intent(text: &str, header: &str) -> Result<Option<Intent
 /// Explicit headers separate instructions from document/query data. The body is
 /// sliced from the original request, without trim, newline conversion or NFKC.
 pub(crate) fn structured_intent(text: &str) -> Result<Option<Intent>> {
+    if is_speech_request(text)? {
+        return Ok(Some(Intent::SpeakPreviousAnswer));
+    }
+    if let Some(intent) = wasm_execution_intent(text).or_else(|| code_repair_intent(text)) {
+        return Ok(Some(intent));
+    }
+    if let Some(intent) = csv_aggregation_intent(text)? {
+        return Ok(Some(intent));
+    }
+    if let Some(intent) = csv_chart_intent(text)? {
+        return Ok(Some(intent));
+    }
+    if let Some(intent) = attached_document_intent(text)? {
+        return Ok(Some(intent));
+    }
+    if let Some(intent) = attached_analysis_intent(text)? {
+        return Ok(Some(intent));
+    }
+    if let Some(instruction) = image_instruction(text) {
+        return Ok(Some(Intent::ProduceImage {
+            operation: instruction.operation,
+        }));
+    }
     let header = document_header(text);
     if let Some(intent) = calculation_sequence_intent(text, header)? {
         return Ok(Some(intent));
@@ -4236,12 +5476,25 @@ fn local_first_topic_span(text: &str) -> Result<Option<SourceSpan>> {
         .get(1)
         .expect("plain topic grammar has one capture");
     let topic = matched.as_str().trim();
-    let folded = topic.to_ascii_lowercase();
     if text.chars().any(char::is_control)
         || !bounded_web_topic(topic)
         || !regex(r"^[\p{Han}\p{Hiragana}\p{Katakana}A-Za-zー・]{1,48}$")?.is_match(topic)
         || (topic.is_ascii() && !(2..=24).contains(&topic.len()))
-        || singular_previous_subject(topic)
+        || nonpublic_web_topic(topic)
+        || ["の標高", "について", "教えて"]
+            .into_iter()
+            .any(|marker| topic.contains(marker))
+    {
+        return Ok(None);
+    }
+    let start = text.len() - text.trim_start().len() + matched.start() + matched.as_str().len()
+        - matched.as_str().trim_start().len();
+    Ok(source_span_at(text, start, start + topic.len()))
+}
+
+fn nonpublic_web_topic(topic: &str) -> bool {
+    let folded = topic.to_ascii_lowercase();
+    singular_previous_subject(topic)
         || unresolved_relation_subject(topic)
         || [
             "私",
@@ -4296,9 +5549,6 @@ fn local_first_topic_span(text: &str) -> Result<Option<SourceSpan>> {
             "を実行",
             "を送信",
             "を保存",
-            "の標高",
-            "について",
-            "教えて",
         ]
         .into_iter()
         .any(|marker| topic.contains(marker))
@@ -4325,12 +5575,6 @@ fn local_first_topic_span(text: &str) -> Result<Option<SourceSpan>> {
         || WEB_FRESHNESS_PROPERTIES
             .iter()
             .any(|property| topic.contains(property))
-    {
-        return Ok(None);
-    }
-    let start = text.len() - text.trim_start().len() + matched.start() + matched.as_str().len()
-        - matched.as_str().trim_start().len();
-    Ok(source_span_at(text, start, start + topic.len()))
 }
 
 fn verified_local_first_topic_seal(
@@ -4594,6 +5838,106 @@ pub(crate) fn is_previous_document_text_replacement_version(version: &str) -> bo
 pub(crate) fn is_previous_document_text_replacement(text: &str) -> bool {
     let text = text.trim_start();
     text.starts_with("前回の文章の") || text.starts_with("直前の文章の")
+}
+
+fn branch_text_input_error() -> Error {
+    failure(
+        "BRANCH_TEXT_SOURCE_MISMATCH",
+        "分岐元の回答を使う条件を、今回の発話と照合できません。",
+    )
+}
+
+fn check_branch_text_scope(request: &RequestEnvelope) -> Result<()> {
+    if request.context_ref.is_some() || !request.attachments.is_empty() {
+        return Err(failure(
+            "BRANCH_TEXT_CONTEXT_CONFLICT",
+            "分岐元の回答を使う場合は、別の参照先や発話の添付指定を解除してください。",
+        ));
+    }
+    Ok(())
+}
+
+fn branch_text_request(text: &str) -> Result<Option<(Intent, BTreeMap<String, Vec<SourceSpan>>)>> {
+    let trimmed = text.trim_start();
+    if !trimmed.starts_with("分岐元の") {
+        return Ok(None);
+    }
+    let body = terminal_trim(trimmed);
+    let offset = text.len() - trimmed.len();
+    let span = |value: regex::Match<'_>| {
+        source_span_at(text, offset + value.start(), offset + value.end())
+            .ok_or_else(branch_text_input_error)
+    };
+    if let Some(captures) = regex(
+        r"\A分岐元の(?:結果|回答|比較|説明)(?:を)?(?P<limit>(?P<count>[1-8])行(?P<at_most>以内)?)(?:で)?要約(?:してください|して|せよ)\z",
+    )?
+    .captures(body)
+    {
+        let limit = summary_line_limit(&captures["count"], captures.name("at_most").is_some());
+        let literal = span(captures.name("limit").expect("line limit captured"))?;
+        return Ok(Some((
+            Intent::SummarizeBranchSource { limit },
+            BTreeMap::from([("/SummarizeBranchSource/limit".into(), vec![literal])]),
+        )));
+    }
+    let Some(captures) = regex(
+        r#"\A分岐元の(?:回答|文章)の(?P<old_open>[「『"])(?P<old>.+?)(?P<old_close>[」』"])を(?P<new_open>[「『"])(?P<new>.+?)(?P<new_close>[」』"])に(?:置き換えて|置換して)(?:ください)?\z"#,
+    )?
+    .captures(body)
+    else {
+        return Ok(None);
+    };
+    let paired = |open, close| matches!((open, close), ("「", "」") | ("『", "』") | ("\"", "\""));
+    if !paired(&captures["old_open"], &captures["old_close"])
+        || !paired(&captures["new_open"], &captures["new_close"])
+        || captures["old"].chars().any(char::is_control)
+        || captures["new"].chars().any(char::is_control)
+    {
+        return Err(branch_text_input_error());
+    }
+    let old = span(captures.name("old").expect("old text captured"))?;
+    let new = span(captures.name("new").expect("new text captured"))?;
+    Ok(Some((
+        Intent::ReplaceBranchSource {
+            old: old.text.clone(),
+            new: new.text.clone(),
+        },
+        BTreeMap::from([
+            ("/ReplaceBranchSource/old".into(), vec![old]),
+            ("/ReplaceBranchSource/new".into(), vec![new]),
+        ]),
+    )))
+}
+
+pub(crate) fn verify_branch_text_input(bundle: &InputBundle) -> Result<()> {
+    let request = &bundle.request;
+    check_branch_text_scope(request)?;
+    validate_user_seal_request(request, None)?;
+    let meaning = &bundle.meaning;
+    if matches!(request.locale.as_str(), "ja" | "ja-JP")
+        && let Some((intent, roles)) = branch_text_request(&request.text)?
+        && meaning.parser_version == BRANCH_TEXT_PARSER_VERSION
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.context_result_ref.is_none()
+        && meaning.unresolved.is_empty()
+        && meaning.intent == intent
+        && meaning.source_roles == roles
+        && matches!(meaning.spans.as_slice(), [span]
+            if span.start == 0 && span.end == request.text.len() && span.text == request.text)
+        && bundle.raw_sha256 == digest(request.text.as_bytes())
+        && bundle.context_sha256 == identity(&None::<&ResultRecord>)?
+        && bundle.fingerprint
+            == identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                BRANCH_TEXT_PARSER_VERSION,
+            ))?
+        && bundle.semantic_signature == identity(meaning)?
+    {
+        return Ok(());
+    }
+    Err(branch_text_input_error())
 }
 
 fn previous_text_replacement_intent(text: &str) -> Result<Option<Intent>> {
@@ -5131,6 +6475,1116 @@ pub(crate) fn verified_plain_rule_source(bundle: &InputBundle) -> Result<bool> {
         || source_role_spans(&bundle.request.text, intent)? == bundle.meaning.source_roles)
 }
 
+fn csv_chart_intent(text: &str) -> Result<Option<Intent>> {
+    let (head, body) = text.split_once('\n').unwrap_or((text, ""));
+    let trimmed = head.trim();
+    let offset = head.len() - head.trim_start().len();
+    let source = |part: regex::Match<'_>| {
+        source_span_at(text, offset + part.start(), offset + part.end())
+            .ok_or_else(csv_chart_input_error)
+    };
+    if let Some(fields) = regex(
+        r"\A(?:次の)?CSVの「(?P<group>[^「」\r\n]{1,128})」ごとの「(?P<value>[^「」\r\n]{1,128})」の平均を(?:(?:棒)?グラフに|可視化)(?:して|してください)[:：]\z",
+    )?
+    .captures(trimmed)
+    {
+        let Some(document) = source_span_at(text, text.len() - body.len(), text.len())
+            .filter(|span| !span.text.trim().is_empty())
+        else {
+            return Ok(Some(Intent::Unknown {
+                reason: "見出しの次の行に、列名とデータ行があるCSVを貼り付けてください。".into(),
+            }));
+        };
+        return Ok(Some(Intent::CreateCsvChart {
+            document,
+            group_column: source(fields.name("group").expect("group capture"))?,
+            value_column: source(fields.name("value").expect("value capture"))?,
+        }));
+    }
+    if !text.contains(['\r', '\n'])
+        && let Some(fields) = regex(
+            r"\A(?:前回の|前の)隔離実行で(?:生成した|作った)「(?P<artifact>[A-Za-z0-9][A-Za-z0-9._-]{0,59}\.(?i:csv))」を「(?P<group>[^「」\r\n]{1,128})」ごとに「(?P<value>[^「」\r\n]{1,128})」の平均を(?:(?:棒)?グラフに|可視化)(?:して|してください)\z",
+        )?
+        .captures(terminal_trim(trimmed))
+    {
+        return Ok(Some(Intent::CreateCsvChartFromExecution {
+            artifact_name: source(fields.name("artifact").expect("artifact capture"))?,
+            group_column: source(fields.name("group").expect("group capture"))?,
+            value_column: source(fields.name("value").expect("value capture"))?,
+        }));
+    }
+    if !text.contains(['\r', '\n'])
+        && let Some(fields) = regex(concat!(
+            r"\A(?:前回の|前の|直前の|さっきの)隔離実行で(?:生成した|作った|出力した)",
+            r"「(?P<artifact>[A-Za-z0-9][A-Za-z0-9._-]{0,59}\.(?i:csv))」(?:を|の)[、,， \t　]*",
+            r"「(?P<group>[^「」\r\n]{1,128})」(?:ごとに|ごとの|別に|別の)[、,， \t　]*",
+            r"「(?P<value>[^「」\r\n]{1,128})」(?:の値)?を",
+            r"(?:(?:棒)?グラフに|可視化)(?:して|してください)\z"
+        ))?
+        .captures(terminal_trim(trimmed))
+    {
+        return Ok(Some(Intent::CreateCsvChartFromExecutionValues {
+            artifact_name: source(fields.name("artifact").expect("artifact capture"))?,
+            group_column: source(fields.name("group").expect("group capture"))?,
+            value_column: source(fields.name("value").expect("value capture"))?,
+        }));
+    }
+    if !text.contains(['\r', '\n'])
+        && let Some(fields) = regex(
+            r"\A添付(?:した|の)CSV(?:ファイル)?(?:を(?:まとめて|合わせて)?|の)[、, ]*「(?P<group>[^「」\r\n]{1,128})」(?:ごとに|ごとの|別に)[、, ]*「(?P<value>[^「」\r\n]{1,128})」の平均を(?:(?:棒)?グラフに|可視化)(?:して|してください)\z",
+        )?
+        .captures(terminal_trim(trimmed))
+    {
+        return Ok(Some(Intent::CreateCsvChartFromAttachments {
+            group_column: source(fields.name("group").expect("group capture"))?,
+            value_column: source(fields.name("value").expect("value capture"))?,
+        }));
+    }
+    if !text.contains(['\r', '\n'])
+        && let Some(fields) = regex(
+            r"\A(?:同じCSVで[、,]?)?「(?P<column>[^「」\r\n]{1,128})」が「(?P<equals>[^「」\r\n]{0,256})」の行(?:に絞って|だけで)グラフを更新(?:して|してください)\z",
+        )?
+        .captures(terminal_trim(trimmed))
+    {
+        let equals = fields.name("equals").expect("filter value capture");
+        // The empty decoded cell is a valid exact-match filter.
+        let equals = SourceSpan {
+            start: offset + equals.start(),
+            end: offset + equals.end(),
+            text: equals.as_str().into(),
+        };
+        return Ok(Some(Intent::FilterPreviousCsvChart {
+            column: source(fields.name("column").expect("column capture"))?,
+            equals,
+        }));
+    }
+    Ok(None)
+}
+
+fn csv_chart_source_roles(
+    intent: &Intent,
+) -> Option<(&'static str, BTreeMap<String, Vec<SourceSpan>>)> {
+    let (version, fields): (_, &[(&str, &SourceSpan)]) = match intent {
+        Intent::CreateCsvChart {
+            document,
+            group_column,
+            value_column,
+        } => (
+            CSV_CHART_PARSER_VERSION,
+            &[
+                ("/CreateCsvChart/document", document),
+                ("/CreateCsvChart/group_column", group_column),
+                ("/CreateCsvChart/value_column", value_column),
+            ],
+        ),
+        Intent::CreateCsvChartFromExecution {
+            artifact_name,
+            group_column,
+            value_column,
+        } => (
+            EXECUTION_CSV_CHART_PARSER_VERSION,
+            &[
+                ("/CreateCsvChartFromExecution/artifact_name", artifact_name),
+                ("/CreateCsvChartFromExecution/group_column", group_column),
+                ("/CreateCsvChartFromExecution/value_column", value_column),
+            ],
+        ),
+        Intent::CreateCsvChartFromExecutionValues {
+            artifact_name,
+            group_column,
+            value_column,
+        } => (
+            EXECUTION_CSV_VALUES_CHART_PARSER_VERSION,
+            &[
+                (
+                    "/CreateCsvChartFromExecutionValues/artifact_name",
+                    artifact_name,
+                ),
+                (
+                    "/CreateCsvChartFromExecutionValues/group_column",
+                    group_column,
+                ),
+                (
+                    "/CreateCsvChartFromExecutionValues/value_column",
+                    value_column,
+                ),
+            ],
+        ),
+        Intent::CreateCsvChartFromAttachments {
+            group_column,
+            value_column,
+        } => (
+            ATTACHED_CSV_CHART_PARSER_VERSION,
+            &[
+                ("/CreateCsvChartFromAttachments/group_column", group_column),
+                ("/CreateCsvChartFromAttachments/value_column", value_column),
+            ],
+        ),
+        Intent::FilterPreviousCsvChart { column, equals } => (
+            CSV_CHART_FILTER_PARSER_VERSION,
+            &[
+                ("/FilterPreviousCsvChart/column", column),
+                ("/FilterPreviousCsvChart/equals", equals),
+            ],
+        ),
+        _ => return None,
+    };
+    let roles = fields
+        .iter()
+        .filter(|(_, span)| !span.text.is_empty())
+        .map(|(path, span)| ((*path).into(), vec![(*span).clone()]))
+        .collect();
+    Some((version, roles))
+}
+
+fn csv_chart_input_error() -> Error {
+    failure(
+        "CSV_CHART_SOURCE_MISMATCH",
+        "集計・絞り込みの条件を元の入力と照合できません。",
+    )
+}
+
+pub(crate) fn verify_csv_chart_input(bundle: &InputBundle) -> Result<()> {
+    let meaning = &bundle.meaning;
+    validate_request_attachments(&bundle.request)?;
+    if !bundle.request.attachments.is_empty()
+        && !matches!(meaning.intent, Intent::CreateCsvChartFromAttachments { .. })
+    {
+        return Err(csv_chart_input_error());
+    }
+    if bundle
+        .request
+        .attachments
+        .iter()
+        .any(|file| !RequestAttachment::is_csv_name(&file.name))
+    {
+        return Err(failure(
+            "ATTACHMENT_FORMAT",
+            "この集計にはCSVファイルを添付してください。",
+        ));
+    }
+    if let Some((version, roles)) = csv_chart_source_roles(&meaning.intent)
+        && meaning.parser_version == version
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.unresolved.is_empty()
+        && meaning.source_roles == roles
+        && csv_chart_intent(&bundle.request.text)?.as_ref() == Some(&meaning.intent)
+    {
+        return Ok(());
+    }
+    Err(csv_chart_input_error())
+}
+
+pub(crate) fn is_attached_document_intent(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::SummarizeAttachedDocuments
+            | Intent::FindInAttachedDocuments { .. }
+            | Intent::FindInPreviousAttachedDocuments { .. }
+            | Intent::ReviewAttachedDocumentFields { .. }
+    )
+}
+
+pub(crate) fn is_previous_attached_document_intent(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::FindInPreviousAttachedDocuments { .. }
+            | Intent::ReviewAttachedDocumentFields { previous: true, .. }
+    )
+}
+
+pub(crate) fn is_purpose_document_request(text: &str) -> bool {
+    let text = terminal_trim(text);
+    matches!(
+        text.strip_suffix("ください").unwrap_or(text),
+        "用途の資料を確認して" | "設定した資料を確認して"
+    )
+}
+
+fn purpose_document_intent(request: &RequestEnvelope) -> Result<Intent> {
+    if !request.attachments.is_empty() {
+        return Err(failure(
+            "PURPOSE_ATTACHMENT_CONFLICT",
+            "用途に保存した資料を確認する場合は、発話に添付した資料を外してください。",
+        ));
+    }
+    let binding = request
+        .purpose
+        .as_ref()
+        .and_then(|purpose| purpose.binding.as_ref())
+        .ok_or_else(|| {
+            failure(
+                "PURPOSE_SELECTION_REQUIRED",
+                "確認する資料の用途を選んでください。",
+            )
+        })?;
+    match &binding.task {
+        PurposeTask::Summarize => Ok(Intent::SummarizeAttachedDocuments),
+        PurposeTask::Find { query }
+            if !query.trim().is_empty()
+                && query.trim() == query
+                && query.len() <= 512
+                && !query.chars().any(char::is_control) =>
+        {
+            Ok(Intent::FindInAttachedDocuments {
+                // The operation's keyword lives in the authenticated purpose
+                // binding. This empty source span makes no claim about the
+                // raw request, which contains only the trigger.
+                query: SourceSpan {
+                    start: 0,
+                    end: 0,
+                    text: String::new(),
+                },
+            })
+        }
+        _ => Err(attached_document_input_error()),
+    }
+}
+
+fn attached_document_intent(text: &str) -> Result<Option<Intent>> {
+    let text_without_leading_space = text.trim_start();
+    let body = terminal_trim(text_without_leading_space);
+    if body.contains(['\r', '\n']) {
+        return Ok(None);
+    }
+    if let Some(intent) = review_attached_document_intent(text)? {
+        return Ok(Some(intent));
+    }
+    if regex(
+        r"\A添付(?:した|の)?(?:(?:資料|文書)(?:を|の)[、, ]*(?:出典付きで|根拠付きで)?(?:要約して|要点をまとめて)|(?:画像|写真)の(?:文字|テキスト)を(?:読んで|読み取って|抜き出して))(?:ください)?\z",
+    )?
+    .is_match(body)
+    {
+        return Ok(Some(Intent::SummarizeAttachedDocuments));
+    }
+    let Some(fields) = regex(
+        r"\A(?P<previous>同じ|前の|前回の|前に)?添付(?:した|の)?(?:資料|文書|画像|写真)(?:から|で)[、, ]*「(?P<query>[^「」\r\n]{1,128})」(?:が書かれた箇所を|を含む(?:行|箇所)を|を)(?:出典付きで)?(?:探|抜き出)(?:して|してください)\z",
+    )?
+    .captures(body)
+    else {
+        return Ok(None);
+    };
+    let matched = fields.name("query").expect("query capture");
+    if matched.as_str().trim().is_empty() || matched.as_str().chars().any(char::is_control) {
+        return Err(attached_document_input_error());
+    }
+    let offset = text.len() - text_without_leading_space.len();
+    let query = source_span_at(text, offset + matched.start(), offset + matched.end())
+        .ok_or_else(attached_document_input_error)?;
+    Ok(Some(if fields.name("previous").is_some() {
+        Intent::FindInPreviousAttachedDocuments { query }
+    } else {
+        Intent::FindInAttachedDocuments { query }
+    }))
+}
+
+const DOCUMENT_FIELD_SEPARATORS: &[&str] =
+    &["および", "及び", "ならびに", "、", "，", ",", "・", "と"];
+
+fn next_document_field_separator(text: &str) -> Option<usize> {
+    text.char_indices().find_map(|(start, _)| {
+        let tail = &text[start..];
+        let separator = DOCUMENT_FIELD_SEPARATORS
+            .iter()
+            .copied()
+            .find(|separator| tail.starts_with(*separator))?;
+        if separator == "と" {
+            let following = &tail[separator.len()..];
+            let hiragana = |character: char| ('\u{3041}'..='\u{309f}').contains(&character);
+            if following.starts_with('の')
+                || following.starts_with("いう")
+                || (text[..start].chars().next_back().is_some_and(hiragana)
+                    && following.chars().next().is_some_and(hiragana))
+            {
+                return None;
+            }
+        }
+        Some(start)
+    })
+}
+
+fn review_document_fields(raw: &str, mut text: &str) -> Option<Vec<SourceSpan>> {
+    let mut fields: Vec<SourceSpan> = Vec::new();
+    loop {
+        text = text.trim_start();
+        let (value, remainder) = if let Some(quoted) = text.strip_prefix('「') {
+            quoted.split_once('」')?
+        } else if let Some(end) = next_document_field_separator(text) {
+            text.split_at(end)
+        } else {
+            (text, "")
+        };
+        let value = value.trim();
+        if value.is_empty()
+            || value.chars().count() > 128
+            || value.chars().any(char::is_control)
+            || value.contains([
+                '「', '」', '『', '』', '"', '。', '！', '!', '？', '?', ';', '；',
+            ])
+            || [
+                "送信して",
+                "保存して",
+                "実行して",
+                "公開して",
+                "削除して",
+                "調べて",
+                "送って",
+            ]
+            .into_iter()
+            .any(|command| value.contains(command))
+            || fields.len() >= 8
+            || fields.iter().any(|field| field.text == value)
+        {
+            return None;
+        }
+        let start = value.as_ptr() as usize - raw.as_ptr() as usize;
+        fields.push(source_span_at(raw, start, start + value.len())?);
+        let remainder = remainder.trim_start();
+        if remainder.is_empty() {
+            return Some(fields);
+        }
+        text = DOCUMENT_FIELD_SEPARATORS
+            .iter()
+            .find_map(|separator| remainder.strip_prefix(*separator))?;
+    }
+}
+
+fn review_attached_document_intent(text: &str) -> Result<Option<Intent>> {
+    let body = terminal_trim(text);
+    if !body.contains("添付") || body.len() > 4096 || body.contains(['\r', '\n']) {
+        return Ok(None);
+    }
+    let source = regex(concat!(
+        r"\A(?P<previous>同じ|前回の|前の|前に)?",
+        r"(?:添付(?:した|された|の)?(?P<count_after>(?:2|２|二)(?:つ|件|本)の)?",
+        r"|(?P<count_before>(?:2|２|二)(?:つ|件|本)の)添付(?:した|された|の)?)",
+        r"(?:資料|文書|ファイル)[ \t　]*(?P<task>.+)\z"
+    ))?;
+    let Some(parts) = source.captures(body) else {
+        return Ok(None);
+    };
+    let previous = parts.name("previous").is_some();
+    let task = parts.name("task").expect("document review task").as_str();
+    let automatic = regex(concat!(
+        r"\A(?:の(?:違い|相違点|差分)を[ \t　]*(?:根拠付きで|出典付きで)?(?:比較して|示して|まとめて)(?:ください)?",
+        r"|を[ \t　]*(?:根拠付きで|出典付きで)?比較して(?:ください)?",
+        r"(?:[、,，][ \t　]*(?:違い|相違点|差分)を[ \t　]*(?:根拠付きで|出典付きで)?(?:示して|説明して|まとめて|教えて)(?:ください)?)?)\z"
+    ))?;
+    if automatic.is_match(task) {
+        return Ok(Some(Intent::ReviewAttachedDocumentFields {
+            operation: DocumentReviewOperation::Compare,
+            fields: Vec::new(),
+            previous,
+        }));
+    }
+    let compare = regex(concat!(
+        r"\A(?:を|で|の)[、,， \t　]*(?P<fields>.+?)(?:の(?:違い|相違点|差分)を|の観点で|を)[、,， \t　]*",
+        r"(?:根拠付きで|出典付きで)?比較して(?:ください)?\z"
+    ))?;
+    let summarize = regex(concat!(
+        r"\A(?:を|の)[、,， \t　]*(?P<fields>.+?)(?:を中心に|に絞って|を軸に|の観点で|が分かるように)[、,， \t　]*",
+        r"(?:根拠付きで|出典付きで)?(?:要約して|要点をまとめて|まとめて)(?:ください)?\z"
+    ))?;
+    let explicit_pair = parts.name("count_after").is_some() || parts.name("count_before").is_some();
+    let parsed = compare
+        .captures(task)
+        .map(|parts| (DocumentReviewOperation::Compare, parts))
+        .or_else(|| {
+            (!explicit_pair)
+                .then(|| summarize.captures(task))
+                .flatten()
+                .map(|parts| (DocumentReviewOperation::Summarize, parts))
+        });
+    let Some((operation, parts)) = parsed else {
+        return Ok(None);
+    };
+    let label_text = parts
+        .name("fields")
+        .expect("document review fields")
+        .as_str();
+    Ok(review_document_fields(text, label_text).map(|fields| {
+        Intent::ReviewAttachedDocumentFields {
+            operation,
+            fields,
+            previous,
+        }
+    }))
+}
+
+fn attached_document_roles(intent: &Intent) -> Option<BTreeMap<String, Vec<SourceSpan>>> {
+    let (role, query) = match intent {
+        Intent::SummarizeAttachedDocuments => return Some(BTreeMap::new()),
+        Intent::FindInAttachedDocuments { query } => ("/FindInAttachedDocuments/query", query),
+        Intent::FindInPreviousAttachedDocuments { query } => {
+            ("/FindInPreviousAttachedDocuments/query", query)
+        }
+        Intent::ReviewAttachedDocumentFields { fields, .. } => {
+            return Some(if fields.is_empty() {
+                BTreeMap::new()
+            } else {
+                BTreeMap::from([(
+                    "/ReviewAttachedDocumentFields/fields".into(),
+                    fields.clone(),
+                )])
+            });
+        }
+        _ => return None,
+    };
+    Some(BTreeMap::from([(role.into(), vec![query.clone()])]))
+}
+
+fn attached_document_input_error() -> Error {
+    failure(
+        "ATTACHED_DOCUMENT_SOURCE_MISMATCH",
+        "資料を読む条件を元の発話と照合できません。",
+    )
+}
+
+pub(crate) fn verify_attached_document_input(bundle: &InputBundle) -> Result<()> {
+    validate_request_attachments(&bundle.request)?;
+    let meaning = &bundle.meaning;
+    if let Intent::ReviewAttachedDocumentFields { previous, .. } = &meaning.intent {
+        let request = &bundle.request;
+        let text = &request.text;
+        let has_context = bundle.context_sha256 != identity(&None::<&ResultRecord>)?;
+        let scope_matches = if *previous {
+            request.attachments.is_empty()
+                && has_context
+                && meaning
+                    .context_result_ref
+                    .as_ref()
+                    .is_some_and(|reference| !reference.is_empty())
+                && request
+                    .context_ref
+                    .as_ref()
+                    .is_none_or(|reference| Some(reference) == meaning.context_result_ref.as_ref())
+        } else {
+            !request.attachments.is_empty()
+                && !has_context
+                && meaning.context_result_ref.is_none()
+                && request.context_ref.is_none()
+        };
+        let version = DOCUMENT_REVIEW_PARSER_VERSION;
+        if scope_matches
+            && meaning.parser_version == version
+            && meaning.source_kind == "USER_REQUEST"
+            && meaning.unresolved.is_empty()
+            && matches!(request.locale.as_str(), "ja" | "ja-JP")
+            && text.len() <= request.budget.max_input_bytes
+            && matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+            && bundle.raw_sha256 == digest(text.as_bytes())
+            && bundle.semantic_signature == identity(meaning)?
+            && bundle.fingerprint
+                == identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
+            && attached_document_roles(&meaning.intent).as_ref() == Some(&meaning.source_roles)
+            && review_attached_document_intent(text)?.as_ref() == Some(&meaning.intent)
+        {
+            return Ok(());
+        }
+        return Err(attached_document_input_error());
+    }
+    if meaning.parser_version == PURPOSE_DOCUMENT_PARSER_VERSION {
+        return if is_purpose_document_request(&bundle.request.text)
+            && matches!(bundle.request.locale.as_str(), "ja" | "ja-JP")
+            && meaning.source_kind == "USER_REQUEST"
+            && meaning.unresolved.is_empty()
+            && meaning.source_roles.is_empty()
+            && purpose_document_intent(&bundle.request)? == meaning.intent
+        {
+            Ok(())
+        } else {
+            Err(attached_document_input_error())
+        };
+    }
+    if matches!(
+        meaning.intent,
+        Intent::FindInPreviousAttachedDocuments { .. }
+    ) && !bundle.request.attachments.is_empty()
+    {
+        return Err(attached_document_input_error());
+    }
+    if let Some(roles) = attached_document_roles(&meaning.intent)
+        && meaning.parser_version == ATTACHED_DOCUMENT_PARSER_VERSION
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.unresolved.is_empty()
+        && meaning.source_roles == roles
+        && attached_document_intent(&bundle.request.text)?.as_ref() == Some(&meaning.intent)
+    {
+        return Ok(());
+    }
+    Err(attached_document_input_error())
+}
+
+fn attached_analysis_intent(text: &str) -> Result<Option<Intent>> {
+    let trimmed = text.trim_start();
+    let body = terminal_trim(trimmed);
+    if body.contains(['\r', '\n']) {
+        return Ok(None);
+    }
+    let Some(fields) = regex(
+        r"\A添付(?:した|の)?(?:資料|文書)の「(?P<label>[^「」\r\n]{1,128})」(?:で|を使って|を読み取って)[、, ]*添付(?:した|の)?(?P<media>CSV(?:ファイル)?|(?i:Excel|XLSX)(?:ファイル)?|表)(?:の「(?P<sheet>[^「」\r\n]{1,128})」シート)?の「(?P<filter>[^「」\r\n]{1,128})」(?:を絞り|を絞って)[、, ]*「(?P<value>[^「」\r\n]{1,128})」を合計して(?:ください)?\z",
+    )?
+    .captures(body)
+    else {
+        return Ok(None);
+    };
+    let offset = text.len() - trimmed.len();
+    let span = |field: &str| {
+        let matched = fields.name(field).expect("analysis capture");
+        if matched.as_str().trim().is_empty() || matched.as_str().chars().any(char::is_control) {
+            return Err(attached_analysis_input_error());
+        }
+        source_span_at(text, offset + matched.start(), offset + matched.end())
+            .ok_or_else(attached_analysis_input_error)
+    };
+    let table_media = match fields.name("media").expect("table capture").as_str() {
+        "CSV" | "CSVファイル" => AttachmentTableMedia::Csv,
+        "表" => AttachmentTableMedia::Mixed,
+        _ => AttachmentTableMedia::Xlsx,
+    };
+    let sheet = fields.name("sheet").map(|_| span("sheet")).transpose()?;
+    if table_media.is_csv() && sheet.is_some() {
+        return Err(attached_analysis_input_error());
+    }
+    Ok(Some(Intent::AnalyzeAttachments {
+        label: span("label")?,
+        filter_column: span("filter")?,
+        value_column: span("value")?,
+        table_media,
+        sheet,
+    }))
+}
+
+fn attached_analysis_roles(intent: &Intent) -> Option<BTreeMap<String, Vec<SourceSpan>>> {
+    let Intent::AnalyzeAttachments {
+        label,
+        filter_column,
+        value_column,
+        sheet,
+        ..
+    } = intent
+    else {
+        return None;
+    };
+    let mut roles = BTreeMap::from([
+        ("/AnalyzeAttachments/label".into(), vec![label.clone()]),
+        (
+            "/AnalyzeAttachments/filter_column".into(),
+            vec![filter_column.clone()],
+        ),
+        (
+            "/AnalyzeAttachments/value_column".into(),
+            vec![value_column.clone()],
+        ),
+    ]);
+    if let Some(sheet) = sheet {
+        roles.insert("/AnalyzeAttachments/sheet".into(), vec![sheet.clone()]);
+    }
+    Some(roles)
+}
+
+fn analysis_parser_version(table_media: &AttachmentTableMedia) -> &'static str {
+    if table_media.is_csv() {
+        ATTACHED_ANALYSIS_PARSER_VERSION
+    } else {
+        ATTACHED_TABLE_PARSER_VERSION
+    }
+}
+
+fn attached_analysis_input_error() -> Error {
+    failure(
+        "ATTACHED_ANALYSIS_SOURCE_MISMATCH",
+        "資料の項目とCSVの列を元の依頼と照合できません。",
+    )
+}
+
+pub(crate) fn verify_attached_analysis_input(bundle: &InputBundle) -> Result<()> {
+    validate_request_attachments(&bundle.request)?;
+    let meaning = &bundle.meaning;
+    if let Some(roles) = attached_analysis_roles(&meaning.intent)
+        && let Intent::AnalyzeAttachments { table_media, .. } = &meaning.intent
+        && meaning.parser_version == analysis_parser_version(table_media)
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.unresolved.is_empty()
+        && meaning.source_roles == roles
+        && attached_analysis_intent(&bundle.request.text)?.as_ref() == Some(&meaning.intent)
+    {
+        return Ok(());
+    }
+    Err(attached_analysis_input_error())
+}
+
+struct ImageInstruction {
+    operation: ImageOperation,
+    roles: BTreeMap<String, Vec<SourceSpan>>,
+}
+
+const IMAGE_SIZE: &str = r"(?:幅|横幅?) *(?P<width>[0-9０-９]{1,9}) *(?:px|ピクセル)? *(?:[、,，×xX] *| +)(?:高さ|縦幅?) *(?P<height>[0-9０-９]{1,9}) *(?:px|ピクセル)?";
+const IMAGE_POSITION: &str = r"(?:左上(?:の?座標)?|座標) *[(（] *(?P<x>[0-9０-９]{1,9}) *[,，、] *(?P<y>[0-9０-９]{1,9}) *[)）] *(?:から|に|を左上として) *[、,，]? *";
+const IMAGE_COLOR: &str = r"(?:#[0-9A-Fa-f]{6}|#[0-9A-Fa-f]{3}|(?:赤|青|白|黒)(?:い|色)?|黄(?:色い?)?|緑色?|水色|灰色|グレー|橙色?|オレンジ色?|茶色い?|紫色?|ピンク色?)";
+const MAX_IMAGE_PLACEMENTS: usize = 16;
+
+fn image_color(color: &str) -> Option<[u8; 3]> {
+    if let Some(hex) = color.strip_prefix('#') {
+        let packed = u32::from_str_radix(hex, 16).ok()?;
+        return match hex.len() {
+            3 => Some([
+                ((packed >> 8) as u8 & 0xf) * 17,
+                ((packed >> 4) as u8 & 0xf) * 17,
+                (packed as u8 & 0xf) * 17,
+            ]),
+            6 => Some([(packed >> 16) as u8, (packed >> 8) as u8, packed as u8]),
+            _ => None,
+        };
+    }
+    Some(match color.trim_end_matches(['い', '色']) {
+        "白" => [255, 255, 255],
+        "黒" => [0, 0, 0],
+        "赤" => [255, 0, 0],
+        "青" => [0, 0, 255],
+        "黄" => [255, 255, 0],
+        "緑" => [0, 128, 0],
+        "水" => [173, 216, 230],
+        "灰" | "グレー" => [128, 128, 128],
+        "橙" | "オレンジ" => [255, 165, 0],
+        "茶" => [165, 42, 42],
+        "紫" => [128, 0, 128],
+        "ピンク" => [255, 192, 203],
+        _ => return None,
+    })
+}
+
+fn image_number(fields: &regex::Captures<'_>, name: &str) -> Option<u32> {
+    fields
+        .name(name)?
+        .as_str()
+        .nfkc()
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+fn image_rectangle(fields: &regex::Captures<'_>) -> Option<ImageRectangle> {
+    Some(ImageRectangle {
+        x: image_number(fields, "x")?,
+        y: image_number(fields, "y")?,
+        width: image_number(fields, "width")?,
+        height: image_number(fields, "height")?,
+    })
+}
+
+fn image_source_span(matched: regex::Match<'_>, offset: usize) -> SourceSpan {
+    SourceSpan {
+        start: offset + matched.start(),
+        end: offset + matched.end(),
+        text: matched.as_str().to_owned(),
+    }
+}
+
+fn image_instruction(text: &str) -> Option<ImageInstruction> {
+    static FILL: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"\A(?:添付(?:した|の)?(?:画像|写真)|この(?:添付)?(?:画像|写真))の *(?P<region>{IMAGE_POSITION}{IMAGE_SIZE}の(?:範囲|領域|長方形|四角形))を *(?P<color>{IMAGE_COLOR})(?:で|に)(?:塗りつぶして|塗って|変えて|変更して)(?:ください)?(?:[。.,、，] *(?P<preserve>(?:ほか|他|それ以外|指定範囲の外)(?:の(?:部分|画素))?は(?:そのまま(?:にして(?:ください)?)?|変えないで(?:ください)?|変更しないで(?:ください)?)))?\z",
+        ))
+        .expect("image fill grammar")
+    });
+    static CANVAS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"\A(?:(?:新規|新しい)画像(?:は|を)?[：:、,， ]+)?(?P<canvas>{IMAGE_SIZE})(?:の *(?P<background>{IMAGE_COLOR})(?:背景|キャンバス)(?:に|で|へ)|[、,，。] *背景(?:色)?(?:は|を) *(?P<named_background>{IMAGE_COLOR})(?:にして)?[、,，。]) *[、,，]? *",
+        ))
+        .expect("image canvas grammar")
+    });
+    static PLACEMENT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"\A{IMAGE_POSITION}{IMAGE_SIZE}の *(?P<color>{IMAGE_COLOR})の? *(?P<shape>三角形|三角|長方形|四角形|四角|矩形|正方形|円形|円|丸)",
+        ))
+        .expect("image placement grammar")
+    });
+    static JOIN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\A *(?:と[、,，]?|、(?:そして)?|[,，]) *")
+            .expect("image placement join grammar")
+    });
+    static DRAW: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(
+            r"\A *を *(?:順に)?(?:描いて|並べて|置いて|配置して)(?:[、,， ]*(?:画像|図版|図)を(?:作って|生成して))?(?:ください)?\z",
+        )
+        .expect("image draw action grammar")
+    });
+
+    let body = terminal_trim(text);
+    if body.contains(['\r', '\n']) {
+        return None;
+    }
+    let offset = text.len() - text.trim_start().len();
+    if let Some(fields) = FILL.captures(body) {
+        let mut roles = BTreeMap::from([
+            (
+                "/ProduceImage/image_region".into(),
+                vec![image_source_span(fields.name("region")?, offset)],
+            ),
+            (
+                "/ProduceImage/image_color".into(),
+                vec![image_source_span(fields.name("color")?, offset)],
+            ),
+        ]);
+        if let Some(preserve) = fields.name("preserve") {
+            roles.insert(
+                "/ProduceImage/image_preservation".into(),
+                vec![image_source_span(preserve, offset)],
+            );
+        }
+        return Some(ImageInstruction {
+            operation: ImageOperation::Fill {
+                rectangle: image_rectangle(&fields)?,
+                color: image_color(&fields["color"])?,
+            },
+            roles,
+        });
+    }
+    let fields = CANVAS.captures(body)?;
+    let background = fields
+        .name("background")
+        .or_else(|| fields.name("named_background"))?;
+    let mut shapes = Vec::new();
+    let mut placements = Vec::new();
+    let mut cursor = fields.get(0)?.end();
+    loop {
+        let fields = PLACEMENT.captures(&body[cursor..])?;
+        let matched = fields.get(0)?;
+        let shape = match &fields["shape"] {
+            "円形" | "円" | "丸" => ImageShape::Circle,
+            "三角形" | "三角" => ImageShape::Triangle,
+            _ => ImageShape::Rectangle,
+        };
+        let rectangle = image_rectangle(&fields)?;
+        if &fields["shape"] == "正方形" && rectangle.width != rectangle.height {
+            return None;
+        }
+        shapes.push(ImagePlacement {
+            shape,
+            rectangle,
+            color: image_color(&fields["color"])?,
+        });
+        placements.push(image_source_span(matched, offset + cursor));
+        cursor += matched.end();
+        if DRAW.is_match(&body[cursor..]) {
+            break;
+        }
+        if shapes.len() == MAX_IMAGE_PLACEMENTS {
+            return None;
+        }
+        cursor += JOIN.find(&body[cursor..])?.end();
+    }
+    Some(ImageInstruction {
+        operation: ImageOperation::Draw {
+            width: image_number(&fields, "width")?,
+            height: image_number(&fields, "height")?,
+            background: image_color(background.as_str())?,
+            shapes,
+        },
+        roles: BTreeMap::from([
+            (
+                "/ProduceImage/image_canvas".into(),
+                vec![image_source_span(fields.name("canvas")?, offset)],
+            ),
+            (
+                "/ProduceImage/image_background".into(),
+                vec![image_source_span(background, offset)],
+            ),
+            ("/ProduceImage/image_placement".into(), placements),
+        ]),
+    })
+}
+
+fn image_attachments_match(operation: &ImageOperation, attachments: &[RequestAttachment]) -> bool {
+    match operation {
+        ImageOperation::Draw { .. } => attachments.is_empty(),
+        ImageOperation::Fill { .. } => {
+            matches!(attachments, [file] if RequestAttachment::is_image_name(&file.name))
+        }
+    }
+}
+
+fn image_input_error() -> Error {
+    failure(
+        "IMAGE_SOURCE_MISMATCH",
+        "画像の大きさ、図形の配置、または編集範囲を元の依頼と照合できません。",
+    )
+}
+
+pub(crate) fn verify_image_input(bundle: &InputBundle) -> Result<()> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    validate_request_attachments(request)?;
+    if let Intent::ProduceImage { operation } = &meaning.intent
+        && image_attachments_match(operation, &request.attachments)
+        && request.text.len() <= request.budget.max_input_bytes
+        && request
+            .context_ref
+            .as_ref()
+            .is_none_or(|context| Some(context) == meaning.context_result_ref.as_ref())
+        && matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        && meaning.parser_version == IMAGE_PARSER_VERSION
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.unresolved.is_empty()
+        && matches!(meaning.spans.as_slice(), [span] if span.start == 0
+            && span.end == request.text.len() && span.text == request.text)
+        && bundle.raw_sha256 == digest(request.text.as_bytes())
+        && bundle.semantic_signature == identity(meaning)?
+        && bundle.fingerprint
+            == identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                IMAGE_PARSER_VERSION,
+            ))?
+        && image_instruction(&request.text).is_some_and(|instruction| {
+            instruction.operation == *operation && instruction.roles == meaning.source_roles
+        })
+    {
+        return Ok(());
+    }
+    Err(image_input_error())
+}
+
+fn is_speech_request(text: &str) -> Result<bool> {
+    let words = terminal_trim(text);
+    Ok(regex(
+        r"\A(?:前の|前回の|直前の)(?:回答|返答|答え|応答)を(?:WAVにして|音声ファイルにして|音声にして|読み上げて)(?:ください)?\z",
+    )?
+    .is_match(words))
+}
+
+pub(crate) fn verify_speech_input(bundle: &InputBundle) -> Result<()> {
+    let meaning = &bundle.meaning;
+    if matches!(meaning.intent, Intent::SpeakPreviousAnswer)
+        && meaning.parser_version == SPEECH_PARSER_VERSION
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.source_roles.is_empty()
+        && meaning.unresolved.is_empty()
+        && bundle.request.attachments.is_empty()
+        && is_speech_request(&bundle.request.text)?
+    {
+        return Ok(());
+    }
+    Err(failure(
+        "SPEECH_SOURCE_MISMATCH",
+        "元の読み上げ依頼を照合できません。",
+    ))
+}
+
+fn wasm_execution_intent(text: &str) -> Option<Intent> {
+    let (command, document) = text.trim_start().split_once([':', '：'])?;
+    if !matches!(
+        command,
+        "WebAssemblyを隔離実行して" | "WebAssemblyを実行して"
+    ) {
+        return None;
+    }
+    if document.trim().is_empty() {
+        return Some(Intent::Unknown {
+            reason: "WebAssemblyのバイト列をmodule_hexに入れたJSONを指定してください。".into(),
+        });
+    }
+    let document = document
+        .strip_prefix("\r\n")
+        .or_else(|| document.strip_prefix('\n'))
+        .unwrap_or(document);
+    Some(Intent::ExecuteWasm {
+        document: source_span_at(text, text.len() - document.len(), text.len())?,
+    })
+}
+
+fn csv_aggregation_intent(text: &str) -> Result<Option<Intent>> {
+    let trimmed = text.trim_start();
+    let body = terminal_trim(trimmed);
+    if !body.starts_with("添付") || !body.contains("隔離") || body.contains(['\r', '\n']) {
+        return Ok(None);
+    }
+    let grammar = regex(concat!(
+        r"\A添付(?:した|の|された)?CSV(?:ファイル)?(?:を|の)[、,， \t　]*",
+        r"「(?P<group>[^「」\r\n]{1,128})」(?:ごとに|ごとの|別に|別の)[、,， \t　]*",
+        r"(?:(?:行の)?件数|行数|「(?P<value>[^「」\r\n]{1,128})」の(?:合計|総和))を",
+        r"(?:集計する|計算する|求める)(?:WebAssemblyの?)?コードを(?:生成して|作って|書いて)[、,， \t　]*",
+        r"(?:隔離実行して|隔離環境で実行して)(?:ください)?\z"
+    ))?;
+    let Some(parts) = grammar.captures(body) else {
+        return Ok(None);
+    };
+    let span = |matched: regex::Match<'_>| {
+        let value = matched.as_str();
+        if value.trim().is_empty() || value.chars().any(char::is_control) {
+            return None;
+        }
+        captured_source_span(text, text.len() - trimmed.len(), matched)
+    };
+    let Some(group_column) = parts.name("group").and_then(span) else {
+        return Ok(None);
+    };
+    let operation = if let Some(value) = parts.name("value") {
+        let Some(value_column) = span(value) else {
+            return Ok(None);
+        };
+        CsvAggregationOperation::Sum { value_column }
+    } else {
+        CsvAggregationOperation::Count
+    };
+    Ok(Some(Intent::ExecuteAttachedCsvAggregation {
+        group_column,
+        operation,
+    }))
+}
+
+fn csv_aggregation_roles(intent: &Intent) -> Option<BTreeMap<String, Vec<SourceSpan>>> {
+    let Intent::ExecuteAttachedCsvAggregation {
+        group_column,
+        operation,
+    } = intent
+    else {
+        return None;
+    };
+    let mut roles = BTreeMap::from([(
+        "/ExecuteAttachedCsvAggregation/group_column".into(),
+        vec![group_column.clone()],
+    )]);
+    if let CsvAggregationOperation::Sum { value_column } = operation {
+        roles.insert(
+            "/ExecuteAttachedCsvAggregation/operation/value_column".into(),
+            vec![value_column.clone()],
+        );
+    }
+    Some(roles)
+}
+
+fn csv_aggregation_scope(request: &RequestEnvelope) -> Option<&'static str> {
+    if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+        return Some("添付CSVからの隔離集計は、日本語で依頼してください。");
+    }
+    if request.context_ref.is_some() {
+        return Some("今回添付するCSVを集計する場合は、前の回答指定を外してください。");
+    }
+    if !matches!(request.attachments.as_slice(), [file] if RequestAttachment::is_csv_name(&file.name))
+    {
+        return Some("集計するUTF-8のCSVファイルを、この発話に1件だけ添付してください。");
+    }
+    None
+}
+
+pub(crate) fn verify_csv_aggregation_input(bundle: &InputBundle) -> Result<()> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    validate_request_attachments(request)?;
+    if csv_aggregation_scope(request).is_none()
+        && meaning.parser_version == CSV_AGGREGATION_PARSER_VERSION
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.unresolved.is_empty()
+        && meaning.context_result_ref.is_none()
+        && bundle.context_sha256 == identity(&None::<&ResultRecord>)?
+        && matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        && bundle.raw_sha256 == digest(text.as_bytes())
+        && bundle.semantic_signature == identity(meaning)?
+        && bundle.fingerprint
+            == identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                CSV_AGGREGATION_PARSER_VERSION,
+            ))?
+        && csv_aggregation_roles(&meaning.intent).as_ref() == Some(&meaning.source_roles)
+        && csv_aggregation_intent(text)?.as_ref() == Some(&meaning.intent)
+    {
+        return Ok(());
+    }
+    Err(failure(
+        "CSV_AGGREGATION_SOURCE_MISMATCH",
+        "元の集計依頼と添付CSVを照合できません。",
+    ))
+}
+
+fn wasm_execution_input_error() -> Error {
+    failure(
+        "WASM_SOURCE_MISMATCH",
+        "元のWebAssembly実行依頼を照合できません。",
+    )
+}
+
+pub(crate) fn verified_wasm_document(bundle: &InputBundle) -> Result<&str> {
+    let meaning = &bundle.meaning;
+    if let Intent::ExecuteWasm { document } = &meaning.intent
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.parser_version == WASM_EXECUTION_PARSER_VERSION
+        && meaning.unresolved.is_empty()
+        && matches!(wasm_execution_intent(&bundle.request.text),
+            Some(Intent::ExecuteWasm { document: parsed }) if parsed == *document)
+        && meaning.source_roles.len() == 1
+        && meaning
+            .source_roles
+            .get(WASM_EXECUTION_DOCUMENT_ROLE)
+            .map(Vec::as_slice)
+            == Some(std::slice::from_ref(document))
+    {
+        return Ok(&document.text);
+    }
+    Err(wasm_execution_input_error())
+}
+
+fn code_repair_intent(text: &str) -> Option<Intent> {
+    let (command, document) = text
+        .trim_start()
+        .split_once([':', '：'])
+        .unwrap_or_else(|| (terminal_trim(text), ""));
+    if !matches!(
+        command,
+        "コードを修正して" | "このコードを直して" | "Pythonコードを修正して"
+    ) {
+        return None;
+    }
+    if document.trim().is_empty() {
+        return Some(Intent::Unknown {
+            reason:
+                "Pythonコードを「情報源」、引数と期待値を「試験」に入れたJSONを貼り付けてください。"
+                    .into(),
+        });
+    }
+    let document = document
+        .strip_prefix("\r\n")
+        .or_else(|| document.strip_prefix('\n'))
+        .unwrap_or(document);
+    Some(Intent::RepairCode {
+        document: source_span_at(text, text.len() - document.len(), text.len())?,
+    })
+}
+
+fn code_repair_input_mismatch() -> Error {
+    failure(
+        "CODE_REPAIR_SOURCE_MISMATCH",
+        "封印した修正依頼の資料が元の入力と一致しません。",
+    )
+}
+
+pub(crate) fn verified_code_repair_document(bundle: &InputBundle) -> Result<&str> {
+    if let Intent::RepairCode { document } = &bundle.meaning.intent
+        && bundle.meaning.parser_version == CODE_REPAIR_PARSER_VERSION
+        && bundle.meaning.source_kind == "USER_REQUEST"
+        && bundle.meaning.unresolved.is_empty()
+        && matches!(
+            code_repair_intent(&bundle.request.text),
+            Some(Intent::RepairCode { document: parsed }) if parsed == *document
+        )
+        && bundle.meaning.source_roles.len() == 1
+        && bundle
+            .meaning
+            .source_roles
+            .get(CODE_REPAIR_DOCUMENT_ROLE)
+            .map(Vec::as_slice)
+            == Some(std::slice::from_ref(document))
+    {
+        return Ok(&document.text);
+    }
+    Err(code_repair_input_mismatch())
+}
+
 pub(crate) fn verified_code_explanation_source(bundle: &InputBundle) -> Result<&str> {
     if let Intent::ExplainCode { source } = &bundle.meaning.intent
         && bundle.meaning.parser_version == CODE_EXPLANATION_PARSER_VERSION
@@ -5206,6 +7660,94 @@ pub(crate) fn verify_return_function_input(bundle: &InputBundle) -> Result<()> {
     ))
 }
 
+fn function_spec_roles(spec: &FunctionalPythonSpec) -> BTreeMap<String, Vec<SourceSpan>> {
+    fn add_operand(
+        roles: &mut BTreeMap<String, Vec<SourceSpan>>,
+        role: String,
+        operand: &NumericOperand,
+    ) {
+        let source = match operand {
+            NumericOperand::Parameter { source, .. } | NumericOperand::Integer { source, .. } => {
+                source
+            }
+        };
+        roles.insert(role, vec![source.clone()]);
+    }
+
+    fn add_value(roles: &mut BTreeMap<String, Vec<SourceSpan>>, role: &str, value: &NumericValue) {
+        match value {
+            NumericValue::Operand { value } => {
+                add_operand(roles, role.into(), value);
+            }
+            NumericValue::Arithmetic { left, right, .. } => {
+                add_operand(roles, format!("{role}/left"), left);
+                add_operand(roles, format!("{role}/right"), right);
+            }
+        }
+    }
+
+    const ROOT: &str = "/GenerateFunctionFromSpec/spec";
+    let mut roles = BTreeMap::new();
+    if let Some(name) = &spec.name {
+        roles.insert(format!("{ROOT}/name"), vec![name.clone()]);
+    }
+    if !spec.parameters.is_empty() {
+        roles.insert(format!("{ROOT}/parameters"), spec.parameters.clone());
+    }
+    match &spec.body {
+        FunctionalPythonBody::Piecewise { cases, otherwise } => {
+            for (index, case) in cases.iter().enumerate() {
+                let role = format!("{ROOT}/body/cases/{index}");
+                add_operand(&mut roles, format!("{role}/left"), &case.left);
+                add_operand(&mut roles, format!("{role}/right"), &case.right);
+                add_value(&mut roles, &format!("{role}/result"), &case.result);
+            }
+            add_value(&mut roles, &format!("{ROOT}/body/otherwise"), otherwise);
+        }
+        FunctionalPythonBody::Palindrome { requirement }
+        | FunctionalPythonBody::StableUniqueList { requirement, .. } => {
+            roles.insert(
+                format!("{ROOT}/body/requirement"),
+                vec![requirement.clone()],
+            );
+        }
+        FunctionalPythonBody::NumericList {
+            requirement,
+            selection,
+            ..
+        } => {
+            roles.insert(
+                format!("{ROOT}/body/requirement"),
+                vec![requirement.clone()],
+            );
+            if let NumericListSelection::Boundary { threshold, .. } = selection {
+                add_operand(
+                    &mut roles,
+                    format!("{ROOT}/body/selection/threshold"),
+                    threshold,
+                );
+            }
+        }
+    }
+    roles
+}
+
+pub(crate) fn verify_function_spec_input(bundle: &InputBundle) -> Result<()> {
+    if let Intent::GenerateFunctionFromSpec { spec } = &bundle.meaning.intent
+        && bundle.meaning.parser_version == FUNCTION_SPEC_PARSER_VERSION
+        && bundle.meaning.source_kind == "USER_REQUEST"
+        && bundle.meaning.unresolved.is_empty()
+        && crate::code_intent::parse(&bundle.request.text)?.as_ref() == Some(spec.as_ref())
+        && function_spec_roles(spec) == bundle.meaning.source_roles
+    {
+        return Ok(());
+    }
+    Err(failure(
+        "CODE_GENERATION_SOURCE_MISMATCH",
+        "封印した関数の仕様が元の入力と一致しません。",
+    ))
+}
+
 struct PreviousCodeCaseSource {
     document: String,
     roles: BTreeMap<String, Vec<SourceSpan>>,
@@ -5223,13 +7765,68 @@ fn previous_code_case_body(statement: &str) -> Option<(&str, &'static str)> {
         })
 }
 
+fn previous_generated_code_json_case(input: &str, offset: usize) -> Option<PreviousCodeCaseSource> {
+    // Find the end of the first JSON value without treating Japanese words or
+    // braces inside quoted strings as delimiters. The shared strict reader
+    // then rejects duplicate keys and validates the exact retained slices.
+    let mut values = serde_json::Deserializer::from_str(input).into_iter::<serde::de::IgnoredAny>();
+    values.next()?.ok()?;
+    let (arguments, tail) = input.split_at_checked(values.byte_offset())?;
+    let crate::ports::JsonKind::Object(_) =
+        crate::ports::strict_json_document(arguments).ok()?.kind
+    else {
+        return None;
+    };
+    let expected_and_suffix = tail.trim_start().strip_prefix("の結果が")?.trim_start();
+    let expected = expected_and_suffix
+        .strip_suffix("になるか確認して")
+        .or_else(|| expected_and_suffix.strip_suffix("になるか確認してください"))?
+        .trim_end();
+    crate::ports::strict_json_document(expected).ok()?;
+    let expected_start = offset + input.len() - expected_and_suffix.len();
+    let document = format!(r#"{{"試験":[{{"引数":{arguments},"期待値":{expected}}}]}}"#);
+    let roles = BTreeMap::from([
+        (
+            "/VerifyPreviousCode/case/arguments".into(),
+            vec![SourceSpan {
+                start: offset,
+                end: offset + arguments.len(),
+                text: arguments.to_owned(),
+            }],
+        ),
+        (
+            PREVIOUS_CODE_CASE_EXPECTED_ROLE.into(),
+            vec![SourceSpan {
+                start: expected_start,
+                end: expected_start + expected.len(),
+                text: expected.to_owned(),
+            }],
+        ),
+    ]);
+    Some(PreviousCodeCaseSource { document, roles })
+}
+
 fn previous_code_case_source(text: &str) -> Result<Option<PreviousCodeCaseSource>> {
     let statement = terminal_trim(text);
-    let Some((body, _)) =
+    let Some((body, version)) =
         previous_code_case_body(statement).filter(|_| !text.contains(['\r', '\n']))
     else {
         return Ok(None);
     };
+    let offset = text.len() - text.trim_start().len() + statement.len() - body.len();
+    if version == PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION {
+        let arguments = body.trim_start();
+        let arguments = arguments
+            .strip_prefix([',', '、'])
+            .unwrap_or(arguments)
+            .trim_start();
+        if arguments.starts_with('{') {
+            return Ok(previous_generated_code_json_case(
+                arguments,
+                offset + body.len() - arguments.len(),
+            ));
+        }
+    }
     let Some(parts) = regex(concat!(
         r"\A[ 　]*[、,]?[ 　]*(?P<arguments>[^\r\n]*)の結果が[ 　]*",
         r"(?P<expected>-?(?:0|[1-9][0-9]{0,77}))[ 　]*になるか確認(?:して|してください)\z",
@@ -5242,7 +7839,6 @@ fn previous_code_case_source(text: &str) -> Result<Option<PreviousCodeCaseSource
         return Ok(None);
     }
     let arguments = parts.name("arguments").expect("matched arguments");
-    let offset = text.len() - text.trim_start().len() + statement.len() - body.len();
     let Some(expected_span) = captured_source_span(text, offset, expected) else {
         return Ok(None);
     };
@@ -5325,6 +7921,141 @@ pub(crate) fn verify_previous_code_case_input(bundle: &InputBundle) -> Result<()
         return Ok(());
     }
     Err(previous_code_case_source_mismatch())
+}
+
+struct WebResearchInput {
+    topic: SourceSpan,
+    expression: Option<SourceSpan>,
+}
+
+fn web_research_input(text: &str) -> Result<Option<WebResearchInput>> {
+    static REQUEST: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"(?x)\A(?P<topic>.+?)\p{Zs}*(?:について|に関して|を)[、,，\p{Zs}]*",
+            r"(?:複数|いくつか|二つ|[2２]つ)の(?:資料|出典|記事|情報源)(?:を|で|から)\p{Zs}*",
+            r"(?:(?:調べて|(?:検索|調査)して)[、,，\p{Zs}]*)?",
+            r"(?:比較して|照合して|読み比べて|比べて)(?:ください)?",
+            r"(?:\p{Zs}*[。.;；、,，]\p{Zs}*(?:別件で|別件として|それとは別に)[、,，\p{Zs}]*",
+            r"(?P<expression>.+?)\p{Zs}*(?:を|も)計算して(?:ください)?)?\z",
+        ))
+        .expect("web research request grammar")
+    });
+    static TOPIC: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\A[\p{Han}\p{Hiragana}\p{Katakana}\p{Latin}0-9０-９ー・ \u{3000}-]{1,80}\z")
+            .expect("web research topic grammar")
+    });
+    if text.chars().any(char::is_control) {
+        return Ok(None);
+    }
+    let Some(fields) = REQUEST.captures(terminal_trim(text)) else {
+        return Ok(None);
+    };
+    let offset = text.len() - text.trim_start().len();
+    let span = |matched: regex::Match<'_>| {
+        let raw = matched.as_str();
+        let value = raw.trim();
+        let start = offset + matched.start() + raw.len() - raw.trim_start().len();
+        SourceSpan {
+            start,
+            end: start + value.len(),
+            text: value.to_owned(),
+        }
+    };
+    let topic = span(fields.name("topic").expect("research topic capture"));
+    let subject = &topic.text;
+    let folded = subject.to_ascii_lowercase();
+    if !bounded_web_topic(subject)
+        || !TOPIC.is_match(subject)
+        || !subject.chars().any(char::is_alphabetic)
+        || nonpublic_web_topic(subject)
+        || ["bearer ", "sk-", "github-pat-"]
+            .into_iter()
+            .any(|prefix| folded.starts_with(prefix))
+        || [
+            "について",
+            "に関して",
+            "教えて",
+            "調べて",
+            "比較して",
+            "別件",
+            "それとは別に",
+            "を取得",
+            "を公開",
+            "を投稿",
+            "を転送",
+            "を共有",
+        ]
+        .into_iter()
+        .any(|marker| subject.contains(marker))
+    {
+        return Ok(None);
+    }
+    let expression = fields.name("expression").map(span);
+    if let Some(expression) = &expression {
+        let normalized = expression.text.nfkc().collect::<String>();
+        if arithmetic_expression(&expression.text)?.as_deref() != Some(normalized.as_str()) {
+            return Ok(None);
+        }
+    }
+    Ok(Some(WebResearchInput { topic, expression }))
+}
+
+fn web_research_source_roles(
+    text: &str,
+    topic: &str,
+    expression: Option<&str>,
+) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    let Some(input) = web_research_input(text)?.filter(|input| {
+        input.topic.text == topic
+            && input.expression.as_ref().map(|span| span.text.as_str()) == expression
+    }) else {
+        return Err(web_research_input_error());
+    };
+    let mut roles = BTreeMap::from([("/CompareWebResearch/topic".into(), vec![input.topic])]);
+    if let Some(expression) = input.expression {
+        roles.insert("/CompareWebResearch/expression".into(), vec![expression]);
+    }
+    Ok(roles)
+}
+
+fn web_research_input_error() -> Error {
+    failure(
+        "WEB_RESEARCH_SOURCE_MISMATCH",
+        "調べる話題と別件の計算を元の依頼と照合できません。",
+    )
+}
+
+pub(crate) fn verify_web_research_input(bundle: &InputBundle) -> Result<()> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    if let Intent::CompareWebResearch { topic, expression } = &meaning.intent
+        && request.attachments.is_empty()
+        && request.text.len() <= request.budget.max_input_bytes
+        && request
+            .context_ref
+            .as_ref()
+            .is_none_or(|context| Some(context) == meaning.context_result_ref.as_ref())
+        && matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        && meaning.parser_version == WEB_RESEARCH_PARSER_VERSION
+        && meaning.source_kind == "USER_REQUEST"
+        && meaning.unresolved.is_empty()
+        && matches!(meaning.spans.as_slice(), [span] if span.start == 0
+            && span.end == request.text.len() && span.text == request.text)
+        && bundle.raw_sha256 == digest(request.text.as_bytes())
+        && bundle.semantic_signature == identity(meaning)?
+        && bundle.fingerprint
+            == identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                WEB_RESEARCH_PARSER_VERSION,
+            ))?
+        && web_research_source_roles(&request.text, topic, expression.as_deref())?
+            == meaning.source_roles
+    {
+        return Ok(());
+    }
+    Err(web_research_input_error())
 }
 
 fn web_question_intent(statement: &str) -> Option<Intent> {
@@ -5454,6 +8185,11 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = return_function_intent(text)? {
         return Ok(intent);
     }
+    if let Some(spec) = crate::code_intent::parse(text)? {
+        return Ok(Intent::GenerateFunctionFromSpec {
+            spec: Box::new(spec),
+        });
+    }
     if matches!(
         statement,
         "ミニドラとは何ですか"
@@ -5485,6 +8221,12 @@ fn interpret(text: &str) -> Result<Intent> {
             return Ok(Intent::AskLocalCapabilities);
         }
         _ => {}
+    }
+    if let Some(research) = web_research_input(text)? {
+        return Ok(Intent::CompareWebResearch {
+            topic: research.topic.text,
+            expression: research.expression.map(|span| span.text),
+        });
     }
     if let Some(intent) = web_question_intent(statement) {
         return Ok(intent);
@@ -5678,19 +8420,34 @@ fn interpret(text: &str) -> Result<Intent> {
     if let Some(intent) = calculation_sequence_correction_intent(text)? {
         return Ok(intent);
     }
-    if previous_code_case_body(terminal_trim(text)).is_some() {
+    if let Some((_, version)) = previous_code_case_body(terminal_trim(text)) {
         return Ok(match previous_code_case_source(text)? {
             Some(source) => Intent::VerifyPreviousCode {
                 document: source.document,
             },
             None => Intent::Unknown {
-                reason: "名前付きの整数引数と整数の期待値を一組だけ指定してください。".into(),
+                reason: if version == PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION {
+                    "名前付きの引数と期待値を一組だけ指定してください。引数にはJSONオブジェクトも使えます。"
+                } else {
+                    "名前付きの整数引数と整数の期待値を一組だけ指定してください。"
+                }
+                .into(),
             },
         });
     }
     let header = text
         .split_once('\n')
         .map_or_else(|| terminal_trim(text), |(header, _)| terminal_trim(header));
+    if !text.contains(['\r', '\n'])
+        && let Some((command, document)) = text.trim_start().split_once([':', '：'])
+        && (command == "生成コードを検証して"
+            || command.eq_ignore_ascii_case("verify-generated-code"))
+        && document.trim_start().starts_with('{')
+    {
+        return Ok(Intent::VerifyPreviousCode {
+            document: document.into(),
+        });
+    }
     if matches!(header, "生成コードを検証して:" | "生成コードを検証して：")
         || header.eq_ignore_ascii_case("verify-generated-code:")
     {
@@ -5719,6 +8476,43 @@ fn interpret(text: &str) -> Result<Intent> {
                     .into(),
         });
     }
+    if let Some(intent) = memory_settings_intent(text) {
+        return Ok(intent);
+    }
+    if let Some(intent) = crate::news_input::parse(text) {
+        return Ok(intent);
+    }
+    if let Some(candidate) = crate::decision_input::parse(text)? {
+        return Ok(Intent::CompareOptions {
+            decision: Box::new(candidate.decision),
+        });
+    }
+    if let Some(candidate) = crate::message_revision::parse(text)? {
+        return Ok(Intent::ReviseMessage {
+            revision: candidate.revision,
+        });
+    }
+    if let Some(candidate) = crate::decision_input::parse_revision(text) {
+        return Ok(Intent::ReviseDecision {
+            revision: candidate.revision,
+        });
+    }
+    if let Some(candidate) = crate::writing::parse(text)? {
+        return Ok(Intent::DraftMessage {
+            draft: Box::new(candidate.draft),
+        });
+    }
+    if let Some(candidate) = crate::fiction_input::parse(text)? {
+        return Ok(Intent::DraftFiction {
+            draft: candidate.draft,
+        });
+    }
+    if let Some(candidate) = crate::translation_input::parse(text)? {
+        return Ok(candidate.intent);
+    }
+    if let Some(candidate) = crate::work_plan_input::parse(text)? {
+        return Ok(candidate.intent);
+    }
     if matches!(
         body,
         "前回のJSON表をCSVに変換して"
@@ -5733,6 +8527,9 @@ fn interpret(text: &str) -> Result<Intent> {
     }
     if let Some(column) = previous_filtered_csv_statistics_column(text)? {
         return Ok(Intent::PreviousFilteredCsvStatistics { column });
+    }
+    if let Some((intent, _)) = previous_calculation_scale(text)? {
+        return Ok(intent);
     }
     if let Some(capture) = regex(
         r"^(?:前回|前)の計算結果を[ \t　]*(mm|cm|m|km|ミリメートル|センチメートル|メートル|キロメートル)[ \t　]*に換算して(?:ください)?$",
@@ -5838,6 +8635,9 @@ fn interpret(text: &str) -> Result<Intent> {
             ));
         }
         return Ok(Intent::JsonPointer { document, pointer });
+    }
+    if asks_contextual_clarification(body) {
+        return Ok(Intent::ExplainPrevious);
     }
     if let Some(intent) = why_question_intent(body)? {
         return Ok(intent);
@@ -6646,6 +9446,176 @@ const PREVIOUS_FINITE_EVENT_VALUE_ROLE: &str = "/PreviousFiniteEventProbability/
 
 const PREVIOUS_FILTERED_CSV_COLUMN_ROLE: &str = "/PreviousFilteredCsvStatistics/column";
 
+fn previous_calculation_scale_mismatch() -> Error {
+    failure(
+        "CALCULATION_SCALE_INPUT_MISMATCH",
+        "前の計算結果を使う指定または倍率が元の発話と一致しません。",
+    )
+}
+
+fn reduced_calculation_scale(numerator: i128, denominator: i128) -> Option<(i64, u64)> {
+    if denominator <= 0 {
+        return None;
+    }
+    let (mut value, mut remainder) = (numerator.unsigned_abs(), denominator.unsigned_abs());
+    while remainder != 0 {
+        (value, remainder) = (remainder, value % remainder);
+    }
+    let divisor = i128::try_from(value).ok()?;
+    Some((
+        i64::try_from(numerator / divisor).ok()?,
+        u64::try_from(denominator / divisor).ok()?,
+    ))
+}
+
+fn calculation_scale_number(source: &str) -> String {
+    source
+        .trim()
+        .nfkc()
+        .map(|character| if character == '−' { '-' } else { character })
+        .collect()
+}
+
+fn calculation_scale_factor(source: &str) -> Option<(i64, u64)> {
+    if source == "半分" {
+        return Some((1, 2));
+    }
+    if let Some((denominator, numerator)) = source.split_once("分の") {
+        return reduced_calculation_scale(
+            calculation_scale_number(numerator).parse().ok()?,
+            calculation_scale_number(denominator).parse().ok()?,
+        );
+    }
+    let number = calculation_scale_number(source.strip_suffix('倍')?);
+    let (whole, fractional) = number.split_once('.').unwrap_or((&number, ""));
+    let fractional = fractional.trim_end_matches('0');
+    let denominator = 10i128.checked_pow(u32::try_from(fractional.len()).ok()?)?;
+    let whole_value = whole.parse::<i128>().ok()?;
+    let fraction_value = if fractional.is_empty() {
+        0
+    } else {
+        fractional.parse::<i128>().ok()?
+    };
+    let whole_scaled = whole_value.checked_mul(denominator)?;
+    let numerator = if whole.starts_with('-') {
+        whole_scaled.checked_sub(fraction_value)?
+    } else {
+        whole_scaled.checked_add(fraction_value)?
+    };
+    reduced_calculation_scale(numerator, denominator)
+}
+
+fn previous_calculation_scale(
+    text: &str,
+) -> Result<Option<(Intent, BTreeMap<String, Vec<SourceSpan>>)>> {
+    static GRAMMAR: LazyLock<Regex> = LazyLock::new(|| {
+        let integer = r"[+＋−－-]?[0-9０-９]+";
+        let factor = format!(
+            r"(?:半分|[0-9０-９]+[ \t　]*分の[ \t　]*{integer}|{integer}(?:[.．][0-9０-９]+)?[ \t　]*倍)"
+        );
+        Regex::new(&format!(
+            concat!(
+                r"\A(?P<anchor>(?:(?:前|前回|直前|先ほど|先程|さっき)の|その)(?:計算結果|結果|答え|回答))[ \t　]*",
+                r"(?:を[ \t　]*(?:(?P<factor>{factor})[ \t　]*(?:に?(?:して(?:ください)?|せよ)|に?すると(?:いくら|いくつ)(?:ですか|でしょうか)?)",
+                r"|(?P<divisor>{integer})[ \t　]*で[ \t　]*割(?:って(?:ください)?|ると(?:いくら|いくつ)(?:ですか|でしょうか)?))",
+                r"|の[ \t　]*(?P<query>{factor})[ \t　]*(?:は(?:(?:いくら|いくつ)(?:ですか|でしょうか)?)?|を(?:求めて|計算して)(?:ください)?))\z"
+            ),
+            factor = factor,
+            integer = integer,
+        ))
+        .expect("previous calculation scale grammar")
+    });
+    let trimmed = text.trim_start();
+    let statement = terminal_trim(trimmed);
+    let Some(captures) = GRAMMAR.captures(statement) else {
+        return Ok(None);
+    };
+    let factor = captures.name("factor").or_else(|| captures.name("query"));
+    let divisor = captures.name("divisor");
+    let parsed = if let Some(factor) = factor {
+        calculation_scale_factor(factor.as_str())
+    } else {
+        divisor
+            .and_then(|value| {
+                calculation_scale_number(value.as_str())
+                    .parse::<i128>()
+                    .ok()
+            })
+            .and_then(|value| {
+                let denominator = value.checked_abs()?;
+                reduced_calculation_scale(if value < 0 { -1 } else { 1 }, denominator)
+            })
+    };
+    let Some((numerator, denominator)) = parsed else {
+        return Ok(Some((
+            Intent::Unknown {
+                reason: "倍率は正確に扱える範囲で指定してください。0で割ることはできません。"
+                    .into(),
+            },
+            BTreeMap::new(),
+        )));
+    };
+    let offset = text.len() - trimmed.len();
+    let anchor = captured_source_span(
+        text,
+        offset,
+        captures
+            .name("anchor")
+            .expect("previous result anchor captured"),
+    )
+    .ok_or_else(previous_calculation_scale_mismatch)?;
+    let factor = captured_source_span(
+        text,
+        offset,
+        factor.or(divisor).expect("scale or divisor captured"),
+    )
+    .ok_or_else(previous_calculation_scale_mismatch)?;
+    Ok(Some((
+        Intent::ScalePreviousCalculation {
+            numerator,
+            denominator,
+        },
+        BTreeMap::from([
+            ("/ScalePreviousCalculation/anchor".into(), vec![anchor]),
+            ("/ScalePreviousCalculation/factor".into(), vec![factor]),
+        ]),
+    )))
+}
+
+pub(crate) fn verified_previous_calculation_scale_input(bundle: &InputBundle) -> Result<bool> {
+    let request = &bundle.request;
+    let meaning = &bundle.meaning;
+    let text = &request.text;
+    if meaning.parser_version != PREVIOUS_CALCULATION_SCALE_PARSER_VERSION
+        || meaning.source_kind != "USER_REQUEST"
+        || !matches!(meaning.intent, Intent::ScalePreviousCalculation { .. })
+        || !meaning.unresolved.is_empty()
+        || !matches!(request.locale.as_str(), "ja" | "ja-JP")
+        || !request.attachments.is_empty()
+        || text.len() > request.budget.max_input_bytes
+        || meaning.context_result_ref.is_none()
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|reference| Some(reference) != meaning.context_result_ref.as_ref())
+        || bundle.context_sha256 == identity(&None::<&ResultRecord>)?
+        || !matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+        || bundle.raw_sha256 != digest(text.as_bytes())
+        || bundle.semantic_signature != identity(meaning)?
+        || bundle.fingerprint
+            != identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                PREVIOUS_CALCULATION_SCALE_PARSER_VERSION,
+            ))?
+    {
+        return Ok(false);
+    }
+    Ok(previous_calculation_scale(text)?
+        .is_some_and(|(intent, roles)| intent == meaning.intent && roles == meaning.source_roles))
+}
+
 fn previous_filtered_csv_statistics_column(text: &str) -> Result<Option<SourceSpan>> {
     let statement = terminal_trim(text);
     if !statement.starts_with("前回の絞り込んだ表の列") || text.contains(['\r', '\n']) {
@@ -6757,12 +9727,28 @@ fn conversational_math_matches(text: &str, intent: &Intent) -> Result<bool> {
     Ok(parsed.as_ref() == Some(intent))
 }
 
-pub(crate) fn verified_conversational_math_input(bundle: &InputBundle) -> Result<bool> {
-    Ok(
-        bundle.meaning.parser_version == CONVERSATIONAL_MATH_PARSER_VERSION
-            && bundle.meaning.source_kind == "USER_REQUEST"
-            && conversational_math_matches(&bundle.request.text, &bundle.meaning.intent)?,
+pub(crate) fn is_conversational_math_version(version: &str) -> bool {
+    matches!(
+        version,
+        CONVERSATIONAL_MATH_PARSER_VERSION | STATISTICS_GOAL_PARSER_VERSION
     )
+}
+
+pub(crate) fn verified_conversational_math_input(bundle: &InputBundle) -> Result<bool> {
+    if bundle.meaning.source_kind != "USER_REQUEST" {
+        return Ok(false);
+    }
+    let text = &bundle.request.text;
+    let meaning = &bundle.meaning;
+    match meaning.parser_version.as_str() {
+        CONVERSATIONAL_MATH_PARSER_VERSION => conversational_math_matches(text, &meaning.intent),
+        STATISTICS_GOAL_PARSER_VERSION => {
+            Ok(parse_statistics_goal(text)?.is_some_and(|(intent, roles)| {
+                intent == meaning.intent && roles == meaning.source_roles
+            }))
+        }
+        _ => Ok(false),
+    }
 }
 
 fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
@@ -7077,6 +10063,9 @@ fn mathematics_intent(text: &str) -> Result<Option<Intent>> {
         };
         return Ok(Some(Intent::Statistics { values, units }));
     }
+    if let Some((intent, _)) = parse_statistics_goal(text)? {
+        return Ok(Some(intent));
+    }
     natural_observation_statistics_intent(text)
 }
 
@@ -7102,6 +10091,235 @@ fn natural_observation_statistics_intent(text: &str) -> Result<Option<Intent>> {
         return Ok(Some(Intent::Statistics { values, units: None }));
     }
     Ok(None)
+}
+
+// Keep the whole request and link roles back to byte ranges in it. An
+// unrecognized directive never falls through to a numeric prefix.
+type StatisticsCandidate = (Intent, BTreeMap<String, Vec<SourceSpan>>);
+
+fn parse_statistics_goal(raw: &str) -> Result<Option<StatisticsCandidate>> {
+    use Statistic::*;
+
+    const METRICS: &[Statistic] = &[
+        Mean,
+        Median,
+        Sum,
+        Minimum,
+        Maximum,
+        PopulationVariance,
+        SampleVariance,
+    ];
+    const NUMBER_SERIES: &str = r#"(?:\[[^\[\]\r\n]+\]|[-+0-9eE.*/()\s,、，と]+)"#;
+    const METRIC_SERIES: &str = r"(?:平均値?|(?:母|標本|不偏)?分散|中央値|合計|最小値|最大値|記述統計|統計量)(?:\s*(?:と|および|及び|、|・)\s*(?:平均値?|(?:母|標本|不偏)?分散|中央値|合計|最小値|最大値|記述統計|統計量))*";
+    const VERB: &str = r"(?:を)?\s*(?:計算(?:してください|して|し)|求め(?:てください|て)?|教え(?:てください|て)|出し(?:てください|て)|知りたい|は(?:いくつ|何)(?:ですか)?)";
+    let text = terminal_trim(raw);
+    if !["平均", "分散", "中央値", "合計", "最小値", "最大値", "統計"]
+        .iter()
+        .any(|metric| text.contains(metric))
+    {
+        return Ok(None);
+    }
+    let primary = regex(&format!(
+        r"^(?P<values>{NUMBER_SERIES})\s*(?:の|について(?:[、,]\s*)?)(?P<metrics>{METRIC_SERIES})(?P<only>だけ)?{VERB}(?P<tail>$|[、,，。].*)"
+    ))?;
+    let reversed = regex(&format!(
+        r"^(?P<metrics>{METRIC_SERIES})(?P<only>だけ)?を[、,，]?\s*(?P<values>{NUMBER_SERIES})\s*(?:から|で)\s*{VERB}(?P<tail>$|[、,，。].*)"
+    ))?;
+    let tail_first = regex(&format!(
+        r"^(?P<metrics>{METRIC_SERIES})(?P<only>だけ)?{VERB}[。:：]\s*(?P<values>{NUMBER_SERIES})(?P<tail>$)"
+    ))?;
+    let Some(captures) = primary
+        .captures(text)
+        .or_else(|| reversed.captures(text))
+        .or_else(|| tail_first.captures(text))
+    else {
+        return Ok(None);
+    };
+    let values_text = captures
+        .name("values")
+        .expect("values role")
+        .as_str()
+        .trim();
+    let metrics_text = captures.name("metrics").expect("metrics role").as_str();
+    let tail = captures.name("tail").expect("tail role").as_str();
+    let scalar = regex(r"^[-+0-9eE.*/()\s]+$")?;
+    let array_values = values_text
+        .strip_prefix('[')
+        .and_then(|value| value.strip_suffix(']'));
+    let values: Vec<_> = array_values
+        .unwrap_or(values_text)
+        .split([',', '、', '，', 'と'])
+        .map(str::trim)
+        .map(|value| {
+            if array_values.is_some() {
+                value
+                    .strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+                    .unwrap_or(value)
+                    .trim()
+            } else {
+                value
+            }
+        })
+        .collect();
+    if values.iter().any(|value| !scalar.is_match(value)) {
+        return Ok(None);
+    }
+    let metrics_separator = regex(r"\s*(?:と|および|及び|、|・)\s*")?;
+    let metrics_for = |surface: &str| -> &'static [Statistic] {
+        match surface {
+            "平均" | "平均値" => &[Mean],
+            "分散" | "母分散" => &[PopulationVariance],
+            "標本分散" | "不偏分散" => &[SampleVariance],
+            "中央値" => &[Median],
+            "合計" => &[Sum],
+            "最小値" => &[Minimum],
+            "最大値" => &[Maximum],
+            "統計量" | "記述統計" => METRICS,
+            _ => &[],
+        }
+    };
+    let mut metrics: Vec<_> = metrics_separator
+        .split(metrics_text)
+        .flat_map(|word| metrics_for(word).iter().copied())
+        .collect();
+    metrics.sort_unstable();
+    metrics.dedup();
+
+    let mut explanation = None;
+    let mut show_values = true;
+    let mut exclusions = Vec::new();
+    let exclude = regex(&format!(
+        r"^(?P<metrics>{METRIC_SERIES})(?:は|を)(?:不要(?:です)?|省略(?:して|してください)?|除いて(?:ください)?|出さないで(?:ください)?|いりません)$"
+    ))?;
+    let explain = regex(
+        r"^(?:(?P<audience>[^\s、,，。;；!?！？「」『』:：]{1,24})(?:向け(?:に)?|にも?(?:わ|分)かるように)\s*)?(?P<style>簡単に|短く|やさしく|わかりやすく|分かりやすく|詳しく)?\s*(?:理由を|計算方法を)?(?:説明|解説)(?P<only>だけ)?(?:して|してください|もして|もお願いします)?$",
+    )?;
+    let numeric_restriction = regex(
+        r"^(?:数値|数字|計算結果)(?:(?:は|を)(?:出さず(?:に)?|表示せず(?:に)?|載せず(?:に)?|書かず(?:に)?|使わず(?:に)?|出さないで|表示しないで)|(?:なし|無し|抜き)(?:で)?)(?:\s*(?P<explanation>.+))?$",
+    )?;
+    let nominal_audience = regex(r"^[\p{Han}\p{Katakana}A-Za-z0-9・]+$")?;
+
+    for clause in tail
+        .trim_start_matches(['、', ',', '，', '。'])
+        .split(['、', ',', '，', '。'])
+    {
+        let clause = clause.trim();
+        if clause.is_empty() {
+            continue;
+        }
+        if let Some(negated) = exclude.captures(clause) {
+            for word in metrics_separator.split(&negated["metrics"]) {
+                if word == "分散" {
+                    exclusions.extend([PopulationVariance, SampleVariance]);
+                } else {
+                    exclusions.extend(metrics_for(word));
+                }
+            }
+            continue;
+        }
+        let explanation_clause = if let Some(restriction) = numeric_restriction.captures(clause) {
+            show_values = false;
+            let Some(explanation_clause) = restriction.name("explanation") else {
+                continue;
+            };
+            explanation_clause.as_str()
+        } else {
+            clause
+        };
+        let Some(parsed) = explain.captures(explanation_clause) else {
+            return Ok(None);
+        };
+        if explanation.is_some() {
+            return Ok(None);
+        }
+        if parsed.name("only").is_some() {
+            show_values = false;
+        }
+        let style = parsed.name("style").map(|style| style.as_str());
+        let audience = match parsed.name("audience").map(|audience| audience.as_str()) {
+            None if matches!(style, Some("やさしく" | "わかりやすく" | "分かりやすく")) => {
+                ExplanationAudience::Beginner
+            }
+            None | Some("社会人" | "一般" | "一般読者") => ExplanationAudience::General,
+            Some(
+                "小学生" | "小学校低学年" | "子ども" | "子供" | "初心者" | "中学生" | "初学者"
+                | "新入社員",
+            ) => ExplanationAudience::Beginner,
+            Some("専門家" | "研究者" | "統計の専門家" | "統計学の専門家") => {
+                ExplanationAudience::Technical
+            }
+            Some(audience)
+                if nominal_audience.is_match(audience)
+                    && !["数値", "数字", "計算結果", "無し", "不要", "禁止", "非表示"]
+                        .iter()
+                        .any(|restriction| audience.contains(restriction)) =>
+            {
+                ExplanationAudience::Unresolved(audience.to_owned())
+            }
+            // A directive we cannot bind to one role might restrict visibility.
+            Some(_) => return Ok(None),
+        };
+        let detail = match style {
+            Some("簡単に" | "短く") => ExplanationDetail::Brief,
+            Some("詳しく") => ExplanationDetail::Detailed,
+            _ => ExplanationDetail::Standard,
+        };
+        explanation = Some(ExplanationRequest { audience, detail });
+    }
+    if !show_values && explanation.is_none() {
+        return Ok(None);
+    }
+    metrics.retain(|metric| !exclusions.contains(metric));
+    if metrics.is_empty() {
+        return Ok(None);
+    }
+    let mut roles = BTreeMap::new();
+    let mut record_role = |role: &str, part: &str| {
+        if !part.is_empty() {
+            let start = part.as_ptr() as usize - raw.as_ptr() as usize;
+            if let Some(span) = source_span_at(raw, start, start + part.len()) {
+                roles.insert(format!("/Statistics/{role}"), vec![span]);
+            }
+        }
+    };
+    record_role("observations", values_text);
+    record_role("requested_metrics", metrics_text);
+    record_role("constraints", tail);
+    if let Some(only) = captures.name("only") {
+        record_role("selection", only.as_str());
+    }
+    for (index, value) in values.iter().enumerate() {
+        record_role(&format!("values/{index}"), value);
+    }
+    let values = values.into_iter().map(str::to_owned).collect();
+    // Unqualified equivalents retain the established complete report and
+    // its exact evidence. Explicit output scope uses the composed goal.
+    if tail.is_empty()
+        && captures.name("only").is_none()
+        && !metrics_text.contains("母分散")
+        && (metrics == [Mean]
+            || metrics == [PopulationVariance]
+            || metrics == [Mean, PopulationVariance]
+            || metrics == METRICS)
+    {
+        return Ok(Some((
+            Intent::Statistics {
+                values,
+                units: None,
+            },
+            roles,
+        )));
+    }
+    Ok(Some((
+        Intent::DescribeStatistics {
+            values,
+            metrics,
+            show_values,
+            explanation,
+        },
+        roles,
+    )))
 }
 
 fn arithmetic_expression(text: &str) -> Result<Option<String>> {
@@ -8228,6 +11446,255 @@ mod tests {
     use super::*;
 
     #[test]
+    fn counterfactual_relation_binds_each_hypothesis_and_replacement_to_exact_source() {
+        let text = "　この仮定の中だけ元の前提を置き換えて、仮に「海浜ルームは予約済」かつ「海浜ルームは清掃中ではない」だとすると、「海浜ルームは入室可能」ですか。";
+        let request = RequestEnvelope::new("meeting", "scenario", "actor", text);
+        let sealed = seal(&request, None).unwrap();
+        assert!(verified_counterfactual_relation_input(&sealed).unwrap());
+        let expected = Intent::AskCounterfactualRelation {
+            assumptions: vec![
+                parse_proposition("海浜ルームは予約済", false)
+                    .unwrap()
+                    .unwrap(),
+                parse_proposition("海浜ルームは清掃中ではない", false)
+                    .unwrap()
+                    .unwrap(),
+            ],
+            proposition: parse_proposition("海浜ルームは入室可能", false)
+                .unwrap()
+                .unwrap(),
+            replace_opposites: true,
+        };
+        assert_eq!(sealed.meaning.intent, expected);
+        let role = |name: &str| {
+            sealed.meaning.source_roles[&format!("/AskCounterfactualRelation/{name}")][0]
+                .text
+                .as_str()
+        };
+        assert_eq!(
+            role("replace_opposites"),
+            "この仮定の中だけ元の前提を置き換えて"
+        );
+        assert_eq!(role("assumptions/1/negation"), "ではない");
+        assert_eq!(role("assumption_conjunction"), "かつ");
+        assert_eq!(role("question"), "ですか");
+        for span in sealed.meaning.source_roles.values().flatten() {
+            assert_eq!(text.get(span.start..span.end), Some(span.text.as_str()));
+        }
+
+        let mut tampered = sealed;
+        if let Intent::AskCounterfactualRelation {
+            replace_opposites, ..
+        } = &mut tampered.meaning.intent
+        {
+            *replace_opposites = false;
+        }
+        tampered.semantic_signature = identity(&tampered.meaning).unwrap();
+        assert!(!verified_counterfactual_relation_input(&tampered).unwrap());
+    }
+
+    #[test]
+    fn counterfactual_relation_requires_one_bounded_question_and_blocks_mixed_requests() {
+        let text = "もし海浜ルームは予約済なら、海浜ルームは静か？";
+        let mut request = RequestEnvelope::new("meeting", "scenario", "actor", text);
+        let inquiry = seal(&request, None).unwrap();
+        assert!(verified_counterfactual_relation_input(&inquiry).unwrap());
+        assert!(matches!(inquiry.meaning.intent,
+            Intent::AskCounterfactualRelation { replace_opposites: false, proposition, .. }
+                if proposition.object == "静か"));
+
+        request.output_path = Some("scenario.txt".into());
+        let output_request = seal(&request, None).unwrap();
+        assert!(!verified_counterfactual_relation_input(&output_request).unwrap());
+        assert!(!output_request.meaning.unresolved.is_empty());
+        for unsupported in [
+            "もし海浜ルームは予約済なら、海浜ルームは静か。",
+            "仮に海浜ルームは予約済なら、海浜ルームは静かですか。答えを保存して。",
+            "海浜ルームは予約済ではないので、前提を訂正してください。",
+        ] {
+            assert!(
+                crate::counterfactual_input::parse(unsupported)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn counterfactual_fragments_cannot_fall_back_to_durable_premise_assertion() {
+        let mut request =
+            RequestEnvelope::new("meeting", "scenario", "actor", "仮に海浜ルームは予約済。");
+        for malformed in [
+            "仮に海浜ルームは予約済。",
+            "仮に海浜ルームは予約済なら、海浜ルームは静か。",
+            "この仮定の中だけ元の前提を置き換えて海浜ルームは予約済。",
+            "もしXは鳥ならXは動物？。",
+        ] {
+            request.text = malformed.into();
+            let sealed = seal(&request, None).unwrap();
+            assert!(matches!(sealed.meaning.intent, Intent::Unknown { .. }));
+            assert_eq!(
+                sealed.meaning.parser_version,
+                crate::counterfactual_input::PARSER_VERSION
+            );
+            assert!(!verified_counterfactual_relation_input(&sealed).unwrap());
+        }
+        assert!(!crate::counterfactual_input::explicitly_hypothetical(
+            "もしもし、こんにちは。"
+        ));
+        assert!(!crate::counterfactual_input::explicitly_hypothetical(
+            "もしかして、前の結果ですか。"
+        ));
+        request.text = "もしXは利用申請済ならXは仮枠確保です。".into();
+        let rule = seal(&request, None).unwrap();
+        assert!(matches!(rule.meaning.intent, Intent::AddRule { .. }));
+        assert!(rule.meaning.unresolved.is_empty());
+    }
+
+    #[test]
+    fn branch_text_seals_child_literals_and_rejects_a_changed_source() {
+        let text = "　分岐元の回答の「旧」を「新」に置き換えて。";
+        let mut request = RequestEnvelope::new("child", "edit", "actor", text);
+        let sealed = seal(&request, None).unwrap();
+        verify_branch_text_input(&sealed).unwrap();
+        assert_eq!(
+            sealed.meaning.intent,
+            Intent::ReplaceBranchSource {
+                old: "旧".into(),
+                new: "新".into(),
+            }
+        );
+        for span in sealed.meaning.source_roles.values().flatten() {
+            assert_eq!(text.get(span.start..span.end), Some(span.text.as_str()));
+        }
+        let mut changed = sealed;
+        changed
+            .meaning
+            .source_roles
+            .get_mut("/ReplaceBranchSource/new")
+            .unwrap()[0]
+            .start = 0;
+        assert!(verify_branch_text_input(&changed).is_err());
+
+        request.text = "分岐元の回答を2行以内で要約して。".into();
+        let summary = seal(&request, None).unwrap();
+        verify_branch_text_input(&summary).unwrap();
+        assert_eq!(
+            summary.meaning.intent,
+            Intent::SummarizeBranchSource {
+                limit: SummaryLineLimit::AtMost(2),
+            }
+        );
+        assert_eq!(
+            summary.meaning.source_roles["/SummarizeBranchSource/limit"][0].text,
+            "2行以内"
+        );
+        assert!(summary.meaning.context_result_ref.is_none());
+
+        request.attachments.push(RequestAttachment {
+            name: "data.txt".into(),
+            text: "今回の添付".into(),
+            binary_base64: None,
+        });
+        assert!(matches!(
+            seal(&request, None),
+            Err(Error::Contract { code, .. }) if code == "BRANCH_TEXT_CONTEXT_CONFLICT"
+        ));
+    }
+
+    #[test]
+    fn purpose_document_keeps_lookup_terms_separate_from_the_raw_request() {
+        let text = "用途の資料を確認してください。";
+        let mut request = RequestEnvelope::new("c", "i", "actor", text);
+        request.purpose = Some(Box::new(PurposeUse {
+            name: "日程".into(),
+            binding: Some(PurposeBinding {
+                profile_sha256: digest(b"profile"),
+                task: PurposeTask::Find {
+                    query: "締切".into(),
+                },
+                requested_permissions: Permissions::default(),
+            }),
+        }));
+        let sealed = seal(&request, None).unwrap();
+        verify_attached_document_input(&sealed).unwrap();
+        assert_eq!(sealed.request.text, text);
+        assert_eq!(sealed.raw_sha256, digest(text.as_bytes()));
+        assert!(sealed.meaning.source_roles.is_empty());
+        assert!(matches!(
+            &sealed.meaning.intent,
+            Intent::FindInAttachedDocuments { query }
+                if query.start == 0 && query.end == 0 && query.text.is_empty()
+        ));
+
+        request.attachments.push(RequestAttachment {
+            name: "今日.txt".into(),
+            text: "今日の会場は北棟です。".into(),
+            binary_base64: None,
+        });
+        assert!(matches!(
+            seal(&request, None),
+            Err(Error::Contract { code, .. }) if code == "PURPOSE_ATTACHMENT_CONFLICT"
+        ));
+
+        request.text = "添付資料から「会場」を含む行を探してください。".into();
+        let explicit = seal(&request, None).unwrap();
+        verify_attached_document_input(&explicit).unwrap();
+        assert_eq!(
+            explicit.meaning.parser_version,
+            ATTACHED_DOCUMENT_PARSER_VERSION
+        );
+        assert_eq!(
+            explicit.meaning.source_roles["/FindInAttachedDocuments/query"][0].text,
+            "会場"
+        );
+    }
+
+    #[test]
+    fn unnamed_palindrome_function_keeps_only_user_supplied_source() {
+        let text = "Pythonで、文字列が前から読んでも後ろから読んでも同じかどうかを判定する関数を作ってください。";
+        let request = RequestEnvelope::new("c", "i", "actor", text);
+        let bundle = seal(&request, None).unwrap();
+        let roles = &bundle.meaning.source_roles;
+        assert_eq!(roles.len(), 1);
+        let requirement = &roles["/GenerateFunctionFromSpec/spec/body/requirement"][0];
+        assert_eq!(
+            requirement.text,
+            "文字列が前から読んでも後ろから読んでも同じかどうか"
+        );
+        assert_eq!(
+            text.get(requirement.start..requirement.end),
+            Some(requirement.text.as_str())
+        );
+        verify_function_spec_input(&bundle).unwrap();
+    }
+
+    #[test]
+    fn functional_spec_checks_exact_source_and_rejects_changed_meaning() {
+        let text = "　Pythonで、点数が75以上なら点数に10を足した数、それ以外は0を返す関数 加点(点数) を作って。　";
+        let request = RequestEnvelope::new("c", "i", "actor", text);
+        let sealed = seal(&request, None).unwrap();
+        verify_function_spec_input(&sealed).unwrap();
+        for span in sealed.meaning.source_roles.values().flatten() {
+            assert_eq!(text.get(span.start..span.end), Some(span.text.as_str()));
+        }
+
+        let mut wrong_rule = sealed.clone();
+        let Intent::GenerateFunctionFromSpec { spec } = &mut wrong_rule.meaning.intent else {
+            panic!("expected a functional specification");
+        };
+        let FunctionalPythonBody::Piecewise { cases, .. } = &mut spec.body else {
+            panic!("expected an ordered conditional body");
+        };
+        cases[0].comparison = NumericComparison::Greater;
+        assert!(verify_function_spec_input(&wrong_rule).is_err());
+
+        let mut wrong_source = sealed;
+        wrong_source.meaning.source_roles.clear();
+        assert!(verify_function_spec_input(&wrong_source).is_err());
+    }
+
+    #[test]
     fn ordinary_web_source_requests_keep_the_topic_and_respect_freshness() {
         for text in [
             "富士山について、出典を付けて教えてください。",
@@ -8585,9 +12052,26 @@ mod tests {
 
     #[test]
     fn elliptical_why_questions_consume_the_actual_previous_result() {
-        for text in ["なぜですか", "どうして？", "Why?"] {
+        for text in [
+            "なぜですか",
+            "どうして？",
+            "Why?",
+            "なんでそうなるの？",
+            "どうしてそうなるんですか？",
+            "その結果になった理由は？",
+        ] {
             assert!(
                 matches!(interpret(text).unwrap(), Intent::ExplainPrevious),
+                "{text}"
+            );
+        }
+        for text in [
+            "どうしてそうならないんですか？",
+            "「なんでそうなるの？」",
+            "その結果になった理由は？ その上で送信して",
+        ] {
+            assert!(
+                !matches!(interpret(text).unwrap(), Intent::ExplainPrevious),
                 "{text}"
             );
         }
@@ -8601,6 +12085,94 @@ mod tests {
                 && proposition.object == "ノート"
                 && proposition.predicate == "use"
         ));
+    }
+
+    #[test]
+    fn previous_calculation_scale_requires_an_exact_anchor_and_factor() {
+        for (text, numerator, denominator) in [
+            ("さっきの答えを半分にして。", 1, 2),
+            ("その答えの半分はいくつですか？", 1, 2),
+            ("前の計算結果を３分の２にして", 2, 3),
+            ("その結果を−０．５０倍にしてください", -1, 2),
+            ("先ほどの答えを4で割るといくら？", 1, 4),
+        ] {
+            assert_eq!(
+                interpret(text).unwrap(),
+                Intent::ScalePreviousCalculation {
+                    numerator,
+                    denominator,
+                },
+                "{text}"
+            );
+        }
+        for text in [
+            "半分にして",
+            "結果を半分にして",
+            "「その答えを半分にして」",
+            "その答えを半分にして、その上で保存して",
+            "その答えを半分にして\n送信して",
+            "その答えを0で割って",
+            "その答えを0分の1にして",
+            "その答えを9223372036854775808倍にして",
+        ] {
+            assert!(
+                !matches!(
+                    interpret(text).unwrap(),
+                    Intent::ScalePreviousCalculation { .. }
+                ),
+                "{text}"
+            );
+        }
+    }
+
+    #[test]
+    fn previous_calculation_scale_seals_original_spans_and_checks_replay() {
+        let previous = ResultRecord {
+            id: digest(b"previous calculation"),
+            input_id: "previous".into(),
+            input_version: 1,
+            lifecycle: Lifecycle::Commit,
+            text: "42".into(),
+            reason: None,
+            guarantee: Guarantee::Computed,
+            calculation: Some(Calculation {
+                expression: "6*7".into(),
+                exact_value: "42".into(),
+                steps: Vec::new(),
+            }),
+            content_plan: None,
+            render: None,
+            receipts: Vec::new(),
+            evidence: Vec::new(),
+            dependencies: Vec::new(),
+            actor_memory_revision: None,
+            execution_graph_ref: None,
+        };
+        let text = "　その答えを０．５０倍にして。";
+        let request = RequestEnvelope::new("case", "input", "actor", text);
+        let mut sealed = seal(&request, Some(&previous)).unwrap();
+        assert_eq!(
+            sealed.meaning.context_result_ref.as_ref(),
+            Some(&previous.id)
+        );
+        for (role, expected) in [("anchor", "その答え"), ("factor", "０．５０倍")] {
+            let spans = &sealed.meaning.source_roles[&format!("/ScalePreviousCalculation/{role}")];
+            assert!(
+                matches!(spans.as_slice(), [span] if span.text == expected && text.get(span.start..span.end) == Some(expected))
+            );
+        }
+        assert!(verified_previous_calculation_scale_input(&sealed).unwrap());
+
+        sealed.meaning.intent = Intent::ScalePreviousCalculation {
+            numerator: 2,
+            denominator: 1,
+        };
+        sealed.semantic_signature = identity(&sealed.meaning).unwrap();
+        assert!(!verified_previous_calculation_scale_input(&sealed).unwrap());
+
+        let no_previous = seal(&request, None).unwrap();
+        assert!(!no_previous.meaning.unresolved.is_empty());
+        assert!(!verified_previous_calculation_scale_input(&no_previous).unwrap());
     }
 
     #[test]
@@ -9443,6 +13015,97 @@ mod tests {
         }
     }
     #[test]
+    fn execution_csv_chart_seals_filename_and_columns_without_a_path() {
+        let text = "　前回の隔離実行で作った「results.CSV」を「店舗」ごとに「売上」の平均を可視化してください。";
+        let request = RequestEnvelope::new("c", "chart", "actor", text);
+        let sealed = seal(&request, None).unwrap();
+        verify_csv_chart_input(&sealed).unwrap();
+        let fields = &sealed.meaning.source_roles;
+        assert_eq!(
+            fields["/CreateCsvChartFromExecution/artifact_name"][0].text,
+            "results.CSV"
+        );
+        for span in fields.values().flatten() {
+            assert_eq!(text.get(span.start..span.end), Some(span.text.as_str()));
+        }
+        for request in [
+            text.replace("results.CSV", "../results.CSV"),
+            format!("{text}さらに送信して。"),
+        ] {
+            assert!(!matches!(
+                interpret(&request).unwrap(),
+                Intent::CreateCsvChartFromExecution { .. },
+            ));
+        }
+    }
+
+    #[test]
+    fn csv_chart_seals_raw_columns_data_and_filter() {
+        let csv = "地域,測定長さ\r\n北,10 cm\r\n南,3 m";
+        let text =
+            format!("　次のCSVの「地域」ごとの「測定長さ」の平均を可視化してください：\r\n{csv}");
+        let request = RequestEnvelope::new("c", "i", "actor", &text);
+        let bundle = seal(&request, None).unwrap();
+        verify_csv_chart_input(&bundle).unwrap();
+        assert_eq!(
+            bundle.meaning.source_roles["/CreateCsvChart/document"][0].text,
+            csv
+        );
+        for span in bundle.meaning.source_roles.values().flatten() {
+            assert_eq!(text.get(span.start..span.end), Some(span.text.as_str()));
+        }
+        let mut bad = bundle;
+        bad.meaning.source_roles.clear();
+        assert!(verify_csv_chart_input(&bad).is_err());
+
+        let text = "　同じCSVで、「期間」が「後半」の行だけでグラフを更新して。";
+        let request = RequestEnvelope::new("c", "j", "actor", text);
+        let bundle = seal(&request, None).unwrap();
+        verify_csv_chart_input(&bundle).unwrap();
+        for span in bundle.meaning.source_roles.values().flatten() {
+            assert_eq!(text.get(span.start..span.end), Some(span.text.as_str()));
+        }
+        assert!(!matches!(
+            interpret(&format!("{text}送信して。")).unwrap(),
+            Intent::FilterPreviousCsvChart { .. }
+        ));
+    }
+
+    #[test]
+    fn code_repair_seals_the_exact_document_in_chat_or_paste() {
+        let document = r#" {"情報源":"def f(x):\n    return x\n","試験":[]} "#;
+        for separator in ["", "\n", "\r\n"] {
+            let text = format!("　コードを修正して：{separator}{document}");
+            let request = RequestEnvelope::new("c", "i", "actor", &text);
+            let bundle = seal(&request, None).unwrap();
+            assert_eq!(verified_code_repair_document(&bundle).unwrap(), document);
+            let span = &bundle.meaning.source_roles[CODE_REPAIR_DOCUMENT_ROLE][0];
+            assert_eq!(text.get(span.start..span.end), Some(document));
+            let mut invalid = bundle;
+            invalid.meaning.source_roles.clear();
+            assert!(verified_code_repair_document(&invalid).is_err());
+        }
+    }
+
+    #[test]
+    fn generated_code_verification_accepts_a_single_chat_line() {
+        let document = r#" {"試験":[{"引数":{"text":"ああ"},"期待値":true}]} "#;
+        for header in [
+            "生成コードを検証して:",
+            "生成コードを検証して：",
+            "VERIFY-GENERATED-CODE:",
+        ] {
+            let prompt = format!("{header}{document}");
+            assert_eq!(
+                interpret(&prompt).unwrap(),
+                Intent::VerifyPreviousCode {
+                    document: document.into(),
+                },
+            );
+        }
+    }
+
+    #[test]
     fn generated_code_verification_headers_preserve_finite_case_document() {
         let document = " \r\n{\"試験\":[{\"引数\":{\"x\":3},\"期待値\":4}],\"最大手数\":48} \t\n";
         for header in [
@@ -9549,6 +13212,57 @@ mod tests {
             interpret(&overflow).unwrap(),
             Intent::Unknown { .. }
         ));
+    }
+
+    #[test]
+    fn generated_code_json_case_retains_exact_values_and_rejects_extra_instructions() {
+        for (arguments, expected) in [
+            (r#"{"values":[4, 1, 8],"limit":3}"#, "[4, 8]"),
+            (r#"{"values":[],"limit":3}"#, "0"),
+            (
+                r#"{"label":"} の結果が [別]"}"#,
+                r#""の結果が になるか確認して""#,
+            ),
+        ] {
+            let text = format!(
+                "　前に作ったコードで、{arguments}　の結果が {expected} になるか確認してください。"
+            );
+            let bundle =
+                seal(&RequestEnvelope::new("case", "check", "actor", &text), None).unwrap();
+            assert_eq!(
+                bundle.meaning.parser_version,
+                PREVIOUS_CODE_SINGLE_CASE_PARSER_VERSION
+            );
+            assert_eq!(
+                bundle.meaning.intent,
+                Intent::VerifyPreviousCode {
+                    document: format!(r#"{{"試験":[{{"引数":{arguments},"期待値":{expected}}}]}}"#),
+                }
+            );
+            for (role, raw) in [
+                ("/VerifyPreviousCode/case/arguments", arguments),
+                (PREVIOUS_CODE_CASE_EXPECTED_ROLE, expected),
+            ] {
+                let spans = &bundle.meaning.source_roles[role];
+                assert_eq!(spans.len(), 1);
+                assert_eq!(spans[0].text, raw);
+                assert_eq!(&text[spans[0].start..spans[0].end], raw);
+            }
+            verify_previous_code_case_input(&bundle).unwrap();
+        }
+        for text in [
+            r#"前に作ったコードで {"x":[1],"x":[2]} の結果が [1] になるか確認して"#,
+            r#"前に作ったコードで {"x":{"a":1,"a":2}} の結果が 1 になるか確認して"#,
+            r#"前に作ったコードで {"x":[1]} の結果が {"a":1,"a":2} になるか確認して"#,
+            r#"前に作ったコードで {"x":[1,]} の結果が [1] になるか確認して"#,
+            r#"前に作ったコードで {"x":[1]} の結果が [1,] になるか確認して"#,
+            r#"前に作ったコードで {"x":[1]} の結果が [1] になるか確認してから外部へ送って"#,
+        ] {
+            assert!(
+                matches!(interpret(text).unwrap(), Intent::Unknown { .. }),
+                "{text}"
+            );
+        }
     }
 
     #[test]
@@ -10910,4 +14624,27 @@ mod structured_document_tests {
             );
         }
     }
+}
+#[test]
+fn attached_table_seals_excel_sheet_and_retains_the_old_csv_shape() {
+    let xlsx =
+        "添付資料の「区分指定」で添付Excelの「売上」シートの「部署」を絞り、「金額」を合計して";
+    let sealed = seal(&RequestEnvelope::new("case", "xlsx", "owner", xlsx), None).unwrap();
+    verify_attached_analysis_input(&sealed).unwrap();
+    assert_eq!(sealed.meaning.parser_version, ATTACHED_TABLE_PARSER_VERSION);
+    let span = &sealed.meaning.source_roles["/AnalyzeAttachments/sheet"][0];
+    assert_eq!(&xlsx[span.start..span.end], "売上");
+    let typed = serde_json::to_value(&sealed.meaning.intent).unwrap();
+    assert_eq!(typed["table_media"], "XLSX");
+
+    let csv = "添付資料の「区分指定」で添付CSVの「部署」を絞り、「金額」を合計して";
+    let sealed = seal(&RequestEnvelope::new("case", "csv", "owner", csv), None).unwrap();
+    verify_attached_analysis_input(&sealed).unwrap();
+    assert_eq!(
+        sealed.meaning.parser_version,
+        ATTACHED_ANALYSIS_PARSER_VERSION
+    );
+    let typed = serde_json::to_value(&sealed.meaning.intent).unwrap();
+    assert!(typed.get("table_media").is_none());
+    assert!(typed.get("sheet").is_none());
 }

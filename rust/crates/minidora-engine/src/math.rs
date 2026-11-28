@@ -2,7 +2,10 @@
 //! Formal results apply to the supplied coefficients/data; they do not validate
 //! real-world premises or infer that observations share a physical population.
 use crate::language::{calculate, rational_text};
-use minidora_domain::{Guarantee, Intent, Lifecycle, Result, ResultRecord, canonical, failure};
+use minidora_domain::{
+    ExplanationAudience, ExplanationDetail, Guarantee, Intent, Lifecycle, Result, ResultRecord,
+    Statistic, canonical, failure,
+};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, Zero};
@@ -93,7 +96,7 @@ impl Budget {
     }
 }
 
-fn scalar(text: &str) -> Result<BigRational> {
+pub(crate) fn scalar(text: &str) -> Result<BigRational> {
     if text.is_empty() || text.len() > MAX_SCALAR_BYTES {
         return Err(failure(
             "MATH_INPUT_LIMIT",
@@ -1042,9 +1045,13 @@ pub(crate) struct ConversationalMathReport {
     pub(crate) units: Vec<String>,
     pub(crate) bytes: Vec<u8>,
     pub(crate) explanation_units: Vec<String>,
+    pub(crate) requested_explanation: Option<Vec<String>>,
 }
 
-pub(crate) fn conversational_math_report(intent: &Intent) -> Result<ConversationalMathReport> {
+pub(crate) fn conversational_math_report(
+    intent: &Intent,
+    explain_within_budget: bool,
+) -> Result<ConversationalMathReport> {
     match intent {
         Intent::Statistics { values, units } => {
             let report = summarize(values, units.as_deref())?;
@@ -1076,6 +1083,62 @@ pub(crate) fn conversational_math_report(intent: &Intent) -> Result<Conversation
                 units,
                 bytes: canonical(&report)?,
                 explanation_units: statistics_explanation_units(&report),
+                requested_explanation: None,
+            })
+        }
+        Intent::DescribeStatistics {
+            values,
+            metrics,
+            show_values,
+            explanation,
+        } => {
+            let report = summarize(values, None)?;
+            let mut units = if *show_values {
+                metrics
+                    .iter()
+                    .map(|metric| statistic_result(&report, *metric))
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            let requested_explanation = match explanation {
+                Some(_) if !explain_within_budget => {
+                    units.push("説明に必要な行動予算がないため保留しました。".into());
+                    None
+                }
+                Some(request) if matches!(request.audience, ExplanationAudience::Unresolved(_)) => {
+                    units.push("指定された読者に合わせた説明は保留しました。".into());
+                    None
+                }
+                Some(request) => {
+                    let explanation = describe_statistics(
+                        &report,
+                        metrics,
+                        &request.audience,
+                        request.detail,
+                        *show_values,
+                    );
+                    units.extend(explanation.iter().cloned());
+                    Some(explanation)
+                }
+                None => None,
+            };
+            let explanation_units = if let Some(explanation) = &requested_explanation {
+                explanation.clone()
+            } else {
+                describe_statistics(
+                    &report,
+                    metrics,
+                    &ExplanationAudience::General,
+                    ExplanationDetail::Standard,
+                    *show_values,
+                )
+            };
+            Ok(ConversationalMathReport {
+                units,
+                bytes: canonical(&report)?,
+                explanation_units,
+                requested_explanation,
             })
         }
         Intent::FiniteProbabilityStatistics { outcomes, weights } => {
@@ -1094,6 +1157,7 @@ pub(crate) fn conversational_math_report(intent: &Intent) -> Result<Conversation
                 units,
                 bytes: canonical(&report)?,
                 explanation_units: finite_probability_explanation_units(&report),
+                requested_explanation: None,
             })
         }
         _ => Err(failure(
@@ -1101,6 +1165,97 @@ pub(crate) fn conversational_math_report(intent: &Intent) -> Result<Conversation
             "この数理処理には通常会話用の結果表示がありません。",
         )),
     }
+}
+
+fn statistic_result(report: &Statistics, metric: Statistic) -> String {
+    let (label, value) = match metric {
+        Statistic::Mean => ("平均", Some(report.mean.as_str())),
+        Statistic::Median => ("中央値", Some(report.median.as_str())),
+        Statistic::Sum => ("合計", Some(report.sum.as_str())),
+        Statistic::Minimum => ("最小値", Some(report.min.as_str())),
+        Statistic::Maximum => ("最大値", Some(report.max.as_str())),
+        Statistic::PopulationVariance => ("母分散", Some(report.population_variance.as_str())),
+        Statistic::SampleVariance => ("標本分散", report.sample_variance.as_deref()),
+    };
+    match value {
+        Some(value) => format!("{label}は {value} です。"),
+        None => format!("{label}は、値が一つしかないため算出できません。"),
+    }
+}
+
+fn describe_statistics(
+    report: &Statistics,
+    metrics: &[Statistic],
+    audience: &ExplanationAudience,
+    detail: ExplanationDetail,
+    show_values: bool,
+) -> Vec<String> {
+    let beginner = *audience == ExplanationAudience::Beginner;
+    let technical = *audience == ExplanationAudience::Technical;
+    let mut units = Vec::new();
+    for metric in metrics {
+        use Statistic::*;
+        let method = match metric {
+            Mean if beginner => "平均は、数を全部合わせて、みんなに同じ量ずつ分けたときの量です。",
+            Mean => "平均は、すべての値の合計をデータの件数で割って求めます。",
+            Median => {
+                "中央値は、値を小さい順に並べたときの真ん中です。中央に二つあるときは、その二つの平均を使います。"
+            }
+            Sum => "合計は、値をすべて足し合わせたものです。",
+            Minimum => "最小値は、値を小さい順に並べたときの先頭です。",
+            Maximum => "最大値は、値を小さい順に並べたときの最後です。",
+            PopulationVariance if beginner && detail == ExplanationDetail::Brief => {
+                "分散は、数が平均のまわりにどれくらい散らばっているかを表します。"
+            }
+            PopulationVariance if beginner => {
+                "分散を求めるには、それぞれの数が平均からどれくらい離れているかを見ます。離れた分を自分自身とかけ合わせて、その結果を平均します。"
+            }
+            PopulationVariance if technical => {
+                "母分散は、算術平均を中心とする偏差平方和を観測数で割った値です。"
+            }
+            PopulationVariance => "母分散は、各値と平均との差を二乗し、その平均を取って求めます。",
+            SampleVariance if report.sample_variance.is_none() => {
+                "値が一つしかない場合は、標本分散の分母を作れないため計算できません。"
+            }
+            SampleVariance if beginner => {
+                "標本分散では、平均からのずれを自分自身とかけて足し、データの数から一つ引いた数で割ります。"
+            }
+            SampleVariance => {
+                "標本分散は、偏差平方和をデータの件数から一つ引いた値で割って求めます。"
+            }
+        };
+        units.push(method.to_owned());
+        if *metric == Mean && detail != ExplanationDetail::Brief {
+            let application = if show_values && beginner {
+                format!(
+                    "このデータなら、同じ量ずつ分けたときに {} ずつになります。",
+                    report.mean
+                )
+            } else if report.min == report.max {
+                "今回の値はすべて同じなので、平均も同じ値です。".into()
+            } else {
+                "今回の平均は、いちばん小さい値といちばん大きい値の間にあります。".into()
+            };
+            units.push(application);
+        }
+    }
+    if metrics.iter().any(|metric| {
+        matches!(
+            metric,
+            Statistic::PopulationVariance | Statistic::SampleVariance
+        )
+    }) && (metrics.contains(&Statistic::PopulationVariance) || report.sample_variance.is_some())
+    {
+        if detail == ExplanationDetail::Detailed {
+            units.push("平均との差は正にも負にもなります。差をそれ自身とかけてから足すと、反対側にある値のずれも打ち消し合いません。".into());
+        }
+        units.push(if report.min == report.max {
+            "今回のデータはすべて同じ値なので、平均から離れた値はありません。".into()
+        } else {
+            "今回のデータには平均から離れた値があり、値にばらつきがあります。".into()
+        });
+    }
+    units
 }
 
 fn statistics_explanation_units(report: &Statistics) -> Vec<String> {

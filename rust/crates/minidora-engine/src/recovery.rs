@@ -42,13 +42,25 @@ const FILE_UNCONFIRMED_PREFIX: &str = "LOCAL_RECONCILIATION_UNCONFIRMED: ";
 const FILE_FAILURE_RECORDED_PREFIX: &str = "LOCAL_FILE_FAILURE_RECORDED: ";
 
 pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord> {
+    store.in_case_memory(actor, case, || reconcile_case(store, actor, case))
+}
+
+fn reconcile_case(store: &Store, actor: &str, case: &str) -> Result<ResultRecord> {
     let mut state = store
         .load_case(actor, case)?
         .ok_or_else(|| failure("CASE_NOT_FOUND", "no saved case to reconcile"))?;
     if state.lifecycle == Lifecycle::Commit {
-        return state
+        let result = state
             .result
-            .ok_or_else(|| failure("INTEGRITY_FAILURE", "committed case has no result"));
+            .take()
+            .ok_or_else(|| failure("INTEGRITY_FAILURE", "committed case has no result"))?;
+        crate::wasm_execution::verify_committed_csv_aggregation(store, &state, &result)?;
+        crate::counterfactual::verify_committed(store, &state, &result)?;
+        crate::core::verify_committed_conversation_return(store, &state, &result)?;
+        return Ok(result);
+    }
+    if crate::wasm_execution::reconciliation_required(&state) {
+        return crate::wasm_execution::reconcile_observation(store, &state);
     }
     if !matches!(state.lifecycle, Lifecycle::Adopted | Lifecycle::Suspend)
         && !(state.lifecycle == Lifecycle::Running && is_reconcile_checkpoint(store, &state)?)
@@ -62,6 +74,7 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
         .result
         .clone()
         .ok_or_else(|| failure("RECOVERY_DATA_UNAVAILABLE", "no adopted result is retained"))?;
+    store.inherit_memory_context(actor, case, &result)?;
     let inspected = inspect(store, actor, &state, &result);
     let (mut action, receipt, mut graph, render_ref, explains_sequence) = match inspected {
         Ok(value) => value,
@@ -161,21 +174,34 @@ pub fn reconcile(store: &Store, actor: &str, case: &str) -> Result<ResultRecord>
                         | Intent::Search { .. }
                         | Intent::SearchWithFallback { .. }
                         | Intent::AskWeb { .. }
-                ) || matches!(
-                    bundle.meaning.parser_version.as_str(),
-                    crate::input::SOURCE_SUMMARY_PARSER_VERSION
-                        | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
-                        | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
-                        | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
-                        | crate::input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION
-                        | crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
-                        | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
-                        | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
-                        | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
-                        | crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION
-                        | crate::input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
-                        | crate::input::CORRECTION_ASSERTION_FOLLOWUP_PARSER_VERSION
-                ) || crate::input::uses_derived_source_context(&bundle.meaning.parser_version)
+                        | Intent::CompareWebResearch { .. }
+                        | Intent::SummarizeBranchSource { .. }
+                        | Intent::ReplaceBranchSource { .. }
+                        | Intent::DescribeStatistics { .. }
+                        | Intent::CreateCsvChartFromExecution { .. }
+                        | Intent::CreateCsvChartFromExecutionValues { .. }
+                        | Intent::CreateCsvChartFromAttachments { .. }
+                        | Intent::AnalyzeAttachments { .. }
+                        | Intent::SpeakPreviousAnswer
+                        | Intent::ProduceImage { .. }
+                        | Intent::ExplainPreviousStop
+                ) || crate::input::is_attached_document_intent(&bundle.meaning.intent)
+                    || matches!(
+                        bundle.meaning.parser_version.as_str(),
+                        crate::input::SOURCE_SUMMARY_PARSER_VERSION
+                            | crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
+                            | crate::input::WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                            | crate::input::RESUMED_WEB_ANSWER_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                            | crate::input::DIRECT_SOURCE_EXPLANATION_PARSER_VERSION
+                            | crate::input::DIRECT_SOURCE_EXPLANATION_FOLLOWUP_PARSER_VERSION
+                            | crate::input::GUARDED_RELATION_RULE_PARSER_VERSION
+                            | crate::input::GUARDED_CONJUNCTIVE_RULE_PARSER_VERSION
+                            | crate::input::MULTI_CONDITION_RULE_PARSER_VERSION
+                            | crate::input::MULTI_CONDITION_RELATION_PARSER_VERSION
+                            | crate::input::CORRECTION_RELATION_ASSERTION_PARSER_VERSION
+                            | crate::input::CORRECTION_ASSERTION_FOLLOWUP_PARSER_VERSION
+                    )
+                    || crate::input::uses_derived_source_context(&bundle.meaning.parser_version)
             })
         {
             store_execution_graph(store, actor, case, &graph)?
@@ -277,7 +303,7 @@ pub fn reconcile_cancelled_effects(
             "cancelled-effect observation requires a CANCEL case",
         ));
     }
-    close_cancelled_file_preparations(store, &state)?;
+    close_cancelled_preparations(store, &state)?;
     for mut action in store.actions(actor, case)? {
         if action.phase != EffectPhase::Unknown {
             continue;
@@ -342,17 +368,19 @@ pub fn reconcile_cancelled_effects(
     store.actions(actor, case)
 }
 
-pub(crate) fn is_unattempted_local_write(action: &ActionRecord) -> bool {
-    action.effect_class == "LOCAL_WRITE"
-        && matches!(
-            action.phase,
-            EffectPhase::Proposed | EffectPhase::Authorized | EffectPhase::Prepared
-        )
+pub(crate) fn is_unattempted_effect(action: &ActionRecord) -> bool {
+    matches!(
+        action.effect_class.as_str(),
+        "LOCAL_WRITE" | crate::wasm_execution::EFFECT
+    ) && matches!(
+        action.phase,
+        EffectPhase::Proposed | EffectPhase::Authorized | EffectPhase::Prepared
+    )
 }
 
-/// Skip a physical write and close only actions whose owning input was durably
-/// cancelled. An issued attempt keeps its existing observation path.
-pub(crate) fn close_cancelled_file_preparations(store: &Store, state: &CaseRevision) -> Result<()> {
+/// Close only unattempted effects whose owning input was durably cancelled.
+/// An issued attempt keeps its original observation path.
+pub(crate) fn close_cancelled_preparations(store: &Store, state: &CaseRevision) -> Result<()> {
     if state.lifecycle != Lifecycle::Cancel {
         return Err(failure(
             "INVALID_RECOVERY_STATE",
@@ -365,7 +393,7 @@ pub(crate) fn close_cancelled_file_preparations(store: &Store, state: &CaseRevis
                 .prior_results
                 .get(&action.input_fingerprint)
                 .is_some_and(|result| result.lifecycle == Lifecycle::Cancel);
-        if is_unattempted_local_write(&action) && owner_cancelled {
+        if is_unattempted_effect(&action) && owner_cancelled {
             action.phase = EffectPhase::Cancelled;
             action.receipt = None;
             store.save_action(&state.actor_id, &action)?;
@@ -5175,6 +5203,14 @@ fn inspect(
             "sealed actor/case/input differs",
         ));
     }
+    if request.purpose.is_some() {
+        verify_registered_input(store, bundle, "RECOVERY_PURPOSE_BINDING_MISMATCH")?;
+        crate::purpose_profile::verify_binding(store, request)?;
+    }
+    if request.speech.is_some() {
+        verify_registered_input(store, bundle, "RECOVERY_SPEECH_INPUT_MISMATCH")?;
+        crate::speech_input::verify(request)?;
+    }
     if matches!(
         bundle.meaning.parser_version.as_str(),
         crate::input::EXPLAINED_SEARCH_BODY_FOLLOWUP_PARSER_VERSION
@@ -5244,6 +5280,21 @@ fn inspect(
             "a clarification preview does not authorize a file effect",
         ));
     }
+    if matches!(
+        &goal.intent,
+        Intent::DescribeStatistics {
+            explanation: Some(ExplanationRequest {
+                audience: ExplanationAudience::Unresolved(_),
+                ..
+            }),
+            ..
+        }
+    ) {
+        return Err(failure(
+            "NO_LOCAL_FILE_GOAL",
+            "a calculation preview with a blocked explanation does not authorize a file effect",
+        ));
+    }
     let path = goal.output_path.as_ref().ok_or_else(|| {
         failure(
             "NO_LOCAL_FILE_GOAL",
@@ -5260,8 +5311,116 @@ fn inspect(
     let requires_generated_comparison = crate::input::uses_generated_comparison(&bundle.meaning);
     let requires_generated_calculation =
         bundle.meaning.parser_version == crate::input::CALCULATION_PARSER_VERSION;
+    let requires_csv_chart = matches!(
+        goal.intent,
+        Intent::CreateCsvChart { .. }
+            | Intent::CreateCsvChartFromExecution { .. }
+            | Intent::CreateCsvChartFromExecutionValues { .. }
+            | Intent::CreateCsvChartFromAttachments { .. }
+            | Intent::FilterPreviousCsvChart { .. }
+    );
+    let requires_execution_values_chart = matches!(
+        goal.intent,
+        Intent::CreateCsvChartFromExecutionValues { .. }
+    ) || matches!(
+        bundle.meaning.intent,
+        Intent::CreateCsvChartFromExecutionValues { .. }
+    );
+    if requires_csv_chart
+        != (goal.required_predicates.first().map(String::as_str)
+            == Some(crate::core::CSV_CHART_PREDICATE))
+        || (requires_execution_values_chart && goal.intent != bundle.meaning.intent)
+    {
+        return Err(failure(
+            "RECOVERY_CSV_CHART_MISMATCH",
+            "元のグラフ作成依頼と保存条件を照合できません。",
+        ));
+    }
+    const ATTACHED_DOCUMENT_MISMATCH: &str = "RECOVERY_ATTACHED_DOCUMENT_MISMATCH";
+    let requires_attached_document = crate::input::is_attached_document_intent(&goal.intent);
+    let document_review = matches!(goal.intent, Intent::ReviewAttachedDocumentFields { .. })
+        || matches!(
+            bundle.meaning.intent,
+            Intent::ReviewAttachedDocumentFields { .. }
+        );
+    if requires_attached_document
+        != (goal.required_predicates.first().map(String::as_str)
+            == Some(crate::core::ATTACHED_DOCUMENT_PREDICATE))
+        || (document_review && goal.intent != bundle.meaning.intent)
+    {
+        return Err(failure(
+            ATTACHED_DOCUMENT_MISMATCH,
+            "元の資料読取りと保存条件を照合できません。",
+        ));
+    }
+    const ATTACHED_ANALYSIS_MISMATCH: &str = "RECOVERY_ATTACHED_ANALYSIS_MISMATCH";
+    let requires_attached_analysis = matches!(goal.intent, Intent::AnalyzeAttachments { .. });
+    if requires_attached_analysis
+        != (goal.required_predicates.first().map(String::as_str)
+            == Some(crate::core::ATTACHED_ANALYSIS_PREDICATE))
+    {
+        return Err(failure(
+            ATTACHED_ANALYSIS_MISMATCH,
+            "元の資料とCSVの集計依頼を保存条件と照合できません。",
+        ));
+    }
+    const SPEECH_MISMATCH: &str = "RECOVERY_SPEECH_MISMATCH";
+    let requires_speech = matches!(goal.intent, Intent::SpeakPreviousAnswer);
+    if requires_speech
+        != (goal.required_predicates.first().map(String::as_str) == Some(crate::speech::PREDICATE))
+    {
+        return Err(failure(
+            SPEECH_MISMATCH,
+            "元の読み上げ依頼を保存条件と照合できません。",
+        ));
+    }
+    const IMAGE_MISMATCH: &str = "RECOVERY_IMAGE_MISMATCH";
+    let requires_image = matches!(goal.intent, Intent::ProduceImage { .. });
+    if requires_image
+        != (goal.required_predicates.first().map(String::as_str)
+            == Some(crate::image_delivery::PREDICATE))
+    {
+        return Err(failure(
+            IMAGE_MISMATCH,
+            "元の画像生成・編集依頼を保存条件と照合できません。",
+        ));
+    }
+    const RESEARCH_MISMATCH: &str = "RECOVERY_WEB_RESEARCH_MISMATCH";
+    let requires_branch_text = crate::branch_text::handles(&goal.intent);
+    if requires_branch_text
+        != (goal.required_predicates.first().map(String::as_str)
+            == Some(crate::branch_text::PREDICATE))
+    {
+        return Err(failure(
+            crate::branch_text::MISMATCH,
+            "分岐元の回答を使う依頼と保存条件が一致しません。",
+        ));
+    }
+    let requires_research = matches!(goal.intent, Intent::CompareWebResearch { .. });
+    if requires_research
+        != (goal.required_predicates.first().map(String::as_str)
+            == Some(crate::research_goal::PREDICATE))
+    {
+        return Err(failure(
+            RESEARCH_MISMATCH,
+            "元のWeb資料の比較依頼を保存条件と照合できません。",
+        ));
+    }
+    const PREVIOUS_STOP_MISMATCH: &str = "RECOVERY_PREVIOUS_STOP_MISMATCH";
+    let requires_previous_stop = matches!(goal.intent, Intent::ExplainPreviousStop);
+    if requires_previous_stop
+        != (bundle.meaning.parser_version == crate::input::PREVIOUS_STOP_EXPLANATION_PARSER_VERSION)
+        || requires_previous_stop
+            != (goal.required_predicates.first().map(String::as_str)
+                == Some(crate::clarification::PREDICATE))
+    {
+        return Err(failure(
+            PREVIOUS_STOP_MISMATCH,
+            "元の保留理由の説明依頼を保存条件と照合できません。",
+        ));
+    }
     let requires_conversational_math =
-        bundle.meaning.parser_version == crate::input::CONVERSATIONAL_MATH_PARSER_VERSION;
+        crate::input::is_conversational_math_version(&bundle.meaning.parser_version);
     if requires_conversational_math
         != (goal.required_predicates.first().map(String::as_str)
             == Some(crate::core::CONVERSATIONAL_MATH_PREDICATE))
@@ -5271,14 +5430,118 @@ fn inspect(
             "the retained calculation goal differs from the sealed Japanese report contract",
         ));
     }
-    let requires_conversation = matches!(
-        goal.intent,
-        Intent::OpenConversationTopic { .. } | Intent::RespondOnConversationTopic { .. }
-    );
+    let requires_conversation = crate::core::is_conversation_intent(&goal.intent);
+    const TRANSLATION_MISMATCH: &str = "RECOVERY_TRANSLATION_MISMATCH";
+    let expected_translation_parser = crate::translation_input::parser_version(&goal.intent);
+    let requires_translation = expected_translation_parser.is_some();
+    let actual_parser = bundle.meaning.parser_version.as_str();
+    let translation_parser_matches = match expected_translation_parser {
+        Some(expected) => actual_parser == expected,
+        None => !matches!(
+            actual_parser,
+            crate::translation_input::PARSER_VERSION
+                | crate::translation_input::REVISION_PARSER_VERSION
+        ),
+    };
+    if !translation_parser_matches
+        || (requires_translation && bundle.meaning.intent != goal.intent)
+        || requires_translation
+            != (goal.required_predicates.first().map(String::as_str)
+                == Some(crate::core::TRANSLATION_PREDICATE))
+    {
+        return Err(failure(
+            TRANSLATION_MISMATCH,
+            "保存された翻訳のGoalと封印入力の版・成立条件が一致しません。",
+        ));
+    }
+    const WORK_PLAN_MISMATCH: &str = "RECOVERY_WORK_PLAN_MISMATCH";
+    let expected_work_plan_parser = crate::work_plan_input::parser_version(&goal.intent);
+    let requires_work_plan = expected_work_plan_parser.is_some();
+    let work_plan_parser_matches = match expected_work_plan_parser {
+        Some(expected) => actual_parser == expected,
+        None => !matches!(
+            actual_parser,
+            crate::work_plan_input::PARSER_VERSION
+                | crate::work_plan_input::REVISION_PARSER_VERSION
+        ),
+    };
+    if !work_plan_parser_matches
+        || (requires_work_plan && bundle.meaning.intent != goal.intent)
+        || requires_work_plan
+            != (goal.required_predicates.first().map(String::as_str)
+                == Some(crate::core::WORK_PLAN_PREDICATE))
+    {
+        return Err(failure(
+            WORK_PLAN_MISMATCH,
+            "保存された作業計画のGoalと封印入力の版・成立条件が一致しません。",
+        ));
+    }
+    const DRAFT_FICTION_MISMATCH: &str = "RECOVERY_DRAFT_FICTION_MISMATCH";
+    let requires_draft_fiction = matches!(goal.intent, Intent::DraftFiction { .. });
+    if requires_draft_fiction
+        != (bundle.meaning.parser_version == crate::fiction_input::PARSER_VERSION)
+        || requires_draft_fiction
+            != (goal.required_predicates.first().map(String::as_str)
+                == Some(crate::core::DRAFT_FICTION_PREDICATE))
+    {
+        return Err(failure(
+            DRAFT_FICTION_MISMATCH,
+            "保存された創作のGoalと封印入力の版・成立条件が一致しません。",
+        ));
+    }
+    const DRAFT_MESSAGE_MISMATCH: &str = "RECOVERY_DRAFT_MESSAGE_MISMATCH";
+    let requires_draft_message = matches!(goal.intent, Intent::DraftMessage { .. });
+    if requires_draft_message != (bundle.meaning.parser_version == crate::writing::PARSER_VERSION)
+        || requires_draft_message
+            != (goal.required_predicates.first().map(String::as_str)
+                == Some(crate::core::DRAFT_MESSAGE_PREDICATE))
+    {
+        return Err(failure(
+            DRAFT_MESSAGE_MISMATCH,
+            "保存された文案のGoalと封印入力の版・成立条件が一致しません。",
+        ));
+    }
+    const MESSAGE_REVISION_MISMATCH: &str = "RECOVERY_MESSAGE_REVISION_MISMATCH";
+    let requires_message_revision = matches!(goal.intent, Intent::ReviseMessage { .. });
+    if requires_message_revision
+        != (bundle.meaning.parser_version == crate::message_revision::PARSER_VERSION)
+        || requires_message_revision
+            != (goal.required_predicates.first().map(String::as_str)
+                == Some(crate::core::MESSAGE_REVISION_PREDICATE))
+    {
+        return Err(failure(
+            MESSAGE_REVISION_MISMATCH,
+            "保存された文案改訂のGoalと封印入力の版・成立条件が一致しません。",
+        ));
+    }
+    const OPTION_DECISION_MISMATCH: &str = "RECOVERY_OPTION_DECISION_MISMATCH";
+    let requires_option_decision = crate::core::is_decision_intent(&goal.intent);
+    if requires_option_decision
+        != matches!(
+            bundle.meaning.parser_version.as_str(),
+            crate::decision_input::PARSER_VERSION | crate::decision_input::REVISION_PARSER_VERSION
+        )
+        || requires_option_decision
+            != (goal.required_predicates.first().map(String::as_str)
+                == Some(crate::core::OPTION_DECISION_PREDICATE))
+    {
+        return Err(failure(
+            OPTION_DECISION_MISMATCH,
+            "比較のGoalと封印入力の版・成立条件が一致しません。",
+        ));
+    }
     let requires_verified_correction =
         bundle.meaning.parser_version == crate::input::CALCULATION_CORRECTION_PARSER_VERSION;
     let requires_verified_length_conversion =
         bundle.meaning.parser_version == crate::input::PREVIOUS_LENGTH_CONVERSION_PARSER_VERSION;
+    let requires_verified_scale =
+        bundle.meaning.parser_version == crate::input::PREVIOUS_CALCULATION_SCALE_PARSER_VERSION;
+    if requires_verified_scale != matches!(goal.intent, Intent::ScalePreviousCalculation { .. }) {
+        return Err(failure(
+            "RECOVERY_CALCULATION_SCALE_MISMATCH",
+            "倍率を適用する処理が封印済みの発話と一致しません。",
+        ));
+    }
     let requires_web_length_conversion = bundle.meaning.parser_version
         == crate::input::PREVIOUS_WEB_LENGTH_CONVERSION_PARSER_VERSION;
     let requires_previous_finite_event = bundle.meaning.parser_version
@@ -5524,9 +5787,16 @@ fn inspect(
         && (requires_generated_comparison
             || requires_generated_calculation
             || requires_conversation
+            || requires_draft_message
+            || requires_draft_fiction
+            || requires_translation
+            || requires_work_plan
+            || requires_message_revision
+            || requires_option_decision
             || requires_hearing
             || requires_verified_correction
             || requires_verified_length_conversion
+            || requires_verified_scale
             || requires_web_length_conversion
             || requires_previous_finite_event
             || requires_filtered_csv_statistics
@@ -5537,12 +5807,22 @@ fn inspect(
             || requires_correction_assertion
             || requires_sequence_edit
             || requires_typed_sequence_report
+            || requires_csv_chart
+            || requires_attached_document
+            || requires_attached_analysis
+            || requires_speech
+            || requires_image
+            || requires_branch_text
+            || requires_research
+            || requires_previous_stop
             || requires_generated_why
             || matches!(
                 goal.intent,
                 Intent::AskWeb { .. }
                     | Intent::ExplainCode { .. }
+                    | Intent::RepairCode { .. }
                     | Intent::GenerateReturnFunction { .. }
+                    | Intent::GenerateFunctionFromSpec { .. }
             )
             || explains_sequence
             || assertion_predicate.is_some()
@@ -5818,23 +6098,28 @@ fn inspect(
             return Err(invalid());
         }
     }
-    if requires_verified_correction || requires_verified_length_conversion {
+    if requires_verified_correction
+        || requires_verified_length_conversion
+        || requires_verified_scale
+    {
         let started = Instant::now();
-        let code = if requires_verified_correction {
-            "RECOVERY_CALCULATION_CORRECTION_MISMATCH"
+        let (code, message) = if requires_verified_scale {
+            (
+                "RECOVERY_CALCULATION_SCALE_MISMATCH",
+                "保存した倍率の結果が、元の発話と計算結果に一致しません。",
+            )
+        } else if requires_verified_correction {
+            (
+                "RECOVERY_CALCULATION_CORRECTION_MISMATCH",
+                "the adopted correction differs from the exact sealed operand and its prior result",
+            )
         } else {
-            "RECOVERY_LENGTH_CONVERSION_MISMATCH"
-        };
-        let invalid = || {
-            failure(
-                code,
-                if requires_verified_correction {
-                    "the adopted correction differs from the exact sealed operand and its prior result"
-                } else {
-                    "the adopted length conversion differs from the exact sealed unit and its prior result"
-                },
+            (
+                "RECOVERY_LENGTH_CONVERSION_MISMATCH",
+                "the adopted length conversion differs from the exact sealed unit and its prior result",
             )
         };
+        let invalid = || failure(code, message);
         verify_registered_input(store, bundle, code)?;
         let previous = bundle
             .meaning
@@ -5842,6 +6127,12 @@ fn inspect(
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
             .ok_or_else(invalid)?;
+        if requires_verified_scale
+            && request.context_ref.is_none()
+            && store.input_start_predecessor(state)?.as_ref() != Some(previous)
+        {
+            return Err(invalid());
+        }
         let calculation =
             calculation_from_context(store, bundle, previous, &state.prior_results, started)?;
         let unit = exact_calculation_unit(&calculation);
@@ -6049,11 +6340,21 @@ fn inspect(
     }
     let mut unsigned_plan = plan.clone();
     unsigned_plan.id.clear();
+    let locale_valid = if requires_translation {
+        use minidora_domain::TranslationLanguage;
+        // The translation verifier below binds this to the exact target language.
+        [
+            TranslationLanguage::Japanese.locale(),
+            TranslationLanguage::English.locale(),
+        ]
+        .contains(&plan.locale.as_str())
+    } else {
+        plan.locale == request.locale && crate::core::supports_japanese_output_locale(&plan.locale)
+    };
     if plan.id != identity(&unsigned_plan)?
         || plan.text != result.text
         || plan.guarantee != result.guarantee
-        || plan.locale != request.locale
-        || !crate::core::supports_japanese_output_locale(&plan.locale)
+        || !locale_valid
         || plan.required_units.is_empty()
         || plan.guarantee == Guarantee::Unknown
         || (plan.guarantee == Guarantee::Hypothesis
@@ -6071,6 +6372,7 @@ fn inspect(
                     | Intent::RetainPreviousGroupMeanHypothesis
                     | Intent::ExplainPreviousGroupMeanHypothesis
                     | Intent::AssessPreviousGroupMeanHypothesis { .. }
+                    | Intent::SpeakPreviousAnswer
             )
             && !saved_comparison_explanation
             && !saved_relation_profile_explanation
@@ -6100,6 +6402,26 @@ fn inspect(
         ));
     }
     verify_goal_content(&goal, result, plan)?;
+    if requires_image {
+        verify_registered_input(store, bundle, IMAGE_MISMATCH)?;
+        crate::image_delivery::verify_delivery(store, bundle, result, plan, render)?;
+    }
+    let branch_source_ref = if requires_branch_text {
+        verify_registered_input(store, bundle, crate::branch_text::MISMATCH)?;
+        Some(crate::branch_text::verify_delivery(
+            store, bundle, result, plan,
+        )?)
+    } else {
+        None
+    };
+    let research = if requires_research {
+        verify_registered_input(store, bundle, RESEARCH_MISMATCH)?;
+        Some(crate::research_goal::verify_delivery(
+            store, bundle, result, plan,
+        )?)
+    } else {
+        None
+    };
     if let Some((_, predicate)) = condition_contract {
         if goal.required_predicates.first().map(String::as_str) != Some(predicate) {
             return Err(failure(
@@ -6279,6 +6601,36 @@ fn inspect(
     } else if requires_conversation {
         verify_registered_input(store, bundle, "RECOVERY_CONVERSATION_MISMATCH")?;
         Some(crate::core::verify_conversation_computation(
+            store, state, result, plan,
+        )?)
+    } else if requires_option_decision {
+        verify_registered_input(store, bundle, OPTION_DECISION_MISMATCH)?;
+        Some(crate::core::verify_decision_computation(
+            store, state, result, plan,
+        )?)
+    } else if requires_translation {
+        verify_registered_input(store, bundle, TRANSLATION_MISMATCH)?;
+        Some(crate::core::verify_translation_computation(
+            store, state, result, plan,
+        )?)
+    } else if requires_work_plan {
+        verify_registered_input(store, bundle, WORK_PLAN_MISMATCH)?;
+        Some(crate::core::verify_work_plan_computation(
+            store, state, result, plan,
+        )?)
+    } else if requires_draft_fiction {
+        verify_registered_input(store, bundle, DRAFT_FICTION_MISMATCH)?;
+        Some(crate::core::verify_fiction_computation(
+            store, state, result, plan,
+        )?)
+    } else if requires_draft_message || requires_message_revision {
+        let code = if requires_message_revision {
+            MESSAGE_REVISION_MISMATCH
+        } else {
+            DRAFT_MESSAGE_MISMATCH
+        };
+        verify_registered_input(store, bundle, code)?;
+        Some(crate::core::verify_message_computation(
             store, state, result, plan,
         )?)
     } else {
@@ -6592,9 +6944,13 @@ fn inspect(
     {
         verify_previous_relation_context(store, actor, case, state, result, plan, &goal)?;
     }
+    let mut statistics_report = None;
     if requires_conversational_math {
         verify_registered_input(store, bundle, "RECOVERY_CONVERSATIONAL_MATH_MISMATCH")?;
-        crate::core::verify_conversational_math_report(store, bundle, result)?;
+        let report = crate::core::verify_conversational_math_report(store, bundle, result)?;
+        if matches!(goal.intent, Intent::DescribeStatistics { .. }) {
+            statistics_report = Some(report);
+        }
     } else if bundle.meaning.parser_version
         == crate::input::NATURAL_FINITE_EXPECTATION_PARSER_VERSION
     {
@@ -6768,10 +7124,17 @@ fn inspect(
             ));
         }
     }
-    if matches!(goal.intent, Intent::GenerateReturnFunction { .. }) {
+    if matches!(
+        goal.intent,
+        Intent::GenerateReturnFunction { .. } | Intent::GenerateFunctionFromSpec { .. }
+    ) {
         const CODE: &str = "RECOVERY_RETURN_FUNCTION_MISMATCH";
         verify_registered_input(store, bundle, CODE)?;
-        let report = crate::code_generation::generate_return_function(bundle)?;
+        let report = if matches!(goal.intent, Intent::GenerateFunctionFromSpec { .. }) {
+            crate::code_generation::generate_function_from_spec(bundle)?
+        } else {
+            crate::code_generation::generate_return_function(bundle)?
+        };
         let reference = verified_artifact(store, actor, case, &report)?;
         if result.guarantee != Guarantee::Computed
             || result.dependencies != [reference]
@@ -6784,6 +7147,131 @@ fn inspect(
             return Err(failure(
                 CODE,
                 "the retained code differs from the original function request",
+            ));
+        }
+    }
+    let mut chart_source_evidence = None;
+    if requires_csv_chart {
+        const CODE: &str = "RECOVERY_CSV_CHART_MISMATCH";
+        verify_registered_input(store, bundle, CODE)?;
+        let chart = crate::csv_chart_context::produce(store, state, bundle, Instant::now())?;
+        chart_source_evidence = chart.source_evidence;
+        if let Some(evidence) = &chart_source_evidence
+            && let Some(bytes) = &evidence.new_bytes
+            && &store.get_bytes(actor, case, &evidence.reference)? != bytes
+        {
+            return Err(failure(CODE, "保存済みの添付記録が一致しません。"));
+        }
+        let reference = digest(&chart.report_bytes);
+        if result.guarantee != Guarantee::Computed
+            || plan.guarantee != result.guarantee
+            || result.dependencies != chart.dependencies
+            || plan.required_units != chart.units
+            || plan.text != chart.units.join("\n")
+            || result.text != plan.text
+            || store.get_bytes(actor, case, &reference)? != chart.report_bytes
+        {
+            return Err(failure(
+                CODE,
+                "元のCSVと条件から保存したグラフを再現できません。",
+            ));
+        }
+    }
+    let mut attached_document_manifest = None;
+    if requires_attached_document {
+        verify_registered_input(store, bundle, ATTACHED_DOCUMENT_MISMATCH)?;
+        let document =
+            crate::attached_document::produce(store, state, bundle, Instant::now(), Some(result))?;
+        let report = digest(&document.report_bytes);
+        if result.guarantee != Guarantee::SourceReport
+            || plan.guarantee != result.guarantee
+            || result.dependencies != document.dependencies
+            || plan.required_units != document.units
+            || plan.text != document.units.join("\n")
+            || result.text != plan.text
+            || store.get_bytes(actor, case, &report)? != document.report_bytes
+            || store.get_bytes(actor, case, &document.manifest_ref)? != document.manifest_bytes
+        {
+            return Err(failure(
+                ATTACHED_DOCUMENT_MISMATCH,
+                "保存済みの添付資料から読取り結果を再現できません。",
+            ));
+        }
+        attached_document_manifest = Some(document.manifest_ref);
+    }
+    let mut attached_analysis_refs = None;
+    if requires_attached_analysis {
+        verify_registered_input(store, bundle, ATTACHED_ANALYSIS_MISMATCH)?;
+        let analysis = crate::attachment_analysis::produce(bundle, Instant::now())?;
+        let condition = digest(&analysis.condition_bytes);
+        let table = digest(&analysis.table_bytes);
+        if result.guarantee != Guarantee::Derived
+            || plan.guarantee != result.guarantee
+            || result.dependencies != [condition.as_str(), table.as_str()]
+            || plan.required_units != analysis.units
+            || plan.text != analysis.units.join("\n")
+            || result.text != plan.text
+            || store.get_bytes(actor, case, &condition)? != analysis.condition_bytes
+            || store.get_bytes(actor, case, &table)? != analysis.table_bytes
+        {
+            return Err(failure(
+                ATTACHED_ANALYSIS_MISMATCH,
+                "添付資料の条件とCSVの計算結果を保存済みの根拠から再現できません。",
+            ));
+        }
+        attached_analysis_refs = Some((condition, table));
+    }
+    let speech_source_ref = if requires_speech {
+        verify_registered_input(store, bundle, SPEECH_MISMATCH)?;
+        Some(crate::speech::verify_delivery(
+            store, state, bundle, result, plan, render,
+        )?)
+    } else {
+        None
+    };
+    let previous_stop_ref = if requires_previous_stop {
+        verify_registered_input(store, bundle, PREVIOUS_STOP_MISMATCH)?;
+        let explanation = crate::clarification::explain_previous_stop(store, state, bundle)?;
+        if result.guarantee != Guarantee::Derived
+            || plan.guarantee != result.guarantee
+            || result.calculation.is_some()
+            || !result.evidence.is_empty()
+            || result.dependencies != explanation.dependencies
+            || plan.required_units != explanation.units
+            || plan.text != explanation.units.join("\n")
+            || result.text != plan.text
+            || store.get_bytes(actor, case, &explanation.source_ref)? != explanation.source_bytes
+        {
+            return Err(failure(
+                PREVIOUS_STOP_MISMATCH,
+                "元の保留理由と保存した説明を照合できません。",
+            ));
+        }
+        Some(explanation.source_ref)
+    } else {
+        None
+    };
+    if matches!(goal.intent, Intent::RepairCode { .. }) {
+        const CODE: &str = "RECOVERY_CODE_REPAIR_MISMATCH";
+        verify_registered_input(store, bundle, CODE)?;
+        let document = crate::input::verified_code_repair_document(bundle)?;
+        let deadline = Instant::now().checked_add(Duration::from_millis(goal.budget.deadline_ms));
+        let report = crate::code_capability::repair_source(document, deadline)?;
+        let units = crate::code_capability::repair_lines(&report)?;
+        let expected_text = units.join("\n");
+        let report_size = canonical(&report)?.len();
+        let report_ref = verified_artifact(store, actor, case, &report)?;
+        if result.guarantee != Guarantee::Computed
+            || result.dependencies != [report_ref]
+            || plan.guarantee != result.guarantee
+            || plan.required_units != units
+            || plan.text != expected_text
+            || result.text != expected_text
+            || report_size.saturating_add(expected_text.len()) > goal.budget.max_evidence_bytes
+        {
+            return Err(failure(
+                CODE,
+                "元のコードと試験から修正結果を再現できません。",
             ));
         }
     }
@@ -7355,6 +7843,24 @@ fn inspect(
     };
     let mut expected_nodes = Vec::new();
     let mut sources = Vec::new();
+    if let Some(report) = &statistics_report {
+        use crate::core::{STATISTICS_EXPLANATION_NODE, STATISTICS_VALUES_NODE};
+
+        expected_nodes.push(GoalNode {
+            id: STATISTICS_VALUES_NODE.into(),
+            kind: GoalNodeKind::ComputedValue,
+            requires: Vec::new(),
+        });
+        sources.push(STATISTICS_VALUES_NODE.into());
+        if report.requested_explanation.is_some() {
+            expected_nodes.push(GoalNode {
+                id: STATISTICS_EXPLANATION_NODE.into(),
+                kind: GoalNodeKind::ContentPlan,
+                requires: vec![STATISTICS_VALUES_NODE.into()],
+            });
+            sources.push(STATISTICS_EXPLANATION_NODE.into());
+        }
+    }
     let direct_continuation = if matches!(goal.intent, Intent::FetchNextUnobservedSource) {
         let invalid = || {
             failure(
@@ -7466,6 +7972,14 @@ fn inspect(
     } else if web_answer.is_some() {
         expected_nodes.extend(crate::web_answer::nodes());
         sources.push(crate::web_answer::ANSWER_NODE.into());
+    } else if let Some(research) = &research {
+        use crate::research_goal::{CALC_NODE, REPORT_NODE, nodes};
+
+        expected_nodes.extend(nodes(research.calculation.is_some()));
+        sources.push(REPORT_NODE.into());
+        if research.calculation.is_some() {
+            sources.push(CALC_NODE.into());
+        }
     } else if !result.evidence.is_empty() {
         return Err(failure(
             "RECOVERY_EVIDENCE_MISMATCH",
@@ -7636,6 +8150,55 @@ fn inspect(
         sources.extend(sequence_nodes.iter().map(|node| node.id.clone()));
         expected_nodes.extend(sequence_nodes);
     }
+    if let Some(evidence) = &chart_source_evidence {
+        let id = evidence.node.to_owned();
+        expected_nodes.push(GoalNode {
+            id: id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        sources.push(id);
+    }
+    if attached_document_manifest.is_some() {
+        let id = crate::attached_document::SOURCE_NODE.to_owned();
+        expected_nodes.push(GoalNode {
+            id: id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        sources.push(id);
+    }
+    if attached_analysis_refs.is_some() {
+        expected_nodes.extend(crate::core::attached_analysis_nodes());
+        sources.push(crate::core::ATTACHED_ANALYSIS_TABLE.into());
+    }
+    if speech_source_ref.is_some() {
+        let id = crate::speech::SOURCE_NODE.to_owned();
+        expected_nodes.push(GoalNode {
+            id: id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        sources.push(id);
+    }
+    if previous_stop_ref.is_some() {
+        let id = crate::clarification::SOURCE_NODE.to_owned();
+        expected_nodes.push(GoalNode {
+            id: id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        sources.push(id);
+    }
+    if branch_source_ref.is_some() {
+        let id = crate::branch_text::SOURCE_NODE.to_owned();
+        expected_nodes.push(GoalNode {
+            id: id.clone(),
+            kind: GoalNodeKind::Evidence,
+            requires: Vec::new(),
+        });
+        sources.push(id);
+    }
     expected_nodes.extend([
         GoalNode {
             id: "compute".into(),
@@ -7682,6 +8245,22 @@ fn inspect(
     }
     let mut graph = Scheduler::new(nodes, goal.budget.max_actions)?;
     let mut source_refs = BTreeMap::new();
+    if let Some(report) = &statistics_report {
+        use crate::core::{STATISTICS_EXPLANATION_NODE, STATISTICS_VALUES_NODE};
+
+        let values_ref = digest(&report.bytes);
+        graph.observe(STATISTICS_VALUES_NODE, &values_ref, &BTreeMap::new())?;
+        if let Some(explanation) = &report.requested_explanation {
+            let explanation_ref = verified_artifact(store, actor, case, explanation)?;
+            graph.observe(
+                STATISTICS_EXPLANATION_NODE,
+                &explanation_ref,
+                &BTreeMap::from([(STATISTICS_VALUES_NODE.into(), values_ref.clone())]),
+            )?;
+            source_refs.insert(STATISTICS_EXPLANATION_NODE.into(), explanation_ref);
+        }
+        source_refs.insert(STATISTICS_VALUES_NODE.into(), values_ref);
+    }
     let verify_sequence_artifact = |expected: &[u8]| {
         let reference = digest(expected);
         if store.get_bytes(actor, case, &reference)? != expected {
@@ -7787,6 +8366,20 @@ fn inspect(
             &BTreeMap::from([(BODY_NODE.into(), body_ref.to_owned())]),
         )?;
         source_refs.insert(ANSWER_NODE.into(), answer_ref.to_owned());
+    } else if let Some(research) = research {
+        use crate::research_goal::{CALC_NODE, READ_NODE, REPORT_NODE};
+
+        graph.observe(READ_NODE, &research.observation, &BTreeMap::new())?;
+        graph.observe(
+            REPORT_NODE,
+            &research.comparison,
+            &BTreeMap::from([(READ_NODE.into(), research.observation)]),
+        )?;
+        source_refs.insert(REPORT_NODE.into(), research.comparison);
+        if let Some(reference) = research.calculation {
+            graph.observe(CALC_NODE, &reference, &BTreeMap::new())?;
+            source_refs.insert(CALC_NODE.into(), reference);
+        }
     } else {
         let mut source_requires = BTreeMap::new();
         if let Some((_, reference)) = direct_continuation {
@@ -7952,6 +8545,34 @@ fn inspect(
             "RECOVERY_DEPENDENCY_MISMATCH",
             "content did not retain the actual compute artifact",
         ));
+    }
+    if let Some(evidence) = chart_source_evidence {
+        graph.observe(evidence.node, &evidence.reference, &BTreeMap::new())?;
+        source_refs.insert(evidence.node.into(), evidence.reference);
+    }
+    if let Some(reference) = attached_document_manifest {
+        let id = crate::attached_document::SOURCE_NODE;
+        graph.observe(id, &reference, &BTreeMap::new())?;
+        source_refs.insert(id.into(), reference);
+    }
+    if let Some((condition, table)) = attached_analysis_refs {
+        crate::core::observe_attached_analysis(&mut graph, &condition, &table)?;
+        source_refs.insert(crate::core::ATTACHED_ANALYSIS_TABLE.into(), table);
+    }
+    if let Some(reference) = speech_source_ref {
+        let id = crate::speech::SOURCE_NODE;
+        graph.observe(id, &reference, &BTreeMap::new())?;
+        source_refs.insert(id.into(), reference);
+    }
+    if let Some(reference) = previous_stop_ref {
+        let id = crate::clarification::SOURCE_NODE;
+        graph.observe(id, &reference, &BTreeMap::new())?;
+        source_refs.insert(id.into(), reference);
+    }
+    if let Some(reference) = branch_source_ref {
+        let id = crate::branch_text::SOURCE_NODE;
+        graph.observe(id, &reference, &BTreeMap::new())?;
+        source_refs.insert(id.into(), reference);
     }
     graph.observe("compute", &compute_ref, &source_refs)?;
     let content_ref = verified_artifact(store, actor, case, plan)?;
@@ -9484,6 +10105,10 @@ mod tests {
     }
 
     fn retain_attempted_prefix(state: &Path) -> String {
+        retain_attempted_prefix_for_action(state, None)
+    }
+
+    fn retain_attempted_prefix_for_action(state: &Path, selected_action: Option<&str>) -> String {
         // Test-only crash injection: retain an actual production journal prefix
         // immediately before effect confirmation, while keeping the physical
         // output that already occurred. This models rollback of the later
@@ -9514,16 +10139,22 @@ mod tests {
         let result = revision.result.as_ref().unwrap();
         let result_sha = digest(&canonical(result).unwrap());
         let token: String = database
-            .query_row("SELECT idempotency_key FROM action_identity", [], |r| {
-                r.get(0)
-            })
+            .query_row(
+                "SELECT idempotency_key FROM action_identity
+                 WHERE ?1 IS NULL OR action_id=?1",
+                [selected_action],
+                |r| r.get(0),
+            )
             .unwrap();
         database.execute_batch("PRAGMA foreign_keys=ON; DROP TRIGGER case_revision_no_delete; DROP TRIGGER action_history_no_delete;").unwrap();
         database
             .execute("DELETE FROM case_revision WHERE revision>?1", [number])
             .unwrap();
         database
-            .execute("DELETE FROM action_history WHERE sequence>3", [])
+            .execute(
+                "DELETE FROM action_history WHERE sequence>3 AND (?1 IS NULL OR action_id=?1)",
+                [selected_action],
+            )
             .unwrap();
         database
             .execute(
@@ -12750,6 +13381,563 @@ mod tests {
     }
 
     #[test]
+    fn code_repair_reconciles_the_confirmed_report_without_rewriting() {
+        let fixture = empty_fixture();
+        let source = "def eligible(age):\r\n    if age > 18:\r\n        return \"可\"\r\n    return \"不可\"\r\n";
+        let document = serde_json::json!({
+            "情報源": source,
+            "試験": [
+                {"引数": {"age": 17}, "期待値": "不可"},
+                {"引数": {"age": 18}, "期待値": "可"},
+                {"引数": {"age": 19}, "期待値": "可"}
+            ]
+        });
+        let mut request = RequestEnvelope::new(
+            "case",
+            "repair-python",
+            "alice",
+            &format!("コードを修正して:\r\n{document}"),
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let repaired = engine.execute("alice", request).unwrap();
+        assert_eq!(repaired.lifecycle, Lifecycle::Commit, "{repaired:?}");
+        assert_eq!(repaired.guarantee, Guarantee::Computed);
+        assert!(repaired.text.contains("if age >= 18:"));
+        let [report_ref] = repaired.dependencies.as_slice() else {
+            panic!("expected a single repair report reference");
+        };
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, repaired.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        // Simulate interruption after the real report write but before confirmation.
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let saved = store.load_case("alice", "case").unwrap().unwrap();
+        let pending = saved.result.as_ref().unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        let report_path = fixture.state.join("blobs").join(report_ref);
+        let unavailable = fixture.directory.join("withheld-repair-report");
+        fs::rename(&report_path, &unavailable).unwrap();
+        let missing = inspect(&store, "alice", &saved, pending);
+        fs::rename(&unavailable, &report_path).unwrap();
+        assert!(matches!(
+            missing,
+            Err(Error::Contract { code, message })
+                if code == "INTEGRITY_FAILURE" && message.contains(report_ref)
+        ));
+        assert_eq!(store.actions("alice", "case").unwrap(), actions);
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, repaired.dependencies);
+        assert_eq!(recovered.text, repaired.text);
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected one delivery receipt: {:?}", recovered.receipts);
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
+    fn attached_analysis_recovery_keeps_the_consumed_condition_and_original_delivery() {
+        use minidora_domain::RequestAttachment;
+
+        let fixture = empty_fixture();
+        let target = fixture.directory.join("analysis.txt");
+        let mut request = RequestEnvelope::new(
+            "case",
+            "mixed-attachment-analysis",
+            "alice",
+            "添付資料の「集計対象」で添付CSVの「区分」を絞り、「金額」を合計して",
+        );
+        request.attachments = vec![
+            RequestAttachment {
+                name: "対象.md".into(),
+                text: "# 計画\n集計対象: 西\n".into(),
+                binary_base64: None,
+            },
+            RequestAttachment {
+                name: "実績.csv".into(),
+                text: "区分,金額\n西,5 JPY\n東,400 JPY\n西,9 円\n".into(),
+                binary_base64: None,
+            },
+        ];
+        request.output_path = Some(target.clone());
+        request.permissions.write_paths.insert(target.clone());
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let saved = engine.execute("alice", request).unwrap();
+        assert_eq!(saved.lifecycle, Lifecycle::Commit, "{saved:?}");
+        assert!(saved.text.contains("14 JPY"));
+        assert_eq!(saved.dependencies.len(), 2);
+        let modified = fs::metadata(&target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, saved.dependencies);
+        assert_eq!(recovered.text, saved.text);
+        let graph: serde_json::Value = serde_json::from_slice(
+            &store
+                .get_bytes(
+                    "alice",
+                    "case",
+                    recovered.execution_graph_ref.as_deref().unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            graph[5]["attached-analysis-table"]["attached-analysis-condition"],
+            saved.dependencies[0].as_str()
+        );
+        assert_eq!(
+            graph[5]["compute"]["attached-analysis-table"],
+            saved.dependencies[1].as_str()
+        );
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected only the original delivery");
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&target).unwrap(), recovered.text.as_bytes());
+        assert_eq!(fs::metadata(&target).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn attached_document_followup_recovers_the_original_report_bytes_without_writing_again() {
+        let fixture = empty_fixture();
+        let target = fixture.directory.join("excerpt.txt");
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "initial-document",
+            "alice",
+            "添付資料から「締切」が書かれた箇所を抜き出して",
+        );
+        request
+            .attachments
+            .push(minidora_domain::RequestAttachment {
+                name: "計画.md".into(),
+                text: "# 計画\r\n提出締切は3月15日です。\r\n予算は8万円です。\r\n".into(),
+                binary_base64: None,
+            });
+        let original = engine.execute("alice", request).unwrap();
+        assert_eq!(original.lifecycle, Lifecycle::Commit, "{original:?}");
+        let mut request = RequestEnvelope::new(
+            "case",
+            "document-followup",
+            "alice",
+            "同じ添付資料から「予算」が書かれた箇所を抜き出して",
+        );
+        request.context_ref = Some(original.id.clone());
+        request.output_path = Some(target.clone());
+        request.permissions.write_paths.insert(target.clone());
+        let saved = engine.execute("alice", request).unwrap();
+        assert_eq!(saved.lifecycle, Lifecycle::Commit, "{saved:?}");
+        assert!(saved.text.contains("予算は8万円です。"));
+        let modified = fs::metadata(&target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, saved.dependencies);
+        assert_eq!(recovered.dependencies[0], original.id);
+        let graph: serde_json::Value = serde_json::from_slice(
+            &store
+                .get_bytes(
+                    "alice",
+                    "case",
+                    recovered.execution_graph_ref.as_deref().unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            graph[5]["compute"][crate::attached_document::SOURCE_NODE],
+            original.dependencies[0].as_str()
+        );
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected only the original write");
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&target).unwrap(), recovered.text.as_bytes());
+        assert_eq!(fs::metadata(&target).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn attached_csv_chart_reconciles_the_delivery_and_its_source_manifest() {
+        use minidora_domain::RequestAttachment;
+
+        let fixture = empty_fixture();
+        let target = fixture.directory.join("attached.svg");
+        let first = "店,実績\n北,10\n";
+        let second = "実績,店\n26,北\n";
+        let mut request = RequestEnvelope::new(
+            "case",
+            "attached-chart",
+            "alice",
+            "添付したCSVを「店」ごとに「実績」の平均をグラフにして",
+        );
+        request.attachments = vec![
+            RequestAttachment {
+                name: "4月.csv".into(),
+                text: first.into(),
+                binary_base64: None,
+            },
+            RequestAttachment {
+                name: "5月.csv".into(),
+                text: second.into(),
+                binary_base64: None,
+            },
+        ];
+        request.output_path = Some(target.clone());
+        request.permissions.write_paths.insert(target.clone());
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let saved = engine.execute("alice", request).unwrap();
+        assert_eq!(saved.lifecycle, Lifecycle::Commit, "{saved:?}");
+        assert!(saved.text.contains("平均 18"));
+        let manifest = &saved.dependencies[0];
+        let modified = fs::metadata(&target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let stored = store.get_bytes("alice", "case", manifest).unwrap();
+        assert_eq!(digest(&stored), *manifest);
+        let expected = (
+            "minidora.csv-attachments.v1",
+            [
+                ("4月.csv", first.len(), digest(first.as_bytes())),
+                ("5月.csv", second.len(), digest(second.as_bytes())),
+            ],
+        );
+        assert_eq!(stored, canonical(&expected).unwrap());
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, saved.dependencies);
+        let graph: serde_json::Value = serde_json::from_slice(
+            &store
+                .get_bytes(
+                    "alice",
+                    "case",
+                    recovered.execution_graph_ref.as_deref().unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(graph[5]["compute"]["attached-csv"], manifest.as_str());
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected one SVG receipt");
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&target).unwrap(), recovered.text.as_bytes());
+        assert_eq!(fs::metadata(&target).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn filtered_csv_chart_reconciles_the_original_svg_without_rewriting() {
+        use crate::csv_chart::{CsvChartReport, SVG_PREFIX};
+
+        let fixture = empty_fixture();
+        let csv =
+            "地区,期間,距離\r\n北,前半,1 m\r\n南,後半,250 cm\r\n北,後半,-50 cm\r\n西,前半,\r\n";
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let initial = format!("CSVの「地区」ごとの「距離」の平均を棒グラフにして:\r\n{csv}");
+        let original = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "csv-chart", "alice", &initial),
+            )
+            .unwrap();
+        assert_eq!(original.lifecycle, Lifecycle::Commit, "{original:?}");
+        assert!(original.text.contains("「北」は平均 1/4 m（2件）"));
+        assert!(original.receipts.is_empty());
+
+        let mut request = RequestEnvelope::new(
+            "case",
+            "first-chart-filter",
+            "alice",
+            "「期間」が「後半」の行に絞ってグラフを更新して",
+        );
+        request.context_ref = Some(original.id.clone());
+        let prior = engine.execute("alice", request).unwrap();
+        assert_eq!(prior.lifecycle, Lifecycle::Commit, "{prior:?}");
+        assert!(prior.text.contains("「北」は平均 -50 cm（1件）"));
+        assert!(prior.receipts.is_empty());
+
+        let target = fixture.directory.join("filtered.svg");
+        let mut request = RequestEnvelope::new(
+            "case",
+            "saved-chart-filter",
+            "alice",
+            "「期間」が「前半」の行に絞ってグラフを更新して",
+        );
+        request.context_ref = Some(prior.id.clone());
+        request.output_path = Some(target.clone());
+        request.permissions.write_paths.insert(target.clone());
+        let filtered = engine.execute("alice", request).unwrap();
+        assert_eq!(filtered.lifecycle, Lifecycle::Commit, "{filtered:?}");
+        assert!(filtered.text.starts_with(SVG_PREFIX));
+        let [source_id, prior_id, chart_ref] = filtered.dependencies.as_slice() else {
+            panic!("expected original and previous results plus the new chart artifact");
+        };
+        assert_eq!(source_id, &original.id);
+        assert_eq!(prior_id, &prior.id);
+        let physical = fs::read(&target).unwrap();
+        assert_eq!(physical, filtered.text.as_bytes());
+        let modified = fs::metadata(&target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let retained = store.get_bytes("alice", "case", chart_ref).unwrap();
+        assert_eq!(digest(&retained), *chart_ref);
+        let chart: CsvChartReport = serde_json::from_slice(&retained).unwrap();
+        assert_eq!(chart.svg.as_bytes(), physical);
+        assert_eq!(chart.svg_sha256, digest(&physical));
+        assert_eq!(chart.data.source_sha256, digest(csv.as_bytes()));
+        assert_eq!(chart.data.selected_rows, 2);
+        assert_eq!(chart.data.missing_rows, 1);
+        assert_eq!(chart.data.groups.len(), 1);
+        assert_eq!(chart.data.groups[0].source_record_numbers, [1]);
+        assert!(chart.summary.contains("「北」は平均 1 m（1件）"));
+
+        let saved = store.load_case("alice", "case").unwrap().unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        for missing_id in [&original.id, &prior.id] {
+            let mut incomplete = saved.clone();
+            assert!(incomplete.prior_results.remove(missing_id).is_some());
+            assert!(inspect(&store, "alice", &incomplete, saved.result.as_ref().unwrap()).is_err());
+            assert_eq!(store.actions("alice", "case").unwrap(), actions);
+        }
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, filtered.dependencies);
+        assert_eq!(recovered.text, filtered.text);
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected a single confirmed delivery receipt");
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(receipt.content_sha256, chart.svg_sha256);
+        assert_eq!(receipt.observed_bytes, Some(physical.len() as u64));
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(store.actions("alice", "case").unwrap().len(), 1);
+        assert_eq!(fs::read(&target).unwrap(), physical);
+        assert_eq!(fs::metadata(&target).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn execution_csv_chart_reconciles_only_the_pending_svg_action() {
+        use crate::csv_chart::{CsvChartReport, SVG_PREFIX};
+        use crate::csv_chart_context::EXECUTION_CSV_NODE;
+
+        let Some(runtime) = std::env::var_os("MINIDORA_TEST_WASM_NODE") else {
+            eprintln!("no external WebAssembly execution without MINIDORA_TEST_WASM_NODE");
+            return;
+        };
+        let runtime = PathBuf::from(runtime);
+        assert!(runtime.is_absolute() && runtime.is_file(), "{runtime:?}");
+        // Closed WASI fixture reads two digits and writes their sum to result.csv.
+        const SUM_CSV_WASM: &str = concat!(
+            "0061736d0100000001220560047f7f7f7f017f60097f7f7f7f7f7e7e7f7f017f60017f017f60017f0060000002ac0105",
+            "16776173695f736e617073686f745f70726576696577310766645f72656164000016776173695f736e617073686f745f",
+            "70726576696577310866645f7772697465000016776173695f736e617073686f745f707265766965773109706174685f",
+            "6f70656e000116776173695f736e617073686f745f70726576696577310866645f636c6f7365000216776173695f736e",
+            "617073686f745f70726576696577310970726f635f65786974000303020104050401010102071302066d656d6f727902",
+            "00065f737461727400050a8f03018c0301037f410041004101413010000440410910040f0b4180012d000041306b2100",
+            "4182012d000041306b210141302802004104474181012d0000412c47724183012d0000410a47722000410a4f72200141",
+            "0a4f720440410241204101413410010440410910040f0b410210040f0b200020016a210241f8014180012d00003a0000",
+            "41fa014182012d00003a00002002410a49044041c4012002410a7041306a3a000041c501410a3a0000410c4106360200",
+            "41fc012002410a7041306a3a000041fd01410a3a0000411c411e3602000541c4012002410a6e41306a3a000041c50120",
+            "02410a7041306a3a000041c601410a3a0000410c410736020041fc012002410a6e41306a3a000041fd012002410a7041",
+            "306a3a000041fe01410a3a0000411c411f3602000b410141084101413410010440410910040f0b410241104101413410",
+            "010440410910040f0b4103410041e002410a410142c00042004100413810020440410910040f0b413828020041184101",
+            "413410010440410910040f0b413828020010030440410910040f0b0b0bf102010041000bea028000000005000000c000",
+            "0000000000002001000008000000e0000000000000003001000014000000000000000000000000000000000000000000",
+            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000",
+            "000000000000000000000000000000000000000000000000000000000000000000000000000073756d3d000000000000",
+            "000000000000000000000000000000000000000000006f706572616e645f612c6f706572616e645f622c73756d0a002c",
+            "002c000000000000000000000000000000000000000000000000000000000000000000000000636865636b65640a0000",
+            "00000000000065787065637465642074776f206469676974730a00000000000000000000000000000000000000000000",
+            "000000000000726573756c742e637376",
+        );
+        const CSV: &[u8] = b"operand_a,operand_b,sum\n3,4,7\n";
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        engine.configure_wasm_node(runtime).unwrap();
+        let input = serde_json::json!({
+            "module_hex": SUM_CSV_WASM, "stdin_hex": "332c340a", "files": ["result.csv"]
+        });
+        let mut request = RequestEnvelope::new(
+            "case",
+            "wasm-source",
+            "alice",
+            &format!("WebAssemblyを隔離実行して: {input}"),
+        );
+        request.permissions.wasm_execution = true;
+        let source = engine.execute("alice", request).unwrap();
+        assert_eq!(source.lifecycle, Lifecycle::Commit, "{source:?}");
+        let [execution_receipt] = source.receipts.as_slice() else {
+            panic!("expected one execution receipt");
+        };
+        assert_eq!(execution_receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(execution_receipt.reason.as_deref(), Some("EXITED"));
+        let actions = engine.store.actions("alice", "case").unwrap();
+        let [execution_before] = actions.as_slice() else {
+            panic!("expected exactly one original execution action");
+        };
+        assert_eq!(execution_before.action_id, execution_receipt.action_id);
+        let csv_path = fixture
+            .state
+            .join("wasm-runs")
+            .join(&execution_receipt.action_id)
+            .join("result.csv");
+        assert_eq!(fs::read(&csv_path).unwrap(), CSV);
+        let csv_modified = fs::metadata(&csv_path).unwrap().modified().unwrap();
+        drop(engine);
+
+        let target = fixture.directory.join("wasm-derived.svg");
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "svg-from-wasm",
+            "alice",
+            "前の隔離実行で生成した「result.csv」を「operand_a」ごとに「sum」の平均をグラフにして",
+        );
+        request.context_ref = Some(source.id.clone());
+        request.output_path = Some(target.clone());
+        request.permissions.write_paths.insert(target.clone());
+        let saved = engine.execute("alice", request).unwrap();
+        assert_eq!(saved.lifecycle, Lifecycle::Commit, "{saved:?}");
+        assert!(saved.text.starts_with(SVG_PREFIX));
+        assert!(saved.text.contains("平均 7"));
+        let [source_id, execution_report, chart_ref] = saved.dependencies.as_slice() else {
+            panic!("expected source result, execution observation and generated SVG reference");
+        };
+        assert_eq!(source_id, &source.id);
+        assert_eq!(execution_report, &execution_receipt.content_sha256);
+        let [svg_receipt] = saved.receipts.as_slice() else {
+            panic!("expected one SVG file receipt");
+        };
+        let svg = fs::read(&target).unwrap();
+        assert_eq!(svg, saved.text.as_bytes());
+        let svg_modified = fs::metadata(&target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let token =
+            retain_attempted_prefix_for_action(&fixture.state, Some(&svg_receipt.action_id));
+        assert_eq!(token, svg_receipt.action_id);
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 2);
+        assert!(actions.contains(execution_before));
+        assert!(
+            actions
+                .iter()
+                .any(|a| a.action_id == token && a.phase == EffectPhase::Unknown)
+        );
+        let retained = store.get_bytes("alice", "case", chart_ref).unwrap();
+        assert_eq!(digest(&retained), *chart_ref);
+        let chart: CsvChartReport = serde_json::from_slice(&retained).unwrap();
+        assert_eq!(chart.data.source_sha256, digest(CSV));
+        assert_eq!(chart.svg.as_bytes(), svg);
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, saved.dependencies);
+        assert_eq!(recovered.text, saved.text);
+        let [receipt] = recovered.receipts.as_slice() else {
+            panic!("expected one reconciled SVG delivery");
+        };
+        assert_eq!(receipt.action_id, token);
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(receipt.content_sha256, digest(&svg));
+        assert_eq!(receipt.observed_bytes, Some(svg.len() as u64));
+
+        let graph: serde_json::Value = serde_json::from_slice(
+            &store
+                .get_bytes(
+                    "alice",
+                    "case",
+                    recovered.execution_graph_ref.as_deref().unwrap(),
+                )
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            graph[1][EXECUTION_CSV_NODE].as_str(),
+            Some(execution_report.as_str())
+        );
+        assert_eq!(
+            graph[5]["compute"][EXECUTION_CSV_NODE],
+            graph[1][EXECUTION_CSV_NODE]
+        );
+        assert!(graph[1].get("wasm-run").is_none());
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 2);
+        assert!(actions.contains(execution_before));
+        assert_eq!(
+            store
+                .get_input_result("alice", "case", &source.input_id, source.input_version)
+                .unwrap(),
+            Some(source)
+        );
+        assert_eq!(fs::read(&target).unwrap(), svg);
+        assert_eq!(
+            fs::metadata(&target).unwrap().modified().unwrap(),
+            svg_modified
+        );
+        assert_eq!(fs::read(&csv_path).unwrap(), CSV);
+        assert_eq!(
+            fs::metadata(&csv_path).unwrap().modified().unwrap(),
+            csv_modified
+        );
+    }
+
+    #[test]
     fn filtered_json_table_csv_reconciles_original_file_without_rewriting() {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
@@ -13444,6 +14632,73 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].phase, EffectPhase::Confirmed);
         assert_eq!(actions[0].idempotency_key, fixture.token);
+    }
+
+    #[test]
+    fn composed_statistics_reconciles_exact_values_and_explanation_without_resending() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "composed-statistics",
+            "alice",
+            "2、6、10の平均値と分散を求めて、数値は出さず小学生向けに説明だけ",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let adopted = engine.execute("alice", request).unwrap();
+        assert_eq!(adopted.lifecycle, Lifecycle::Commit, "{adopted:?}");
+        assert!(adopted.text.contains("みんなに同じ量ずつ分けた"));
+        assert!(!adopted.text.chars().any(|ch| ch.is_ascii_digit()));
+        let original = fs::read(&fixture.target).unwrap();
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        assert_eq!(original, adopted.text.as_bytes());
+        drop(engine);
+
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        assert_eq!(actions[0].idempotency_key, token);
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.content_plan, adopted.content_plan);
+        let graph = |result: &ResultRecord| -> serde_json::Value {
+            let reference = result.execution_graph_ref.as_ref().unwrap();
+            serde_json::from_slice(&store.get_bytes("alice", "case", reference).unwrap()).unwrap()
+        };
+        let adopted_graph = graph(&adopted);
+        let recovered_graph = graph(&recovered);
+        assert_eq!(recovered_graph[0], adopted_graph[0]);
+        assert_eq!(recovered_graph[5], adopted_graph[5]);
+        for node in [
+            crate::core::STATISTICS_VALUES_NODE,
+            crate::core::STATISTICS_EXPLANATION_NODE,
+            "compute",
+            "content",
+            "render",
+        ] {
+            assert!(recovered_graph[1][node].is_string());
+            assert_eq!(recovered_graph[1][node], adopted_graph[1][node]);
+        }
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, token);
     }
 
     #[test]
@@ -18768,6 +20023,305 @@ mod tests {
     }
 
     #[test]
+    fn authored_message_reconciles_its_observed_file_after_restart() {
+        let fixture = empty_fixture();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "save",
+            "alice",
+            "岩木さんへ、訪問を木曜10時から金曜14時に変更できるか尋ねる丁寧なメール本文を2文で。理由は書かないで。",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let adopted = Engine::open(&fixture.state)
+            .unwrap()
+            .execute("alice", request.clone())
+            .unwrap();
+        assert_eq!(adopted.lifecycle, Lifecycle::Commit, "{adopted:?}");
+        for fragment in ["木曜10時", "金曜14時", "できますか。"] {
+            assert!(adopted.text.contains(fragment), "{adopted:?}");
+        }
+
+        let original = fs::read(&fixture.target).unwrap();
+        assert_eq!(adopted.render.as_ref().unwrap().bytes, original);
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let token = retain_attempted_prefix(&fixture.state);
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        assert_eq!(actions[0].idempotency_key, token);
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.id, adopted.id);
+        assert_eq!(recovered.text, adopted.text);
+        assert_eq!(recovered.content_plan, adopted.content_plan);
+        assert_eq!(recovered.render, adopted.render);
+        assert_eq!(recovered.receipts.len(), 1);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        drop(store);
+
+        let mut reopened = Engine::open(&fixture.state).unwrap();
+        assert_eq!(reopened.execute("alice", request).unwrap(), recovered);
+    }
+
+    #[test]
+    fn revised_message_reconciles_its_observed_file_with_the_original_draft() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let source = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "draft",
+                    "alice",
+                    "岩木さんへ、訪問を木曜10時から金曜14時に変更できるか尋ねる丁寧なメールを3文で。理由は書かないで。",
+                ),
+            )
+            .unwrap();
+        assert_eq!(source.lifecycle, Lifecycle::Commit, "{source:?}");
+        assert!(source.text.starts_with("件名："), "{source:?}");
+        assert!(!fixture.target.exists());
+        let mut request = RequestEnvelope::new(
+            "case",
+            "revision",
+            "alice",
+            "前のメールを件名なしで、2文にして",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let adopted = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(adopted.lifecycle, Lifecycle::Commit, "{adopted:?}");
+        assert!(adopted.dependencies.contains(&source.id), "{adopted:?}");
+        assert!(!adopted.text.contains("件名："), "{adopted:?}");
+        for fragment in ["木曜10時", "金曜14時", "できますか。"] {
+            assert!(adopted.text.contains(fragment), "{adopted:?}");
+        }
+        let body = adopted.text.lines().last().unwrap();
+        assert_eq!(body.matches(['。', '？']).count(), 2, "{body}");
+        drop(engine);
+
+        let store = Store::open(&fixture.state).unwrap();
+        let original_source = store
+            .get_input_bundle("alice", "case", "draft", 1)
+            .unwrap()
+            .unwrap();
+        drop(store);
+        let original = fs::read(&fixture.target).unwrap();
+        assert_eq!(adopted.render.as_ref().unwrap().bytes, original);
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let token = retain_attempted_prefix(&fixture.state);
+
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        assert_eq!(actions[0].idempotency_key, token);
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.id, adopted.id);
+        assert_eq!(recovered.content_plan, adopted.content_plan);
+        assert_eq!(recovered.render, adopted.render);
+        assert_eq!(recovered.receipts.len(), 1);
+        assert_eq!(
+            recovered.receipts[0].action_id,
+            adopted.receipts[0].action_id
+        );
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(
+            store
+                .get_input_bundle("alice", "case", "draft", 1)
+                .unwrap()
+                .unwrap(),
+            original_source
+        );
+        assert_eq!(
+            store.get_input_result("alice", "case", "draft", 1).unwrap(),
+            Some(source)
+        );
+    }
+
+    #[test]
+    fn option_decision_reconciles_exact_file_without_resending() {
+        let fixture = empty_fixture();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "decision",
+            "alice",
+            "候補を比較して。Aは定員6人、距離400m。Bは定員12人、距離1km。定員8人以上が必須。距離が短い方を選んで。",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let adopted = Engine::open(&fixture.state)
+            .unwrap()
+            .execute("alice", request)
+            .unwrap();
+        assert_eq!(adopted.lifecycle, Lifecycle::Commit, "{adopted:?}");
+        assert!(
+            adopted.text.contains("おすすめは「B」です。"),
+            "{adopted:?}"
+        );
+        assert_eq!(adopted.receipts.len(), 1);
+
+        let original_bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(adopted.render.as_ref().unwrap().bytes, original_bytes);
+        let original_modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let original_token = retain_attempted_prefix(&fixture.state);
+
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        assert_eq!(actions[0].action_id, adopted.receipts[0].action_id);
+        assert_eq!(actions[0].idempotency_key, original_token);
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.id, adopted.id);
+        assert_eq!(recovered.content_plan, adopted.content_plan);
+        assert_eq!(recovered.render, adopted.render);
+        assert_eq!(recovered.receipts.len(), 1);
+        let receipt = &recovered.receipts[0];
+        assert_eq!(receipt.action_id, adopted.receipts[0].action_id);
+        assert_eq!(receipt.content_sha256, digest(&original_bytes));
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, original_token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original_bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            original_modified
+        );
+    }
+
+    #[test]
+    fn option_decision_reconciles_revision_file_without_resending() {
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        let original = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new(
+                    "case",
+                    "decision",
+                    "alice",
+                    "候補を比較して。Aは定員6人、距離400m。Bは定員12人、距離1km。定員8人以上が必須。距離が短い方を選んで。",
+                ),
+            )
+            .unwrap();
+        assert_eq!(original.lifecycle, Lifecycle::Commit, "{original:?}");
+        assert!(
+            original.text.contains("おすすめは「B」です。"),
+            "{original:?}"
+        );
+        assert!(!fixture.target.exists());
+
+        let mut request = RequestEnvelope::new(
+            "case",
+            "decision-revision",
+            "alice",
+            "Aの定員は9人に訂正して。",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let adopted = engine.execute("alice", request).unwrap();
+        assert_eq!(adopted.lifecycle, Lifecycle::Commit, "{adopted:?}");
+        assert!(
+            adopted.text.contains("おすすめは「A」です。"),
+            "{adopted:?}"
+        );
+        assert_eq!(adopted.receipts.len(), 1);
+        drop(engine);
+
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, adopted.render.as_ref().unwrap().bytes);
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let token = retain_attempted_prefix(&fixture.state);
+
+        let store = Store::open(&fixture.state).unwrap();
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        assert_eq!(actions[0].action_id, adopted.receipts[0].action_id);
+        assert_eq!(actions[0].idempotency_key, token);
+
+        let recovered = reconcile(&store, "alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.id, adopted.id);
+        assert_eq!(recovered.content_plan, adopted.content_plan);
+        assert_eq!(recovered.render, adopted.render);
+        assert_eq!(recovered.receipts.len(), 1);
+        let receipt = &recovered.receipts[0];
+        assert_eq!(receipt.action_id, adopted.receipts[0].action_id);
+        assert_eq!(receipt.content_sha256, digest(&bytes));
+        assert_eq!(
+            receipt.reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let actions = store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].idempotency_key, token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        let state = store.load_case("alice", "case").unwrap().unwrap();
+        assert_eq!(state.prior_results.get(&original.id), Some(&original));
+        assert_eq!(
+            store
+                .get_input_result("alice", "case", "decision", 1)
+                .unwrap(),
+            Some(original)
+        );
+    }
+
+    #[test]
     fn hearing_answer_reconciles_inherited_file_without_resending() {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
@@ -19138,6 +20692,62 @@ mod tests {
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0].phase, EffectPhase::Unknown);
         assert_eq!(actions[0].action_id, fixture.token);
+    }
+
+    #[test]
+    fn memory_policy_deadline_does_not_commit_a_prepared_change() {
+        use crate::core::OutputCheckpoint;
+        use crate::store::MemoryPolicy;
+
+        const TURN_OFF: &str = "会話をまたぐ記憶をオフにして";
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        engine.expire_output_at = Some(OutputCheckpoint::Rendered);
+        let stopped = engine
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "policy-deadline", "alice", TURN_OFF),
+            )
+            .unwrap();
+        assert_eq!(stopped.lifecycle, Lifecycle::Suspend, "{stopped:?}");
+        assert!(stopped.reason.as_deref().unwrap().starts_with("DEADLINE:"));
+        assert!(!stopped.text.contains("記憶はオフです"), "{stopped:?}");
+        assert!(stopped.content_plan.is_none());
+        assert!(stopped.render.is_none());
+        assert!(stopped.dependencies.is_empty());
+        drop(engine);
+
+        let mut reopened = Engine::open(&fixture.state).unwrap();
+        assert_eq!(
+            reopened.store.memory_policy("alice").unwrap(),
+            MemoryPolicy {
+                revision: 0,
+                enabled: true,
+            }
+        );
+        let case = reopened.latest("alice", "case").unwrap().unwrap();
+        assert_eq!(case.result.as_ref(), Some(&stopped));
+        let committed = reopened
+            .execute(
+                "alice",
+                RequestEnvelope::new("case", "policy-off", "alice", TURN_OFF),
+            )
+            .unwrap();
+        assert_eq!(committed.lifecycle, Lifecycle::Commit, "{committed:?}");
+        assert!(committed.text.contains("記憶はオフです"), "{committed:?}");
+        drop(reopened);
+
+        let store = Store::open(&fixture.state).unwrap();
+        assert_eq!(
+            store.memory_policy("alice").unwrap(),
+            MemoryPolicy {
+                revision: 1,
+                enabled: false,
+            }
+        );
+        let case = store.load_case("alice", "case").unwrap().unwrap();
+        assert_eq!(case.result, Some(committed));
+        assert_eq!(case.prior_results.get(&stopped.id), Some(&stopped));
     }
 
     #[test]

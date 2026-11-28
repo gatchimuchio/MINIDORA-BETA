@@ -2,6 +2,7 @@
 <html lang="ja">
   <head>
     <meta charset="utf-8">
+    <meta http-equiv="Content-Security-Policy" content="base-uri 'none'; object-src 'none'; script-src 'self'; connect-src 'self'">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light">
     <meta name="description" content="MINIDORA local Core workspace">
@@ -50,7 +51,7 @@
               <label class="field">
                 <span>Case ID</span>
                 <input id="case-id" autocomplete="off" value="browser-session" required>
-                <small>同じcase内の前回結果は次のリクエストから参照できます。</small>
+                <small>新しいIDを入力して依頼を送ると、新しい会話が始まります。</small>
               </label>
 
               <label class="field">
@@ -59,10 +60,55 @@
                 <small>このタブ内で使います。保存や外部送信はしません。</small>
               </label>
 
+              <button id="open-case-button" class="secondary-button" type="button" aria-controls="case-history">会話を開く</button>
+
               <label class="field request-field">
                 <span>依頼</span>
                 <textarea id="request-text" rows="6" required placeholder="例: ココについて保存されている情報をもとに短い紹介文を書いて"></textarea>
               </label>
+
+              <details class="web-read-settings">
+                <summary>オンライン調査</summary>
+                <p id="web-read-help" class="case-status">次のテキスト依頼で使う接続先を選べます。選択は送信後に解除されます。</p>
+                <button id="web-read-hosts-button" class="secondary-button" type="button" aria-describedby="web-read-help" aria-controls="web-read-hosts">設定済みの接続先を確認</button>
+                <fieldset id="web-read-hosts" hidden>
+                  <legend>この依頼で使う接続先</legend>
+                </fieldset>
+                <p class="case-status" id="web-read-status" role="status" hidden></p>
+              </details>
+
+              <div class="attachment-field">
+                <label class="field">
+                  <span>次の依頼に添付するファイル</span>
+                  <input id="attachment-files" type="file" multiple accept=".csv,.txt,.md,.pdf,.xlsx,.png,.jpg,.jpeg" aria-describedby="attachment-help attachment-status">
+                  <small id="attachment-help">CSV・TXT・Markdown・PDF・XLSX・PNG・JPEGを最大8件。CSV・TXT・MarkdownはUTF-8で用意してください。</small>
+                </label>
+                <ul class="attachment-list" id="attachment-list" aria-label="添付するファイル" hidden></ul>
+                <button id="attachment-clear-button" class="secondary-button" type="button" hidden>添付の選択を解除</button>
+                <p class="case-status" id="attachment-status" role="status" hidden></p>
+              </div>
+
+              <div class="attachment-field speech-field">
+                <div class="microphone-controls">
+                  <p class="case-status" id="microphone-help">話し終えたら録音を止め、「録音した発話を送信」を選びます。録音は最大約7.9秒です。</p>
+                  <div class="speech-actions" role="group" aria-label="マイク録音">
+                    <button id="microphone-start" class="secondary-button" type="button" aria-describedby="microphone-help">マイクで録音</button>
+                    <button id="microphone-stop" class="secondary-button" type="button" disabled>録音を止める</button>
+                    <button id="microphone-cancel" class="secondary-button" type="button" disabled>録音を破棄</button>
+                  </div>
+                  <p class="case-status" id="microphone-status" role="status" hidden></p>
+                </div>
+                <label class="field">
+                  <span>日本語の発話をWAVで送る</span>
+                  <input id="speech-file" type="file" accept=".wav,audio/wav,audio/x-wav" aria-describedby="speech-file-help speech-file-status">
+                  <small id="speech-file-help">16 kHz・16 bit・モノラルのPCM WAVを1件選びます。音声は単独で送信します。</small>
+                </label>
+                <p class="case-status" id="speech-file-status" role="status" hidden></p>
+                <div class="speech-actions">
+                  <button id="speech-clear-button" class="secondary-button" type="button" hidden>録音の選択を解除</button>
+                  <button id="speech-send-button" class="secondary-button" type="button" disabled>WAVの発話を送信</button>
+                </div>
+              </div>
 
               <div class="form-footer">
                 <p>送信ごとに新しいInput IDを発行します。</p>
@@ -97,11 +143,27 @@
               </div>
               <div id="result-content" hidden>
                 <div class="result-meta" id="result-meta"></div>
+                <section class="recognition-details" id="recognition-details" aria-labelledby="recognition-title" hidden>
+                  <h3 id="recognition-title">認識した発話</h3>
+                  <p id="recognition-text"></p>
+                  <p class="case-status" id="recognition-range"></p>
+                </section>
                 <div class="answer-box">
                   <div class="answer-label">回答</div>
                   <div class="answer-text" id="answer-text"></div>
                 </div>
+                <div class="answer-media" id="media-preview" hidden>
+                  <img id="image-preview" alt="MINIDORAが生成した画像" hidden>
+                  <audio id="audio-preview" controls preload="metadata" aria-label="MINIDORAが生成した回答の音声" hidden></audio>
+                </div>
+                <p class="case-status" id="media-preview-status" role="status" hidden></p>
                 <p class="reason-text" id="reason-text" hidden></p>
+                <p class="case-status" id="attachment-guidance" hidden></p>
+                <div class="result-actions">
+                  <button id="fork-current-button" class="secondary-button" type="button" aria-controls="fork-form" hidden>この回答から分岐</button>
+                  <button id="download-answer-button" class="secondary-button" type="button" hidden>回答をテキストで保存</button>
+                </div>
+                <p class="case-status" id="download-answer-status" role="status" hidden></p>
                 <div class="dependency-box" id="dependency-box">
                   <div class="answer-label">依存ID</div>
                   <ul class="dependency-list" id="dependency-list"></ul>
@@ -119,6 +181,47 @@
             <div class="result-footnote">回答は表示された保証区分と依存IDの範囲で確認してください。</div>
           </section>
         </div>
+
+        <section class="panel case-history-panel" id="case-history" aria-labelledby="case-history-title">
+          <h2 id="case-history-title">会話の履歴</h2>
+          <p class="case-status" id="case-history-status" role="status">会話IDを指定して「会話を開く」を選択してください。</p>
+          <p class="case-status branch-anchor" id="branch-anchor" hidden></p>
+
+          <div class="history-grid">
+            <section aria-labelledby="own-history-title">
+              <h3 id="own-history-title">この会話</h3>
+              <ol class="history-list" id="own-history"></ol>
+              <nav class="history-pages" id="own-history-pages" aria-label="この会話の履歴ページ" hidden>
+                <button class="secondary-button" id="own-history-prev" type="button">前へ</button>
+                <span id="own-history-page"></span>
+                <button class="secondary-button" id="own-history-next" type="button">次へ</button>
+              </nav>
+            </section>
+
+            <section aria-labelledby="inherited-history-title">
+              <h3 id="inherited-history-title">引き継いだ履歴</h3>
+              <ol class="history-list" id="inherited-history"></ol>
+              <nav class="history-pages" id="inherited-history-pages" aria-label="引き継いだ履歴ページ" hidden>
+                <button class="secondary-button" id="inherited-history-prev" type="button">前へ</button>
+                <span id="inherited-history-page"></span>
+                <button class="secondary-button" id="inherited-history-next" type="button">次へ</button>
+              </nav>
+            </section>
+          </div>
+
+          <form class="fork-form" id="fork-form" autocomplete="off" hidden>
+            <div class="fork-source">
+              <strong>分岐する回答</strong>
+              <output id="fork-source-id"></output>
+            </div>
+            <label class="field">
+              <span>分岐先の新しい会話ID</span>
+              <input id="fork-case-id" autocomplete="off" required>
+            </label>
+            <button id="fork-submit-button" class="secondary-button" type="submit">分岐を作成</button>
+          </form>
+          <p class="case-status" id="fork-status" role="status" hidden></p>
+        </section>
       </main>
 
       <footer class="footer">
