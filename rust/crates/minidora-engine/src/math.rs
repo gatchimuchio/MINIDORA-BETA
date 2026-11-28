@@ -1163,6 +1163,7 @@ pub(crate) struct ConversationalMathReport {
 pub(crate) fn conversational_math_report(
     intent: &Intent,
     explain_within_budget: bool,
+    english: bool,
 ) -> Result<ConversationalMathReport> {
     match intent {
         Intent::Statistics { values, units } => {
@@ -1208,18 +1209,26 @@ pub(crate) fn conversational_math_report(
             let mut units = if *show_values {
                 metrics
                     .iter()
-                    .map(|metric| statistic_result(&report, *metric))
+                    .map(|metric| statistic_result(&report, *metric, english))
                     .collect()
             } else {
                 Vec::new()
             };
             let requested_explanation = match explanation {
                 Some(_) if !explain_within_budget => {
-                    units.push("説明に必要な行動予算がないため保留しました。".into());
+                    units.push(if english {
+                        "The action budget was too small to include the explanation.".into()
+                    } else {
+                        "説明に必要な行動予算がないため保留しました。".into()
+                    });
                     None
                 }
                 Some(request) if matches!(request.audience, ExplanationAudience::Unresolved(_)) => {
-                    units.push("指定された読者に合わせた説明は保留しました。".into());
+                    units.push(if english {
+                        "I could not identify the audience for the requested explanation.".into()
+                    } else {
+                        "指定された読者に合わせた説明は保留しました。".into()
+                    });
                     None
                 }
                 Some(request) => {
@@ -1229,6 +1238,7 @@ pub(crate) fn conversational_math_report(
                         &request.audience,
                         request.detail,
                         *show_values,
+                        english,
                     );
                     units.extend(explanation.iter().cloned());
                     Some(explanation)
@@ -1244,6 +1254,7 @@ pub(crate) fn conversational_math_report(
                     &ExplanationAudience::General,
                     ExplanationDetail::Standard,
                     *show_values,
+                    english,
                 )
             };
             Ok(ConversationalMathReport {
@@ -1360,19 +1371,30 @@ pub(crate) fn conversational_exact_quantities(
         .collect())
 }
 
-fn statistic_result(report: &Statistics, metric: Statistic) -> String {
-    let (label, value) = match metric {
-        Statistic::Mean => ("平均", Some(report.mean.as_str())),
-        Statistic::Median => ("中央値", Some(report.median.as_str())),
-        Statistic::Sum => ("合計", Some(report.sum.as_str())),
-        Statistic::Minimum => ("最小値", Some(report.min.as_str())),
-        Statistic::Maximum => ("最大値", Some(report.max.as_str())),
-        Statistic::PopulationVariance => ("母分散", Some(report.population_variance.as_str())),
-        Statistic::SampleVariance => ("標本分散", report.sample_variance.as_deref()),
+fn statistic_result(report: &Statistics, metric: Statistic, english: bool) -> String {
+    use Statistic::*;
+    let (japanese_label, english_label, value) = match metric {
+        Mean => ("平均", "mean", Some(report.mean.as_str())),
+        Median => ("中央値", "median", Some(report.median.as_str())),
+        Sum => ("合計", "sum", Some(report.sum.as_str())),
+        Minimum => ("最小値", "minimum", Some(report.min.as_str())),
+        Maximum => ("最大値", "maximum", Some(report.max.as_str())),
+        PopulationVariance => (
+            "母分散",
+            "population variance",
+            Some(report.population_variance.as_str()),
+        ),
+        SampleVariance => (
+            "標本分散",
+            "sample variance",
+            report.sample_variance.as_deref(),
+        ),
     };
-    match value {
-        Some(value) => format!("{label}は {value} です。"),
-        None => format!("{label}は、値が一つしかないため算出できません。"),
+    match (english, value) {
+        (true, Some(value)) => format!("The {english_label} is {value}."),
+        (false, Some(value)) => format!("{japanese_label}は {value} です。"),
+        (true, None) => format!("The {english_label} requires at least two values."),
+        (false, None) => format!("{japanese_label}は、値が一つしかないため算出できません。"),
     }
 }
 
@@ -1382,71 +1404,122 @@ fn describe_statistics(
     audience: &ExplanationAudience,
     detail: ExplanationDetail,
     show_values: bool,
+    english: bool,
 ) -> Vec<String> {
+    use Statistic::*;
+
     let beginner = *audience == ExplanationAudience::Beginner;
     let technical = *audience == ExplanationAudience::Technical;
+    let localize = |(ja, en)| if english { en } else { ja };
     let mut units = Vec::new();
     for metric in metrics {
-        use Statistic::*;
-        let method = match metric {
-            Mean if beginner => "平均は、数を全部合わせて、みんなに同じ量ずつ分けたときの量です。",
-            Mean => "平均は、すべての値の合計をデータの件数で割って求めます。",
-            Median => {
-                "中央値は、値を小さい順に並べたときの真ん中です。中央に二つあるときは、その二つの平均を使います。"
-            }
-            Sum => "合計は、値をすべて足し合わせたものです。",
-            Minimum => "最小値は、値を小さい順に並べたときの先頭です。",
-            Maximum => "最大値は、値を小さい順に並べたときの最後です。",
-            PopulationVariance if beginner && detail == ExplanationDetail::Brief => {
-                "分散は、数が平均のまわりにどれくらい散らばっているかを表します。"
-            }
-            PopulationVariance if beginner => {
-                "分散を求めるには、それぞれの数が平均からどれくらい離れているかを見ます。離れた分を自分自身とかけ合わせて、その結果を平均します。"
-            }
-            PopulationVariance if technical => {
-                "母分散は、算術平均を中心とする偏差平方和を観測数で割った値です。"
-            }
-            PopulationVariance => "母分散は、各値と平均との差を二乗し、その平均を取って求めます。",
-            SampleVariance if report.sample_variance.is_none() => {
-                "値が一つしかない場合は、標本分散の分母を作れないため計算できません。"
-            }
-            SampleVariance if beginner => {
-                "標本分散では、平均からのずれを自分自身とかけて足し、データの数から一つ引いた数で割ります。"
-            }
-            SampleVariance => {
-                "標本分散は、偏差平方和をデータの件数から一つ引いた値で割って求めます。"
-            }
-        };
+        let method = localize(match metric {
+            Mean if beginner => (
+                "平均は、数を全部合わせて、みんなに同じ量ずつ分けたときの量です。",
+                "The mean is what each person would get if you shared the total equally.",
+            ),
+            Mean => (
+                "平均は、すべての値の合計をデータの件数で割って求めます。",
+                "To find the mean, add the values and divide by the number of values.",
+            ),
+            Median => (
+                "中央値は、値を小さい順に並べたときの真ん中です。中央に二つあるときは、その二つの平均を使います。",
+                "The median is the middle value after sorting. If there are two middle values, take their mean.",
+            ),
+            Sum => (
+                "合計は、値をすべて足し合わせたものです。",
+                "The sum is the result of adding all the values.",
+            ),
+            Minimum => (
+                "最小値は、値を小さい順に並べたときの先頭です。",
+                "The minimum is the first value when the values are sorted from smallest to largest.",
+            ),
+            Maximum => (
+                "最大値は、値を小さい順に並べたときの最後です。",
+                "The maximum is the last value when the values are sorted from smallest to largest.",
+            ),
+            PopulationVariance if beginner && detail == ExplanationDetail::Brief => (
+                "分散は、数が平均のまわりにどれくらい散らばっているかを表します。",
+                "Population variance measures how spread out the values are around their mean.",
+            ),
+            PopulationVariance if beginner => (
+                "分散を求めるには、それぞれの数が平均からどれくらい離れているかを見ます。離れた分を自分自身とかけ合わせて、その結果を平均します。",
+                "Find how far each value is from the mean. Multiply each distance by itself, then average those products.",
+            ),
+            PopulationVariance if technical => (
+                "母分散は、算術平均を中心とする偏差平方和を観測数で割った値です。",
+                "Population variance is the sum of squared deviations from the arithmetic mean divided by the observation count.",
+            ),
+            PopulationVariance => (
+                "母分散は、各値と平均との差を二乗し、その平均を取って求めます。",
+                "To find population variance, square each difference from the mean and average the squared differences.",
+            ),
+            SampleVariance if report.sample_variance.is_none() => (
+                "値が一つしかない場合は、標本分散の分母を作れないため計算できません。",
+                "Sample variance is undefined for one value because its denominator would be zero.",
+            ),
+            SampleVariance if beginner => (
+                "標本分散では、平均からのずれを自分自身とかけて足し、データの数から一つ引いた数で割ります。",
+                "For sample variance, multiply each difference from the mean by itself, add the products, then divide by one fewer than the number of values.",
+            ),
+            SampleVariance => (
+                "標本分散は、偏差平方和をデータの件数から一つ引いた値で割って求めます。",
+                "Divide the sum of squared deviations from the mean by one less than the number of observations to find the sample variance.",
+            ),
+        });
         units.push(method.to_owned());
         if *metric == Mean && detail != ExplanationDetail::Brief {
             let application = if show_values && beginner {
-                format!(
-                    "このデータなら、同じ量ずつ分けたときに {} ずつになります。",
-                    report.mean
-                )
+                if english {
+                    format!(
+                        "Sharing the total equally gives {} to each person.",
+                        report.mean
+                    )
+                } else {
+                    format!(
+                        "このデータなら、同じ量ずつ分けたときに {} ずつになります。",
+                        report.mean
+                    )
+                }
             } else if report.min == report.max {
-                "今回の値はすべて同じなので、平均も同じ値です。".into()
+                localize((
+                    "今回の値はすべて同じなので、平均も同じ値です。",
+                    "All the values here are equal, so the mean equals each of them.",
+                ))
+                .into()
             } else {
-                "今回の平均は、いちばん小さい値といちばん大きい値の間にあります。".into()
+                localize((
+                    "今回の平均は、いちばん小さい値といちばん大きい値の間にあります。",
+                    "The mean of these values lies between the smallest and largest values.",
+                ))
+                .into()
             };
             units.push(application);
         }
     }
-    if metrics.iter().any(|metric| {
-        matches!(
-            metric,
-            Statistic::PopulationVariance | Statistic::SampleVariance
-        )
-    }) && (metrics.contains(&Statistic::PopulationVariance) || report.sample_variance.is_some())
+    if metrics
+        .iter()
+        .any(|metric| matches!(metric, PopulationVariance | SampleVariance))
+        && (metrics.contains(&PopulationVariance) || report.sample_variance.is_some())
     {
         if detail == ExplanationDetail::Detailed {
-            units.push("平均との差は正にも負にもなります。差をそれ自身とかけてから足すと、反対側にある値のずれも打ち消し合いません。".into());
+            units.push(localize((
+                "平均との差は正にも負にもなります。差をそれ自身とかけてから足すと、反対側にある値のずれも打ち消し合いません。",
+                "Differences from the mean can be positive or negative. Squaring them keeps differences on opposite sides of the mean from cancelling each other.",
+            )).into());
         }
-        units.push(if report.min == report.max {
-            "今回のデータはすべて同じ値なので、平均から離れた値はありません。".into()
+        let spread = if report.min == report.max {
+            localize((
+                "今回のデータはすべて同じ値なので、平均から離れた値はありません。",
+                "All the values here are equal, so each lies at the mean.",
+            ))
         } else {
-            "今回のデータには平均から離れた値があり、値にばらつきがあります。".into()
-        });
+            localize((
+                "今回のデータには平均から離れた値があり、値にばらつきがあります。",
+                "These values have some spread because some differ from the mean.",
+            ))
+        };
+        units.push(spread.into());
     }
     units
 }

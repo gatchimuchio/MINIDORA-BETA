@@ -24,6 +24,8 @@ use std::{
 
 pub(crate) const PREDICATE: &str = "INDEPENDENT_REQUESTS_V1";
 pub(crate) const PARSER_VERSION: &str = "independent-request-list-v1";
+pub(crate) const BILINGUAL_STATISTICS_PARSER_VERSION: &str =
+    "bilingual-statistics-independent-request-list-v1";
 pub(crate) const ATTACHED_PARSER_VERSION: &str = "attached-independent-request-list-v1";
 pub(crate) const NEWS_PARSER_VERSION: &str = "news-independent-request-list-v1";
 pub(crate) const RESEARCH_PARSER_VERSION: &str = "research-independent-request-list-v1";
@@ -220,7 +222,9 @@ fn evaluate(
         Intent::Statistics { .. }
         | Intent::FiniteProbabilityStatistics { .. }
         | Intent::DescribeStatistics { .. } => {
-            if english {
+            let english_statistics = bilingual_statistics_enabled(bundle)
+                && matches!(&*item.intent, Intent::DescribeStatistics { .. });
+            if english && !english_statistics {
                 return Ok(Branch::Blocked("BRANCH_LOCALE_UNAVAILABLE"));
             }
             if let Intent::DescribeStatistics {
@@ -239,7 +243,7 @@ fn evaluate(
                 }
                 partial_reason = Some(AUDIENCE_UNRESOLVED);
             }
-            let report = math::conversational_math_report(&item.intent, true)?;
+            let report = math::conversational_math_report(&item.intent, true, english)?;
             let quantities = math::conversational_exact_quantities(&item.intent, &report.bytes)?;
             Value {
                 units: report.units,
@@ -365,6 +369,10 @@ pub(crate) fn live_read_count(bundle: &InputBundle, items: &[IndependentRequest]
         .count()
 }
 
+fn bilingual_statistics_enabled(bundle: &InputBundle) -> bool {
+    bundle.meaning.parser_version == BILINGUAL_STATISTICS_PARSER_VERSION
+}
+
 fn news_items_enabled(bundle: &InputBundle) -> bool {
     matches!(
         bundle.meaning.parser_version.as_str(),
@@ -403,6 +411,9 @@ fn delivery_items(bundle: &InputBundle) -> Result<&[IndependentRequest]> {
             bundle.meaning.unresolved.is_empty()
                 && input::parse_independent_requests(&request.text)?.as_ref()
                     == Some(&bundle.meaning.intent)
+        }
+        BILINGUAL_STATISTICS_PARSER_VERSION => {
+            input::bilingual_statistics_independent_input(request)?.as_ref() == Some(bundle)
         }
         ATTACHED_PARSER_VERSION => {
             input::validate_request_attachments(request)?;
@@ -995,6 +1006,30 @@ pub(crate) fn explain_previous(
         {
             return Err(invalid());
         }
+        if bilingual_statistics_enabled(parent)
+            && matches!(&*item.intent, Intent::DescribeStatistics { .. })
+            && let Some(value) = &saved.value
+        {
+            let expected = evaluate(
+                item,
+                parent,
+                parent_english,
+                &BTreeMap::new(),
+                &BTreeMap::new(),
+            )?;
+            let (actual, reason) = match expected {
+                Branch::Value(value) => (value, None),
+                Branch::Partial(value, reason) => (value, Some(reason)),
+                Branch::Blocked(_) => return Err(invalid()),
+            };
+            if saved.reason_code != reason
+                || value.guarantee != actual.guarantee
+                || value.units != actual.units
+                || value.bytes != actual.bytes
+            {
+                return Err(invalid());
+            }
+        }
         if attached
             && let Some(action) = AnalysisAction::bind(&item.intent)
             && let Some(value) = &saved.value
@@ -1207,6 +1242,10 @@ pub(crate) fn explain_previous(
             continue;
         }
         match item.intent.as_ref() {
+            Intent::DescribeStatistics { .. } if bilingual_statistics_enabled(parent) => {
+                let report = math::conversational_math_report(&item.intent, true, english)?;
+                units.extend(report.explanation_units);
+            }
             Intent::AnalyzeAttachments { .. } if attached => {
                 units.extend(value.units.iter().cloned());
             }

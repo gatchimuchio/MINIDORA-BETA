@@ -17,6 +17,7 @@ pub(crate) const WEB_RESEARCH_V2_PARSER_VERSION: &str =
 pub(crate) const WEB_RESEARCH_DIVERSE_PARSER_VERSION: &str =
     "declarative-ja-en-v1-distinct-publishers-web-research";
 const STATISTICS_GOAL_PARSER_VERSION: &str = "declarative-ja-v218-statistics-goal";
+pub(crate) const BILINGUAL_STATISTICS_PARSER_VERSION: &str = "declarative-ja-en-v1-statistics-goal";
 pub(crate) const LOCAL_FIRST_TOPIC_PARSER_VERSION: &str = "declarative-ja-v216-local-first-topic";
 pub(crate) const AUTONOMOUS_TOPIC_WEB_PARSER_VERSION: &str =
     "declarative-ja-v217-autonomous-topic-web";
@@ -1588,6 +1589,24 @@ pub(crate) fn seal_with_source_context(
     }
     if let Some(bundle) = attached_independent_input(request)? {
         return Ok(bundle);
+    }
+    if let Some(bundle) = bilingual_statistics_independent_input(request)? {
+        return Ok(bundle);
+    }
+    if bilingual_statistics_text_scope(request)
+        && let Some((intent, roles)) = bilingual_statistics_goal(
+            &request.text,
+            crate::core::supports_english_output_locale(&request.locale),
+        )?
+    {
+        return seal_user_input(
+            request,
+            None,
+            BILINGUAL_STATISTICS_PARSER_VERSION,
+            intent,
+            roles,
+            Vec::new(),
+        );
     }
     if bilingual_locale
         && request.purpose.is_none()
@@ -9302,6 +9321,77 @@ pub(crate) fn parse_independent_requests(text: &str) -> Result<Option<Intent>> {
     crate::composition::parse(text, interpret_single)
 }
 
+pub(crate) fn bilingual_statistics_independent_input(
+    request: &RequestEnvelope,
+) -> Result<Option<InputBundle>> {
+    if !bilingual_statistics_text_scope(request) {
+        return Ok(None);
+    }
+    let english_output = crate::core::supports_english_output_locale(&request.locale);
+    let parsed =
+        crate::composition::parse(&request.text, |item| {
+            match bilingual_statistics_goal(item, english_output)? {
+                Some((intent, _)) => Ok(intent),
+                None => interpret_single(item),
+            }
+        })?;
+    let Some(intent) = parsed else {
+        return Ok(None);
+    };
+    let Intent::IndependentRequests { items } = &intent else {
+        return Ok(None);
+    };
+    let mut roles = source_role_spans(&request.text, &intent)?;
+    let mut has_statistics = false;
+    for (index, item) in items.iter().enumerate() {
+        if !matches!(item.intent.as_ref(), Intent::DescribeStatistics { .. }) {
+            continue;
+        }
+        let Some((_, source_roles)) = bilingual_statistics_goal(&item.source.text, english_output)?
+            .filter(|(candidate, _)| candidate == item.intent.as_ref())
+        else {
+            continue;
+        };
+        has_statistics = true;
+        for (role, spans) in source_roles {
+            let anchored = spans
+                .into_iter()
+                .map(|span| {
+                    source_span_at(
+                        &request.text,
+                        item.source.start + span.start,
+                        item.source.start + span.end,
+                    )
+                    .filter(|source| source.text == span.text)
+                    .ok_or_else(|| {
+                        failure(
+                            "STATISTICS_SOURCE_INVALID",
+                            "統計項目の原文位置を照合できません。",
+                        )
+                    })
+                })
+                .collect::<Result<Vec<_>>>()?;
+            roles.insert(
+                format!("/IndependentRequests/items/{index}{role}"),
+                anchored,
+            );
+        }
+    }
+    if !has_statistics {
+        return Ok(None);
+    }
+    validate_user_seal_request(request, None)?;
+    seal_user_input(
+        request,
+        None,
+        crate::composition::BILINGUAL_STATISTICS_PARSER_VERSION,
+        intent,
+        roles,
+        Vec::new(),
+    )
+    .map(Some)
+}
+
 pub(crate) fn research_independent_input(request: &RequestEnvelope) -> Result<Option<InputBundle>> {
     scoped_research_independent_input(request, false)
 }
@@ -11113,8 +11203,15 @@ fn conversational_math_matches(text: &str, intent: &Intent) -> Result<bool> {
 pub(crate) fn is_conversational_math_version(version: &str) -> bool {
     matches!(
         version,
-        CONVERSATIONAL_MATH_PARSER_VERSION | STATISTICS_GOAL_PARSER_VERSION
+        CONVERSATIONAL_MATH_PARSER_VERSION
+            | STATISTICS_GOAL_PARSER_VERSION
+            | BILINGUAL_STATISTICS_PARSER_VERSION
     )
+}
+
+pub(crate) fn uses_english_statistics_output(bundle: &InputBundle) -> bool {
+    bundle.meaning.parser_version == BILINGUAL_STATISTICS_PARSER_VERSION
+        && crate::core::supports_english_output_locale(&bundle.request.locale)
 }
 
 pub(crate) fn verified_conversational_math_input(bundle: &InputBundle) -> Result<bool> {
@@ -11124,6 +11221,13 @@ pub(crate) fn verified_conversational_math_input(bundle: &InputBundle) -> Result
     let text = &bundle.request.text;
     let meaning = &bundle.meaning;
     match meaning.parser_version.as_str() {
+        BILINGUAL_STATISTICS_PARSER_VERSION => Ok(bilingual_statistics_text_scope(&bundle.request)
+            && meaning.context_result_ref.is_none()
+            && meaning.unresolved.is_empty()
+            && bilingual_statistics_goal(text, uses_english_statistics_output(bundle))?
+                .is_some_and(|(intent, roles)| {
+                    intent == meaning.intent && roles == meaning.source_roles
+                })),
         CONVERSATIONAL_MATH_PARSER_VERSION => conversational_math_matches(text, &meaning.intent),
         STATISTICS_GOAL_PARSER_VERSION => {
             Ok(parse_statistics_goal(text)?.is_some_and(|(intent, roles)| {
@@ -11479,6 +11583,242 @@ fn natural_observation_statistics_intent(text: &str) -> Result<Option<Intent>> {
 // Keep the whole request and link roles back to byte ranges in it. An
 // unrecognized directive never falls through to a numeric prefix.
 type StatisticsCandidate = (Intent, BTreeMap<String, Vec<SourceSpan>>);
+
+fn bilingual_statistics_text_scope(request: &RequestEnvelope) -> bool {
+    matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        && request.attachments.is_empty()
+        && request.context_ref.is_none()
+        && request.speech.is_none()
+        && request.purpose.is_none()
+}
+
+fn bilingual_statistics_goal(
+    raw: &str,
+    english_output: bool,
+) -> Result<Option<StatisticsCandidate>> {
+    if let Some(candidate) = english_statistics_goal(raw)? {
+        return Ok(Some(candidate));
+    }
+    if english_output {
+        return Ok(parse_statistics_goal(raw)?
+            .filter(|(intent, _)| matches!(intent, Intent::DescribeStatistics { .. })));
+    }
+    Ok(None)
+}
+
+fn english_statistics_goal(raw: &str) -> Result<Option<StatisticsCandidate>> {
+    use Statistic::*;
+
+    const METRIC: &str = r"(?:arithmetic mean|average|mean|median|sum|total|minimum(?: value)?|maximum(?: value)?|population variance|sample variance|variance)";
+    const SEPARATOR: &str = r"(?:\s*,\s*(?:and\s+)?|\s+and\s+)";
+    const SCALAR: &str = r"[-+0-9eE.*/() \t]+";
+    const VERB: &str = r"(?:calculate|compute|find|give me|tell me)";
+    const TAIL: &str = r"(?P<tail>(?:[.;]|,\s*but\b).*)?";
+    const NUMBER_WORD: &str = r"(?:any\s+)?(?:numbers|(?:numeric\s+)?(?:results|values))";
+    static PRIMARY: LazyLock<Regex> = LazyLock::new(|| {
+        let values = format!(r"(?:\[[^\[\]\r\n]+\]|{SCALAR}(?:{SEPARATOR}{SCALAR})*)");
+        Regex::new(&format!(
+            r"(?i)\A(?:(?:please\s+)?{VERB}|what\s+(?:is|are))\s+(?P<only>only\s+)?(?:the\s+)?(?P<metrics>{METRIC}(?:{SEPARATOR}{METRIC})*)\s+(?:of|for)\s+(?P<values>{values})\s*{TAIL}\z"
+        ))
+        .expect("English statistics request grammar")
+    });
+    static REVERSED: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"(?i)\Afor\s+(?P<values>\[[^\[\]\r\n]+\]),\s*(?:please\s+)?{VERB}\s+(?P<only>only\s+)?(?:the\s+)?(?P<metrics>{METRIC}(?:{SEPARATOR}{METRIC})*)\s*{TAIL}\z"
+        ))
+        .expect("English statistics values-first grammar")
+    });
+    static SERIES_SEPARATOR: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(&format!("(?i){SEPARATOR}")).expect("statistics separator"));
+    static SCALAR_TOKEN: LazyLock<Regex> =
+        LazyLock::new(|| Regex::new(&format!(r"\A{SCALAR}\z")).expect("statistics scalar token"));
+    static OMIT: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"(?i)\A(?:omit|exclude|(?:do not|don't)\s+(?:include|show|calculate))\s+(?:the\s+)?(?P<metrics>{METRIC}(?:{SEPARATOR}{METRIC})*)\z"
+        ))
+        .expect("statistics metric omission grammar")
+    });
+    static EXPLAIN: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"(?i)\Aexplain(?:\s+the\s+(?:calculation|method|result|results))?(?:\s+(?P<detail>briefly|simply|in detail))?(?:\s+for\s+(?:(?:a|an|the)\s+)?(?P<audience>[A-Za-z][A-Za-z -]{{0,47}}?))?(?:\s+without\s+(?:showing|displaying|including)\s+(?P<hide>{NUMBER_WORD}))?\z"
+        ))
+        .expect("statistics explanation constraints grammar")
+    });
+    static HIDE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"(?i)\A(?:do not|don't)\s+(?:show|display|include)\s+{NUMBER_WORD}\z"
+        ))
+        .expect("statistics number omission grammar")
+    });
+
+    let text = terminal_trim(raw);
+    let Some(initial) = text.split_ascii_whitespace().next() else {
+        return Ok(None);
+    };
+    if text.contains(['\r', '\n'])
+        || ![
+            "please",
+            "calculate",
+            "compute",
+            "find",
+            "give",
+            "tell",
+            "what",
+            "for",
+        ]
+        .iter()
+        .any(|word| initial.eq_ignore_ascii_case(word))
+    {
+        return Ok(None);
+    }
+    let Some(parts) = PRIMARY.captures(text).or_else(|| REVERSED.captures(text)) else {
+        return Ok(None);
+    };
+    let values_text = parts.name("values").expect("values role").as_str().trim();
+    let array = values_text
+        .strip_prefix('[')
+        .and_then(|values| values.strip_suffix(']'));
+    let values: Vec<_> = SERIES_SEPARATOR
+        .split(array.unwrap_or(values_text))
+        .map(str::trim)
+        .map(|value| {
+            if array.is_some() {
+                value
+                    .strip_prefix('"')
+                    .and_then(|value| value.strip_suffix('"'))
+                    .unwrap_or(value)
+                    .trim()
+            } else {
+                value
+            }
+        })
+        .collect();
+    if values.iter().any(|value| !SCALAR_TOKEN.is_match(value)) {
+        return Ok(None);
+    }
+
+    let metric_for = |token: &str| {
+        Some(match token.to_ascii_lowercase().as_str() {
+            "arithmetic mean" | "average" | "mean" => Mean,
+            "median" => Median,
+            "sum" | "total" => Sum,
+            "minimum" | "minimum value" => Minimum,
+            "maximum" | "maximum value" => Maximum,
+            "variance" | "population variance" => PopulationVariance,
+            "sample variance" => SampleVariance,
+            _ => return None,
+        })
+    };
+    let metrics_text = parts.name("metrics").expect("metrics role").as_str();
+    let Some(mut metrics) = SERIES_SEPARATOR
+        .split(metrics_text)
+        .map(metric_for)
+        .collect::<Option<Vec<_>>>()
+    else {
+        return Ok(None);
+    };
+    metrics.sort_unstable();
+    metrics.dedup();
+    let mut show_values = true;
+    let mut explanation = None;
+    let tail = parts.name("tail").map_or("", |part| part.as_str());
+    for clause in tail
+        .trim_start_matches(['.', ';', ','])
+        .split([';', '.'])
+        .map(str::trim)
+        .filter(|clause| !clause.is_empty())
+    {
+        let clause = clause
+            .split_once(char::is_whitespace)
+            .filter(|(first, _)| first.eq_ignore_ascii_case("but"))
+            .map_or(clause, |(_, rest)| rest.trim());
+        if HIDE.is_match(clause) {
+            show_values = false;
+            continue;
+        }
+        if let Some(omit) = OMIT.captures(clause) {
+            for token in SERIES_SEPARATOR.split(&omit["metrics"]) {
+                if token.eq_ignore_ascii_case("variance") {
+                    metrics.retain(|metric| !matches!(metric, PopulationVariance | SampleVariance));
+                } else if let Some(omitted) = metric_for(token) {
+                    metrics.retain(|metric| *metric != omitted);
+                } else {
+                    return Ok(None);
+                }
+            }
+            continue;
+        }
+        let Some(explain) = EXPLAIN.captures(clause) else {
+            return Ok(None);
+        };
+        if explanation.is_some() {
+            return Ok(None);
+        }
+        let detail_text = explain.name("detail").map_or("", |part| part.as_str());
+        let detail = match detail_text.to_ascii_lowercase().as_str() {
+            "briefly" | "simply" => ExplanationDetail::Brief,
+            "in detail" => ExplanationDetail::Detailed,
+            _ => ExplanationDetail::Standard,
+        };
+        let audience = match explain.name("audience").map(|part| part.as_str()) {
+            None if detail_text.eq_ignore_ascii_case("simply") => ExplanationAudience::Beginner,
+            None => ExplanationAudience::General,
+            Some(audience) => match audience.to_ascii_lowercase().as_str() {
+                "beginner"
+                | "beginners"
+                | "child"
+                | "children"
+                | "new employee"
+                | "elementary school student"
+                | "novice" => ExplanationAudience::Beginner,
+                "general reader" | "general audience" | "adult" => ExplanationAudience::General,
+                "expert" | "specialist" | "statistician" | "researcher" => {
+                    ExplanationAudience::Technical
+                }
+                lower
+                    if !lower
+                        .split_ascii_whitespace()
+                        .any(|word| matches!(word, "with" | "without" | "and" | "but")) =>
+                {
+                    ExplanationAudience::Unresolved(audience.to_owned())
+                }
+                _ => return Ok(None),
+            },
+        };
+        show_values &= explain.name("hide").is_none();
+        explanation = Some(ExplanationRequest { audience, detail });
+    }
+    if metrics.is_empty() || (!show_values && explanation.is_none()) {
+        return Ok(None);
+    }
+    let mut roles = BTreeMap::new();
+    let mut record_role = |role: &str, part: &str| {
+        if !part.is_empty() {
+            let start = part.as_ptr() as usize - raw.as_ptr() as usize;
+            if let Some(span) = source_span_at(raw, start, start + part.len()) {
+                roles.insert(format!("/Statistics/{role}"), vec![span]);
+            }
+        }
+    };
+    record_role("observations", values_text);
+    record_role("requested_metrics", metrics_text);
+    record_role("constraints", tail);
+    if let Some(only) = parts.name("only") {
+        record_role("selection", only.as_str().trim());
+    }
+    for (index, value) in values.iter().enumerate() {
+        record_role(&format!("values/{index}"), value);
+    }
+    Ok(Some((
+        Intent::DescribeStatistics {
+            values: values.into_iter().map(str::to_owned).collect(),
+            metrics,
+            show_values,
+            explanation,
+        },
+        roles,
+    )))
+}
 
 fn parse_statistics_goal(raw: &str) -> Result<Option<StatisticsCandidate>> {
     use Statistic::*;

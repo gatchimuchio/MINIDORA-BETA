@@ -6516,6 +6516,8 @@ fn inspect(
         plan.locale == request.locale
             && (crate::core::supports_japanese_output_locale(&plan.locale)
                 || (requires_compound && crate::core::supports_english_output_locale(&plan.locale))
+                || (requires_conversational_math
+                    && crate::input::uses_english_statistics_output(bundle))
                 || (requires_attached_analysis
                     && crate::input::uses_english_attached_analysis(bundle))
                 || (requires_conversation && crate::input::uses_english_conversation_event(bundle))

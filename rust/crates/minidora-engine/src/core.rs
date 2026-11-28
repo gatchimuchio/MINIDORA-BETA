@@ -11537,9 +11537,11 @@ impl Engine {
         let english = supports_english_output_locale(&request.locale);
         let english_analysis = matches!(&goal.intent, Intent::AnalyzeAttachments { .. })
             && input::uses_english_attached_analysis(&bundle);
+        let english_statistics = input::uses_english_statistics_output(&bundle);
         let english_output = english
             && (matches!(&goal.intent, Intent::IndependentRequests { .. })
                 || english_analysis
+                || english_statistics
                 || input::uses_english_conversation_event(&bundle)
                 || input::uses_english_current_news(&bundle)
                 || matches!(
@@ -12236,6 +12238,7 @@ impl Engine {
                 let report = match crate::math::conversational_math_report(
                     &goal.intent,
                     !statistics_explanation_budget_blocked,
+                    english_statistics,
                 ) {
                     Ok(report) => report,
                     Err(Error::Contract { code, message }) => {
@@ -12253,7 +12256,11 @@ impl Engine {
                         &mut state,
                         Lifecycle::Suspend,
                         "RESOURCE_LIMIT",
-                        "数理の計算記録と日本語の回答が証拠予算を超えています。",
+                        if english_statistics {
+                            "The calculation record and answer exceed the evidence budget."
+                        } else {
+                            "数理の計算記録と日本語の回答が証拠予算を超えています。"
+                        },
                     );
                 }
                 let values_ref = self
@@ -18657,14 +18664,27 @@ impl Engine {
                     &mut state,
                     Lifecycle::Suspend,
                     STATISTICS_EXPLANATION_BLOCKED,
-                    "計算は済みました。指定された読者向けの説明は、対応する表現がないため保留しました。",
+                    if english_statistics {
+                        "The requested explanation could not be tailored to the specified audience."
+                    } else {
+                        "計算は済みました。指定された読者向けの説明は、対応する表現がないため保留しました。"
+                    },
                 );
             }
             if statistics_preview {
-                let message = if statistics_explanation_budget_blocked {
-                    "計算は済みました。説明に必要な行動予算がないため保留しました。"
-                } else {
-                    "表示できる結果を返しました。保存に必要な行動予算がないため、ファイルは書き込んでいません。"
+                let message = match (statistics_explanation_budget_blocked, english_statistics) {
+                    (true, true) => {
+                        "The calculation is ready. The action budget did not cover the explanation."
+                    }
+                    (false, true) => {
+                        "The visible results are ready. The action budget did not cover writing the file."
+                    }
+                    (true, false) => {
+                        "計算は済みました。説明に必要な行動予算がないため保留しました。"
+                    }
+                    (false, false) => {
+                        "表示できる結果を返しました。保存に必要な行動予算がないため、ファイルは書き込んでいません。"
+                    }
                 };
                 return self.stop(
                     &mut state,
@@ -20328,7 +20348,7 @@ pub(crate) fn previous_finite_event(
     })
 }
 
-/// Exact typed values and the adopted Japanese output must both match the
+/// Exact typed values and the adopted output must both match the
 /// sealed input. This is used by follow-up and interrupted-write recovery.
 pub(crate) fn verify_conversational_math_report(
     store: &Store,
@@ -20339,7 +20359,7 @@ pub(crate) fn verify_conversational_math_report(
     let invalid = || {
         failure(
             CODE,
-            "数理の封印済み入力・計算記録・採用した日本語本文が一致しません。",
+            "数理の封印済み入力・計算記録・採用本文が一致しません。",
         )
     };
     let request = &bundle.request;
@@ -20354,10 +20374,15 @@ pub(crate) fn verify_conversational_math_report(
     {
         return Err(invalid());
     }
-    let report = crate::math::conversational_math_report(&bundle.meaning.intent, true)?;
+    let report = crate::math::conversational_math_report(
+        &bundle.meaning.intent,
+        true,
+        input::uses_english_statistics_output(bundle),
+    )?;
     let reference = digest(&report.bytes);
     let plan = result.content_plan.as_ref().ok_or_else(invalid)?;
     if result.dependencies.as_slice() != [reference.as_str()]
+        || plan.locale != request.locale
         || plan.required_units != report.units
         || result.text != report.units.join("\n")
         || plan
@@ -20375,7 +20400,7 @@ pub(crate) fn verify_conversational_math_report(
         result,
         Some(&reference),
         CODE,
-        "Japanese math report",
+        "conversational math report",
     )?;
     Ok(report)
 }
@@ -20422,7 +20447,10 @@ pub(crate) fn registered_math_report_explanation(
         }
         return Ok(Some(report.explain(english)));
     }
-    if english {
+    let conversational = input::is_conversational_math_version(&bundle.meaning.parser_version);
+    if english
+        && !(conversational && matches!(&bundle.meaning.intent, Intent::DescribeStatistics { .. }))
+    {
         return Ok(None);
     }
     if !matches!(
@@ -20444,10 +20472,16 @@ pub(crate) fn registered_math_report_explanation(
             "the previous mathematical result does not match its registered input identity",
         ));
     }
-    if input::is_conversational_math_version(&bundle.meaning.parser_version) {
-        return Ok(Some(
-            verify_conversational_math_report(store, &bundle, previous)?.explanation_units,
-        ));
+    if conversational {
+        let report = verify_conversational_math_report(store, &bundle, previous)?;
+        return if english == input::uses_english_statistics_output(&bundle) {
+            Ok(Some(report.explanation_units))
+        } else {
+            Ok(Some(
+                crate::math::conversational_math_report(&bundle.meaning.intent, true, english)?
+                    .explanation_units,
+            ))
+        };
     }
     crate::math::previous_math_report_explanation(previous)
 }
