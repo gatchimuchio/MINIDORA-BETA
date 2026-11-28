@@ -5601,18 +5601,9 @@ fn inspect(
     }
     let requires_conversation = crate::core::is_conversation_intent(&goal.intent);
     const TRANSLATION_MISMATCH: &str = "RECOVERY_TRANSLATION_MISMATCH";
-    let expected_translation_parser = crate::translation_input::parser_version(&goal.intent);
-    let requires_translation = expected_translation_parser.is_some();
+    let requires_translation = crate::translation_input::parser_version(&goal.intent).is_some();
     let actual_parser = bundle.meaning.parser_version.as_str();
-    let translation_parser_matches = match expected_translation_parser {
-        Some(expected) => actual_parser == expected,
-        None => !matches!(
-            actual_parser,
-            crate::translation_input::PARSER_VERSION
-                | crate::translation_input::REVISION_PARSER_VERSION
-        ),
-    };
-    if !translation_parser_matches
+    if !crate::translation_input::version_matches(actual_parser, &goal.intent)
         || (requires_translation && bundle.meaning.intent != goal.intent)
         || requires_translation
             != (goal.required_predicates.first().map(String::as_str)

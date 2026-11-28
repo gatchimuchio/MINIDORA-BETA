@@ -81,12 +81,14 @@ impl Weather {
             (true, true) => "雪が降らない場合は、",
         }
     }
-    fn english_condition(self) -> &'static str {
-        match (self.snow, self.negative) {
-            (false, false) => "If it rains, ",
-            (false, true) => "If it does not rain, ",
-            (true, false) => "If it snows, ",
-            (true, true) => "If it does not snow, ",
+    fn english_condition(self, plain: bool) -> &'static str {
+        match (self.snow, self.negative, plain) {
+            (false, false, _) => "If it rains, ",
+            (false, true, false) => "If it does not rain, ",
+            (false, true, true) => "If it doesn't rain, ",
+            (true, false, _) => "If it snows, ",
+            (true, true, false) => "If it does not snow, ",
+            (true, true, true) => "If it doesn't snow, ",
         }
     }
 }
@@ -363,24 +365,10 @@ impl Amount {
 }
 
 impl Clause {
-    fn english(&self) -> String {
-        let noun = self.subject.english(false);
-        let verb = match self.verb {
-            Verb::Be => {
-                let prefix = match (
-                    self.tense,
-                    self.subject.third_singular(),
-                    self.subject == Nominal::Pronoun(I),
-                ) {
-                    (Tense::Future, _, _) => "will be",
-                    (Tense::Past, true, _) | (Tense::Past, _, true) => "was",
-                    (Tense::Past, false, false) => "were",
-                    (_, true, _) => "is",
-                    (_, false, true) => "am",
-                    _ => "are",
-                };
-                format!("{prefix}{}", if self.negative { " not" } else { "" })
-            }
+    fn english(&self, plain: bool) -> String {
+        let mut text = self.subject.english(false);
+        let predicate = match self.verb {
+            Verb::Be => english_copula(self, plain).into(),
             Verb::Rain | Verb::Snow => {
                 let base = if self.verb == Verb::Rain {
                     "rain"
@@ -411,6 +399,7 @@ impl Clause {
                         },
                     ],
                     &weather,
+                    plain,
                 )
             }
             _ => {
@@ -418,10 +407,10 @@ impl Clause {
                     .iter()
                     .find(|lexeme| lexeme.verb == self.verb)
                     .expect("recorded verb");
-                english_action(lexeme.en, self)
+                english_action(lexeme.en, self, plain)
             }
         };
-        let mut text = format!("{noun} {verb}");
+        text.push_str(&predicate);
         if let Some(object) = &self.object {
             text.push(' ');
             text.push_str(&object.english(true));
@@ -504,24 +493,53 @@ impl Clause {
     }
 }
 
-fn english_action(forms: [&str; 3], clause: &Clause) -> String {
+fn english_copula(clause: &Clause, plain: bool) -> &'static str {
+    let subject = &clause.subject;
+    let pronoun = matches!(subject, Nominal::Pronoun(_));
+    let first_person = subject == &Nominal::Pronoun(I);
+    let singular = first_person || subject.third_singular();
+    let (formal, contracted) = match (clause.tense, clause.negative, first_person, singular) {
+        (Tense::Future, true, _, _) => (" will not be", " won't be"),
+        (Tense::Future, false, _, _) if pronoun => (" will be", "'ll be"),
+        (Tense::Future, false, _, _) => (" will be", " will be"),
+        (Tense::Past, true, _, true) => (" was not", " wasn't"),
+        (Tense::Past, true, _, false) => (" were not", " weren't"),
+        (Tense::Past, false, _, true) => (" was", " was"),
+        (Tense::Past, false, _, false) => (" were", " were"),
+        (_, true, true, _) => (" am not", "'m not"),
+        (_, true, false, true) => (" is not", " isn't"),
+        (_, true, false, false) => (" are not", " aren't"),
+        (_, false, true, _) => (" am", "'m"),
+        (_, false, false, true) if pronoun => (" is", "'s"),
+        (_, false, false, false) if pronoun => (" are", "'re"),
+        (_, false, false, true) => (" is", " is"),
+        (_, false, false, false) => (" are", " are"),
+    };
+    if plain { contracted } else { formal }
+}
+
+fn english_action(forms: [&str; 3], clause: &Clause, plain: bool) -> String {
     let [base, singular, past] = forms;
-    match (
+    let (auxiliary, lexical_verb) = match (
         clause.tense,
         clause.negative,
         clause.subject.third_singular(),
     ) {
-        (Tense::Ability, false, _) => format!("can {base}"),
-        (Tense::Ability, true, _) => format!("cannot {base}"),
-        (Tense::Future, false, _) => format!("will {base}"),
-        (Tense::Future, true, _) => format!("will not {base}"),
-        (Tense::Past, false, _) => past.into(),
-        (Tense::Past, true, _) => format!("did not {base}"),
-        (Tense::Present, true, true) => format!("does not {base}"),
-        (Tense::Present, true, false) => format!("do not {base}"),
-        (Tense::Present, false, true) => singular.into(),
-        (Tense::Present, false, false) => base.into(),
-    }
+        (Tense::Ability, false, _) => (" can ", base),
+        (Tense::Ability, true, _) => (if plain { " can't " } else { " cannot " }, base),
+        (Tense::Future, false, _) if plain && matches!(&clause.subject, Nominal::Pronoun(_)) => {
+            ("'ll ", base)
+        }
+        (Tense::Future, false, _) => (" will ", base),
+        (Tense::Future, true, _) => (if plain { " won't " } else { " will not " }, base),
+        (Tense::Past, false, _) => (" ", past),
+        (Tense::Past, true, _) => (if plain { " didn't " } else { " did not " }, base),
+        (Tense::Present, true, true) => (if plain { " doesn't " } else { " does not " }, base),
+        (Tense::Present, true, false) => (if plain { " don't " } else { " do not " }, base),
+        (Tense::Present, false, true) => (" ", singular),
+        (Tense::Present, false, false) => (" ", base),
+    };
+    format!("{auxiliary}{lexical_verb}")
 }
 
 fn object_particle(verb: Verb) -> char {
@@ -1076,18 +1094,19 @@ impl Sentence {
     fn render(&self, lang: TranslationLanguage, register: TranslationRegister) -> String {
         match lang {
             TranslationLanguage::English => {
+                let plain = register == TranslationRegister::Plain;
                 let mut text = match &self.condition {
-                    Some(Condition::Weather(weather)) => weather.english_condition().into(),
-                    Some(Condition::Clause(clause)) => format!("If {}, ", clause.english()),
+                    Some(Condition::Weather(weather)) => weather.english_condition(plain).into(),
+                    Some(Condition::Clause(clause)) => format!("If {}, ", clause.english(plain)),
                     None => String::new(),
                 };
-                text.push_str(&self.main.english());
+                text.push_str(&self.main.english(plain));
                 if let Some((connector, clause)) = &self.joined {
                     text.push_str(match connector {
                         Connector::Contrast => ", but ",
                         Connector::Addition => ", and ",
                     });
-                    text.push_str(&clause.english());
+                    text.push_str(&clause.english(plain));
                 }
                 text.push('.');
                 capitalize_ascii(text)
@@ -1174,12 +1193,7 @@ impl TranslationMeaningPlan {
                 "対応する短い記述として原文の意味を確定できませんでした。",
             )
         };
-        let register = revision
-            .as_ref()
-            .map_or(request.register, |proof| proof.register);
         if request.source_language == request.target_language
-            || (request.target_language == TranslationLanguage::English
-                && register != TranslationRegister::Preserve)
             || request.source.text.len() > 4096
             || request.source.text.trim().is_empty()
         {
@@ -1310,5 +1324,96 @@ impl GeneratedTranslationArtifact {
             meaning_plan,
             content_generation,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use minidora_domain::SourceSpan;
+
+    #[test]
+    fn english_register_uses_the_same_source_and_preserves_names_times_and_layout() {
+        let source =
+            "- 雨が降らない場合は、Alexは午前9時に到着しません。\n- 私は会議に参加しませんでした。";
+        let request = TranslationRequest {
+            source: SourceSpan {
+                start: 0,
+                end: source.len(),
+                text: source.into(),
+            },
+            source_language: TranslationLanguage::Japanese,
+            target_language: TranslationLanguage::English,
+            register: TranslationRegister::Preserve,
+        };
+        let form = |register| {
+            Some(TranslationRevisionProof {
+                request_bundle: "revision".into(),
+                prior_result: "previous".into(),
+                prior_compute: "compute".into(),
+                prior_render: "render".into(),
+                register,
+            })
+        };
+        let original =
+            TranslationMeaningPlan::from_request(request.clone(), "source".into(), None).unwrap();
+        let plain = TranslationMeaningPlan::from_request(
+            request.clone(),
+            "source".into(),
+            form(TranslationRegister::Plain),
+        )
+        .unwrap();
+        let polite = TranslationMeaningPlan::from_request(
+            request,
+            "source".into(),
+            form(TranslationRegister::Polite),
+        )
+        .unwrap();
+        let formal =
+            "- If it does not rain, Alex does not arrive at 9 AM.\n- I did not attend the meeting.";
+        assert_eq!(original.render(), formal);
+        assert_eq!(
+            plain.render(),
+            "- If it doesn't rain, Alex doesn't arrive at 9 AM.\n- I didn't attend the meeting."
+        );
+        assert_eq!(polite.render(), formal);
+        assert_eq!(original.lines, plain.lines);
+        assert_eq!(plain.lines, polite.lines);
+    }
+
+    #[test]
+    fn english_contractions_follow_typed_predicate_and_subject() {
+        let mut clause = Clause {
+            subject: Nominal::Pronoun(I),
+            verb: Verb::Be,
+            object: None,
+            timing: Vec::new(),
+            amount: Some(Amount {
+                value: "2".into(),
+                unit: Unit::Kilometer,
+            }),
+            tense: Tense::Present,
+            negative: true,
+            polite: false,
+        };
+        assert_eq!(clause.english(true), "I'm not 2 km");
+        assert_eq!(clause.english(false), "I am not 2 km");
+        clause.verb = Verb::Arrive;
+        clause.amount = None;
+        for (tense, expected) in [
+            (Tense::Present, "I don't arrive"),
+            (Tense::Future, "I won't arrive"),
+            (Tense::Ability, "I can't arrive"),
+        ] {
+            clause.tense = tense;
+            assert_eq!(clause.english(true), expected);
+        }
+        clause.tense = Tense::Future;
+        clause.negative = false;
+        assert_eq!(clause.english(true), "I'll arrive");
+        clause.subject = Nominal::Name("Alex".into());
+        assert_eq!(clause.english(true), "Alex will arrive");
+        clause.tense = Tense::Present;
+        assert_eq!(clause.english(true), "Alex arrives");
     }
 }

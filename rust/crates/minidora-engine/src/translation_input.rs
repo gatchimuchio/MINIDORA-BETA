@@ -10,6 +10,8 @@ use TranslationRegister::{Plain, Polite, Preserve};
 
 pub(crate) const PARSER_VERSION: &str = "declarative-ja-en-v244-translation";
 pub(crate) const REVISION_PARSER_VERSION: &str = "declarative-ja-en-v245-translation-register";
+pub(crate) const HISTORY_REVISION_PARSER_VERSION: &str =
+    "declarative-ja-v1-translation-history-revision";
 
 pub(crate) struct ParsedTranslation {
     pub(crate) intent: Intent,
@@ -39,12 +41,72 @@ const REGISTERS: &[(&str, TranslationRegister)] = &[
     ("常体の", Plain),
 ];
 
+const JAPANESE_HISTORY_ANCHORS: &[&str] = &["前回の", "先ほどの", "さっきの", "前の"];
+const JAPANESE_REVISION_SUBJECTS: &[&str] = &["翻訳結果を", "訳文を", "翻訳を", "訳を"];
+const ENGLISH_HISTORY_ANCHORS: &[&str] = &[
+    "the earlier translation",
+    "the previous translation",
+    "the last translation",
+    "the translation from earlier",
+];
+const ENGLISH_IMMEDIATE_ANCHORS: &[&str] = &[
+    "the immediately previous translation",
+    "the immediately preceding translation",
+    "the translation in your last reply",
+    "the translation in my last reply",
+    "the translation from your last reply",
+    "the translation from my last reply",
+    "that translation",
+];
+const ENGLISH_REVISION_REGISTERS: &[(&str, TranslationRegister)] = &[
+    ("polite", Polite),
+    ("more polite", Polite),
+    ("formal", Polite),
+    ("more formal", Polite),
+    ("plain", Plain),
+    ("casual", Plain),
+    ("more casual", Plain),
+    ("less formal", Plain),
+];
+
 pub(crate) fn parser_version(intent: &Intent) -> Option<&'static str> {
     match intent {
         Intent::TranslateText { .. } => Some(PARSER_VERSION),
         Intent::ReviseTranslation { .. } => Some(REVISION_PARSER_VERSION),
         _ => None,
     }
+}
+
+pub(crate) fn version_matches(version: &str, intent: &Intent) -> bool {
+    match parser_version(intent) {
+        Some(expected) => {
+            expected == version
+                || (version == HISTORY_REVISION_PARSER_VERSION
+                    && matches!(intent, Intent::ReviseTranslation { .. }))
+        }
+        None => !matches!(
+            version,
+            PARSER_VERSION | REVISION_PARSER_VERSION | HISTORY_REVISION_PARSER_VERSION
+        ),
+    }
+}
+
+pub(crate) fn has_historical_revision_anchor(
+    intent: &Intent,
+    roles: &BTreeMap<String, Vec<SourceSpan>>,
+) -> bool {
+    matches!(intent, Intent::ReviseTranslation { .. })
+        && roles
+            .get("/ReviseTranslation/anchor")
+            .is_some_and(|anchors| {
+                matches!(anchors.as_slice(), [anchor] if JAPANESE_HISTORY_ANCHORS
+                .iter()
+                .any(|prefix| anchor.text.strip_prefix(*prefix)
+                    .is_some_and(|subject| JAPANESE_REVISION_SUBJECTS.contains(&subject)))
+                || ENGLISH_HISTORY_ANCHORS
+                    .iter()
+                    .any(|phrase| anchor.text.eq_ignore_ascii_case(phrase)))
+            })
 }
 
 fn original_span(raw: &str, part: &str) -> SourceSpan {
@@ -297,7 +359,7 @@ fn revise(raw: &str) -> Option<ParsedTranslation> {
         .into_iter()
         .find_map(|prefix| {
             let tail = text.strip_prefix(prefix)?;
-            literal_prefix(tail, &["翻訳結果を", "訳文を", "翻訳を", "訳を"])
+            literal_prefix(tail, JAPANESE_REVISION_SUBJECTS)
         })?;
     let style = literal_suffix(subject_end.trim_start(), &["にしてください", "にして"])?;
     let register = match style {
@@ -306,19 +368,91 @@ fn revise(raw: &str) -> Option<ParsedTranslation> {
         "常体" | "だ・である調" | "である調" | "くだけた文体" => Plain,
         _ => return None,
     };
-    Some(ParsedTranslation {
+    Some(revised_translation(
+        register,
+        original_span(raw, &text[..text.len() - subject_end.len()]),
+        original_span(raw, style),
+    ))
+}
+
+fn revised_translation(
+    register: TranslationRegister,
+    anchor: SourceSpan,
+    style: SourceSpan,
+) -> ParsedTranslation {
+    ParsedTranslation {
         intent: Intent::ReviseTranslation { register },
         roles: BTreeMap::from([
-            (
-                "/ReviseTranslation/anchor".into(),
-                vec![original_span(raw, &text[..text.len() - subject_end.len()])],
-            ),
-            (
-                "/ReviseTranslation/register".into(),
-                vec![original_span(raw, style)],
-            ),
+            ("/ReviseTranslation/anchor".into(), vec![anchor]),
+            ("/ReviseTranslation/register".into(), vec![style]),
         ]),
-    })
+    }
+}
+
+fn revise_english(raw: &str) -> Option<ParsedTranslation> {
+    let body = terminal_trim(raw);
+    if body.len() > 256 || body.chars().any(char::is_control) {
+        return None;
+    }
+    let request = ["could you ", "can you ", "would you "]
+        .iter()
+        .find_map(|prefix| ascii_prefix(body, prefix))
+        .unwrap_or(body)
+        .trim_start();
+    let request = ascii_prefix(request, "please ")
+        .unwrap_or(request)
+        .trim_start();
+    let (target, make) = if let Some(target) = ascii_prefix(request, "make ") {
+        (target.trim_start(), true)
+    } else {
+        let target = ["rewrite ", "revise ", "put "]
+            .iter()
+            .find_map(|verb| ascii_prefix(request, verb))?;
+        (target.trim_start(), false)
+    };
+    let (anchor, modifier) = ENGLISH_HISTORY_ANCHORS
+        .iter()
+        .chain(ENGLISH_IMMEDIATE_ANCHORS)
+        .find_map(|anchor| {
+            let modifier = ascii_prefix(target, anchor)?.strip_prefix(' ')?;
+            Some((&target[..anchor.len()], modifier.trim_start()))
+        })?;
+    let modifier = if make {
+        modifier
+    } else {
+        ["in ", "into ", "to sound ", "to be "]
+            .iter()
+            .find_map(|phrase| ascii_prefix(modifier, phrase))?
+            .trim_start()
+    };
+    let modifier = ascii_prefix(modifier, "a ")
+        .unwrap_or(modifier)
+        .trim_start();
+    let style = [" style", " register", " language"]
+        .iter()
+        .find_map(|suffix| {
+            let end = modifier.len().checked_sub(suffix.len())?;
+            let trailing = modifier.get(end..)?;
+            trailing
+                .eq_ignore_ascii_case(suffix)
+                .then(|| modifier[..end].trim_end())
+        })
+        .unwrap_or(modifier);
+    let register = ENGLISH_REVISION_REGISTERS
+        .iter()
+        .find_map(|(phrase, register)| style.eq_ignore_ascii_case(phrase).then_some(*register))?;
+
+    let start = raw.len() - raw.trim_start().len();
+    let span = |offset, value: &str| SourceSpan {
+        start: offset,
+        end: offset + value.len(),
+        text: value.into(),
+    };
+    Some(revised_translation(
+        register,
+        span(start + body.len() - target.len(), anchor),
+        span(start + body.len() - modifier.len(), style),
+    ))
 }
 
 pub(crate) fn parse(raw: &str) -> Result<Option<ParsedTranslation>> {
@@ -343,5 +477,172 @@ pub(crate) fn parse(raw: &str) -> Result<Option<ParsedTranslation>> {
         }
         return Ok(make_translation(raw, source, command));
     }
-    Ok(revise(raw))
+    Ok(revise(raw).or_else(|| revise_english(raw)))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn japanese_register_revisions_preserve_source_roles_and_reference_scope() {
+        for (raw, anchor, style, register, historical) in [
+            (
+                "　前回の翻訳結果をもっと丁寧にしてください。",
+                "前回の翻訳結果を",
+                "もっと丁寧",
+                Polite,
+                true,
+            ),
+            (
+                "先ほどの訳文を敬体にして",
+                "先ほどの訳文を",
+                "敬体",
+                Polite,
+                true,
+            ),
+            (
+                "さっきの翻訳を常体にして",
+                "さっきの翻訳を",
+                "常体",
+                Plain,
+                true,
+            ),
+            ("前の訳を丁寧にして", "前の訳を", "丁寧", Polite, true),
+            (
+                "直前の訳文を常体にして",
+                "直前の訳文を",
+                "常体",
+                Plain,
+                false,
+            ),
+            (
+                "その訳をくだけた文体にして",
+                "その訳を",
+                "くだけた文体",
+                Plain,
+                false,
+            ),
+        ] {
+            check_revision(raw, anchor, style, register, historical);
+        }
+    }
+
+    #[test]
+    fn english_register_revisions_keep_exact_anchors_and_register_words() {
+        for (raw, anchor, style, register, historical) in [
+            (
+                "  Please make the earlier translation more polite. ",
+                "the earlier translation",
+                "more polite",
+                Polite,
+                true,
+            ),
+            (
+                "Rewrite the previous translation in a plain style.",
+                "the previous translation",
+                "plain",
+                Plain,
+                true,
+            ),
+            (
+                "Can you make the LAST translation more casual?",
+                "the LAST translation",
+                "more casual",
+                Plain,
+                true,
+            ),
+            (
+                "Could you please revise the translation from earlier to sound more formal?",
+                "the translation from earlier",
+                "more formal",
+                Polite,
+                true,
+            ),
+            (
+                "Would you make that translation less formal?",
+                "that translation",
+                "less formal",
+                Plain,
+                false,
+            ),
+            (
+                "Make the immediately previous translation formal.",
+                "the immediately previous translation",
+                "formal",
+                Polite,
+                false,
+            ),
+            (
+                "Put the translation in my last reply into a casual register.",
+                "the translation in my last reply",
+                "casual",
+                Plain,
+                false,
+            ),
+        ] {
+            check_revision(raw, anchor, style, register, historical);
+        }
+    }
+
+    fn check_revision(
+        raw: &str,
+        anchor: &str,
+        style: &str,
+        register: TranslationRegister,
+        historical: bool,
+    ) {
+        let parsed = parse(raw).unwrap().unwrap();
+        assert_eq!(parsed.intent, Intent::ReviseTranslation { register });
+        assert_eq!(
+            parser_version(&parsed.intent),
+            Some(REVISION_PARSER_VERSION)
+        );
+        assert!(version_matches(
+            HISTORY_REVISION_PARSER_VERSION,
+            &parsed.intent
+        ));
+        assert_eq!(
+            has_historical_revision_anchor(&parsed.intent, &parsed.roles),
+            historical
+        );
+        for (role, expected) in [
+            ("/ReviseTranslation/anchor", anchor),
+            ("/ReviseTranslation/register", style),
+        ] {
+            let [span] = parsed.roles[role].as_slice() else {
+                panic!("one exact source span per role")
+            };
+            assert_eq!(span.text, expected);
+            assert_eq!(&raw[span.start..span.end], expected);
+        }
+    }
+
+    #[test]
+    fn register_revision_rejects_mixed_requests_and_different_output_languages() {
+        for raw in [
+            "Rewrite the earlier translation in English.",
+            "Make the earlier translation more polite in Japanese.",
+            "Make the previous translation more formal and add an example.",
+            "Rewrite that translation in a plain style without the last sentence.",
+            "Don't make the last translation more formal.",
+            "Is the earlier translation more polite?",
+            "Please make the earlier translation more formal. Save it.",
+        ] {
+            assert!(parse(raw).unwrap().is_none(), "{raw}");
+        }
+        let original = parse("Translate into Japanese: We check the report.")
+            .unwrap()
+            .unwrap();
+        assert!(version_matches(PARSER_VERSION, &original.intent));
+        assert!(!version_matches(REVISION_PARSER_VERSION, &original.intent));
+        assert!(!version_matches(
+            HISTORY_REVISION_PARSER_VERSION,
+            &original.intent
+        ));
+        assert!(!version_matches(
+            HISTORY_REVISION_PARSER_VERSION,
+            &Intent::Cancel
+        ));
+    }
 }

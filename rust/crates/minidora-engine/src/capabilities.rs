@@ -90,9 +90,9 @@ impl Engine {
                 },
                 EngineCapability {
                     id: "offline-short-translation-ja-en",
-                    scope: "対応する短い通知・記述を日本語と英語の間で翻訳します。同じ会話で確定した訳文は、元の文を保って文体を変更できます。",
+                    scope: "対応する短い通知・記述を日英で翻訳します。別の話題を挟んでも、同じ会話の確定訳を日英どちらの依頼からも参照し、原文を保って文体を変更できます。",
                     permission: None,
-                    limits: "対象は対応する語彙と文型の日英翻訳です。未対応の語句や構文が含まれる場合は保留します。",
+                    limits: "対応する語彙と文型が対象です。日本語訳は敬体・常体、英訳は対応する助動詞などの短縮形を切り替えます。",
                 },
                 EngineCapability {
                     id: "option-decision",

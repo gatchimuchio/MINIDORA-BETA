@@ -1015,13 +1015,50 @@ pub(crate) fn verified_counterfactual_relation_input(bundle: &InputBundle) -> Re
         .is_some_and(|(intent, roles)| intent == meaning.intent && roles == meaning.source_roles))
 }
 
+pub(crate) fn translation_history_scope(request: &RequestEnvelope) -> bool {
+    matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        && request.attachments.is_empty()
+        && request.speech.is_none()
+        && request.purpose.is_none()
+        && request.context_ref.is_none()
+}
+
+pub(crate) fn seal_historical_translation_revision(
+    original: &InputBundle,
+    prior: &ResultRecord,
+) -> Result<InputBundle> {
+    use crate::translation_input as translation;
+    if !translation_history_scope(&original.request)
+        || original.meaning.source_kind != "USER_REQUEST"
+        || original.meaning.parser_version != translation::REVISION_PARSER_VERSION
+        || !translation::has_historical_revision_anchor(
+            &original.meaning.intent,
+            &original.meaning.source_roles,
+        )
+        || prior.lifecycle != Lifecycle::Commit
+        || prior.guarantee != Guarantee::Computed
+    {
+        return Err(failure(
+            "TRANSLATION_CONTEXT_INVALID",
+            "同じ会話で、修正する訳文を特定できませんでした。",
+        ));
+    }
+    seal_user_input(
+        &original.request,
+        Some(prior),
+        translation::HISTORY_REVISION_PARSER_VERSION,
+        original.meaning.intent.clone(),
+        original.meaning.source_roles.clone(),
+        Vec::new(),
+    )
+}
+
 pub(crate) fn verified_translation_input(bundle: &InputBundle) -> Result<bool> {
+    use crate::translation_input as translation;
     let request = &bundle.request;
     let meaning = &bundle.meaning;
     let text = &request.text;
-    let Some(version) = crate::translation_input::parser_version(&meaning.intent) else {
-        return Ok(false);
-    };
+    let version = meaning.parser_version.as_str();
     let no_context = bundle.context_sha256 == identity(&None::<&ResultRecord>)?;
     let scope_matches = match &meaning.intent {
         Intent::TranslateText { .. } => {
@@ -1041,7 +1078,14 @@ pub(crate) fn verified_translation_input(bundle: &InputBundle) -> Result<bool> {
         _ => false,
     };
     if !scope_matches
-        || meaning.parser_version != version
+        || translation::parser_version(&meaning.intent).is_none()
+        || !translation::version_matches(version, &meaning.intent)
+        || (version == translation::HISTORY_REVISION_PARSER_VERSION
+            && (!translation_history_scope(request)
+                || !translation::has_historical_revision_anchor(
+                    &meaning.intent,
+                    &meaning.source_roles,
+                )))
         || meaning.source_kind != "USER_REQUEST"
         || !meaning.unresolved.is_empty()
         || !matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")

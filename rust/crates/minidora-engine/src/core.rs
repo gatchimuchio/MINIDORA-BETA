@@ -4213,10 +4213,134 @@ fn bound_generated_report_parent<'a>(
     Ok(parent)
 }
 
+struct GeneratedHistorySelection {
+    parent: ResultRecord,
+    through_revision: u64,
+    examined: u32,
+}
+
+impl GeneratedHistorySelection {
+    fn bind(
+        &self,
+        parent: &ResultRecord,
+        predecessor_revision: u64,
+        remaining: &mut u32,
+        invalid: fn() -> Error,
+        exhausted: fn() -> Error,
+    ) -> Result<()> {
+        if self.through_revision != predecessor_revision || &self.parent != parent {
+            return Err(invalid());
+        }
+        *remaining = remaining.checked_sub(self.examined).ok_or_else(exhausted)?;
+        Ok(())
+    }
+}
+
+fn historical_generated_report_parent<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+    bundle: &InputBundle,
+    invalid: fn() -> Error,
+) -> Result<(&'a ResultRecord, u64)> {
+    let predecessor = store
+        .input_start_predecessor_revision(state)?
+        .ok_or_else(invalid)?;
+    let parent = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .filter(|result| result.lifecycle == Lifecycle::Commit)
+        .ok_or_else(invalid)?;
+    if bundle.request.context_ref.is_some()
+        || predecessor.result.as_ref() == Some(parent)
+        || !registered_relation_context_matches(bundle, &state.prior_results, parent)?
+    {
+        return Err(invalid());
+    }
+    Ok((parent, predecessor.revision))
+}
+
+fn translation_history_budget_exhausted() -> Error {
+    failure(
+        "ACTION_BUDGET_EXHAUSTED",
+        "訳文の改訂履歴を確認する行動予算が不足しています。",
+    )
+}
+
+fn recent_translation(
+    store: &Store,
+    request: &RequestEnvelope,
+    through_revision: u64,
+    allowance: u32,
+    deadline: Instant,
+) -> Result<GeneratedHistorySelection> {
+    check_translation_deadline(deadline)?;
+    let (parent, examined) = store
+        .recent_result_input_before(
+            &request.actor_id,
+            &request.case_id,
+            through_revision,
+            allowance,
+            false,
+            |bundle, result| {
+                check_translation_deadline(deadline)?;
+                Ok(is_translation_intent(&bundle.meaning.intent)
+                    && result.guarantee == Guarantee::Computed)
+            },
+        )
+        .map_err(|error| match error {
+            Error::Contract { ref code, .. } if code == "ACTION_BUDGET_EXHAUSTED" => {
+                translation_history_budget_exhausted()
+            }
+            other => other,
+        })?;
+    check_translation_deadline(deadline)?;
+    Ok(GeneratedHistorySelection {
+        parent: parent.ok_or_else(translation_context_invalid)?,
+        through_revision,
+        examined,
+    })
+}
+
+fn bound_translation_parent<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+    bundle: &InputBundle,
+    remaining: &mut u32,
+    selection: Option<&GeneratedHistorySelection>,
+    deadline: Instant,
+) -> Result<&'a ResultRecord> {
+    if bundle.meaning.parser_version != crate::translation_input::HISTORY_REVISION_PARSER_VERSION {
+        if selection.is_some() {
+            return Err(translation_context_invalid());
+        }
+        return bound_generated_report_parent(store, state, bundle, translation_context_invalid);
+    }
+    let (parent, predecessor) =
+        historical_generated_report_parent(store, state, bundle, translation_context_invalid)?;
+    let reopened;
+    let selected = if let Some(selected) = selection {
+        selected
+    } else {
+        reopened = recent_translation(store, &bundle.request, predecessor, *remaining, deadline)?;
+        &reopened
+    };
+    selected.bind(
+        parent,
+        predecessor,
+        remaining,
+        translation_context_invalid,
+        translation_history_budget_exhausted,
+    )?;
+    Ok(parent)
+}
+
 fn resolve_translation_plan(
     store: &Store,
     state: &CaseRevision,
     bundle: &InputBundle,
+    selection: Option<&GeneratedHistorySelection>,
     deadline: Instant,
 ) -> Result<crate::translation::TranslationMeaningPlan> {
     use crate::translation::{TranslationMeaningPlan, TranslationRevisionProof};
@@ -4237,23 +4361,19 @@ fn resolve_translation_plan(
             None,
         );
     }
-    let mut parent =
-        bound_generated_report_parent(store, state, bundle, translation_context_invalid)?.clone();
     let budget = &bundle.request.budget;
+    let mut remaining = generated_history_allowance(&bundle.request);
+    let mut parent =
+        bound_translation_parent(store, state, bundle, &mut remaining, selection, deadline)?
+            .clone();
     store.with_verified_case_history(&state.actor_id, &state.case_id, |history| {
         let mut ancestors = Vec::new();
         let mut before = state.revision;
-        let max_ancestors = budget
-            .max_actions
-            .saturating_sub(3 + u32::from(bundle.request.output_path.is_some()));
         let mut meaning = loop {
             check_translation_deadline(deadline)?;
-            if ancestors.len() >= max_ancestors as usize {
-                return Err(failure(
-                    "ACTION_BUDGET_EXHAUSTED",
-                    "訳文の改訂履歴を確認する行動予算が不足しています。",
-                ));
-            }
+            remaining = remaining
+                .checked_sub(1)
+                .ok_or_else(translation_history_budget_exhausted)?;
             let committed = history
                 .committed_result_revision(&parent)?
                 .filter(|revision| revision.revision < before)
@@ -4283,11 +4403,13 @@ fn resolve_translation_plan(
                     break original;
                 }
                 Intent::ReviseTranslation { .. } => {
-                    let earlier = bound_generated_report_parent(
+                    let earlier = bound_translation_parent(
                         store,
                         &committed,
                         &input,
-                        translation_context_invalid,
+                        &mut remaining,
+                        None,
+                        deadline,
                     )?
                     .clone();
                     ancestors.push((input, parent));
@@ -4413,7 +4535,7 @@ pub(crate) fn verify_translation_computation(
     let deadline = Instant::now()
         .checked_add(Duration::from_millis(bundle.request.budget.deadline_ms))
         .ok_or_else(|| failure("INVALID_DEADLINE", "翻訳の照合に使う締切が無効です。"))?;
-    let meaning = resolve_translation_plan(store, state, bundle, deadline)?;
+    let meaning = resolve_translation_plan(store, state, bundle, None, deadline)?;
     Ok(verify_saved_translation(store, bundle, result, plan, &meaning, deadline)?.0)
 }
 
@@ -4434,7 +4556,7 @@ fn check_work_plan_deadline(deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-fn work_plan_history_allowance(request: &RequestEnvelope) -> u32 {
+fn generated_history_allowance(request: &RequestEnvelope) -> u32 {
     request
         .budget
         .max_actions
@@ -4456,9 +4578,7 @@ fn is_work_plan_intent(intent: &Intent) -> bool {
 }
 
 struct WorkPlanSelection {
-    parent: ResultRecord,
-    through_revision: u64,
-    examined: u32,
+    history: GeneratedHistorySelection,
     hearing_answer: bool,
 }
 
@@ -4498,9 +4618,11 @@ fn recent_work_plan(
         })?;
     check_work_plan_deadline(deadline)?;
     Ok(WorkPlanSelection {
-        parent: parent.ok_or_else(work_plan_context_invalid)?,
-        through_revision,
-        examined,
+        history: GeneratedHistorySelection {
+            parent: parent.ok_or_else(work_plan_context_invalid)?,
+            through_revision,
+            examined,
+        },
         hearing_answer,
     })
 }
@@ -4520,22 +4642,8 @@ fn bound_work_plan_parent<'a>(
         }
         return bound_generated_report_parent(store, state, bundle, work_plan_context_invalid);
     }
-    let predecessor = store
-        .input_start_predecessor_revision(state)?
-        .ok_or_else(work_plan_context_invalid)?;
-    let parent = bundle
-        .meaning
-        .context_result_ref
-        .as_ref()
-        .and_then(|id| state.prior_results.get(id))
-        .filter(|result| result.lifecycle == Lifecycle::Commit)
-        .ok_or_else(work_plan_context_invalid)?;
-    if bundle.request.context_ref.is_some()
-        || predecessor.result.as_ref() == Some(parent)
-        || !registered_relation_context_matches(bundle, &state.prior_results, parent)?
-    {
-        return Err(work_plan_context_invalid());
-    }
+    let (parent, predecessor) =
+        historical_generated_report_parent(store, state, bundle, work_plan_context_invalid)?;
     let selected_hearing_answer =
         parser_version == crate::work_plan_input::HEARING_HISTORY_REVISION_PARSER_VERSION;
     let reopened;
@@ -4545,22 +4653,23 @@ fn bound_work_plan_parent<'a>(
         reopened = recent_work_plan(
             store,
             &bundle.request,
-            predecessor.revision,
+            predecessor,
             *remaining,
             deadline,
             selected_hearing_answer,
         )?;
         &reopened
     };
-    if selected.through_revision != predecessor.revision
-        || &selected.parent != parent
-        || selected.hearing_answer != selected_hearing_answer
-    {
+    if selected.hearing_answer != selected_hearing_answer {
         return Err(work_plan_context_invalid());
     }
-    *remaining = remaining
-        .checked_sub(selected.examined)
-        .ok_or_else(work_plan_history_budget_exhausted)?;
+    selected.history.bind(
+        parent,
+        predecessor,
+        remaining,
+        work_plan_context_invalid,
+        work_plan_history_budget_exhausted,
+    )?;
     Ok(parent)
 }
 
@@ -4586,7 +4695,7 @@ fn resolve_work_plan(
         return WorkPlanMeaningPlan::new(request.clone(), bundle.fingerprint.clone(), deadline);
     }
     let budget = &bundle.request.budget;
-    let mut remaining = work_plan_history_allowance(&bundle.request);
+    let mut remaining = generated_history_allowance(&bundle.request);
     if remaining == 0 {
         return Err(work_plan_history_budget_exhausted());
     }
@@ -10034,6 +10143,55 @@ impl Engine {
                 Err(error) => return Err(error),
             }
         }
+        let mut translation_history_selection = None;
+        if implicit_context
+            && has_compute_budget
+            && input::translation_history_scope(&request)
+            && crate::translation_input::has_historical_revision_anchor(
+                &bundle.meaning.intent,
+                &bundle.meaning.source_roles,
+            )
+            && let Some(before) = state.parent_revision
+            && !latest.as_ref().is_some_and(|case| {
+                case.lifecycle == Lifecycle::Commit
+                    && case
+                        .bundle
+                        .as_ref()
+                        .is_some_and(|input| is_translation_intent(&input.meaning.intent))
+                    && case
+                        .result
+                        .as_ref()
+                        .is_some_and(|result| result.guarantee == Guarantee::Computed)
+            })
+        {
+            let deadline = started
+                .checked_add(Duration::from_millis(request.budget.deadline_ms))
+                .ok_or_else(|| failure("INVALID_DEADLINE", "翻訳の照合に使う締切が無効です。"))?;
+            match recent_translation(
+                &self.store,
+                &request,
+                before,
+                generated_history_allowance(&request),
+                deadline,
+            ) {
+                Ok(selected) => {
+                    bundle =
+                        input::seal_historical_translation_revision(&bundle, &selected.parent)?;
+                    translation_history_selection = Some(selected);
+                }
+                Err(Error::Contract { code, message })
+                    if matches!(
+                        code.as_str(),
+                        "DEADLINE" | "ACTION_BUDGET_EXHAUSTED" | "TRANSLATION_CONTEXT_INVALID"
+                    ) =>
+                {
+                    state.bundle = Some(bundle);
+                    self.advance(&mut state, Lifecycle::Sealed, None)?;
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let mut work_plan_selection = None;
         if implicit_context
             && has_compute_budget
@@ -10063,7 +10221,7 @@ impl Engine {
                     &self.store,
                     &request,
                     before,
-                    work_plan_history_allowance(&request),
+                    generated_history_allowance(&request),
                     deadline,
                     true,
                 )
@@ -10073,7 +10231,7 @@ impl Engine {
                 Ok(Some(selected)) => {
                     bundle = input::seal_historical_work_plan_revision(
                         &bundle,
-                        &selected.parent,
+                        &selected.history.parent,
                         selected.hearing_answer,
                     )?;
                     work_plan_selection = Some(selected);
@@ -17708,11 +17866,17 @@ impl Engine {
                     fiction_meaning_plan = Some(plan);
                     (dependencies, grammar, DRAFT_FICTION_PREDICATE)
                 } else if is_translation_intent(&goal.intent) {
-                    let prepared = resolve_translation_plan(&self.store, &state, &bundle, deadline)
-                        .and_then(|plan| {
-                            let grammar = plan.grammar(goal.budget.max_evidence_bytes)?;
-                            Ok((plan, grammar))
-                        });
+                    let prepared = resolve_translation_plan(
+                        &self.store,
+                        &state,
+                        &bundle,
+                        translation_history_selection.as_ref(),
+                        deadline,
+                    )
+                    .and_then(|plan| {
+                        let grammar = plan.grammar(goal.budget.max_evidence_bytes)?;
+                        Ok((plan, grammar))
+                    });
                     let (plan, grammar) = match prepared {
                         Ok(prepared) => prepared,
                         Err(Error::Contract { code, message }) => {
