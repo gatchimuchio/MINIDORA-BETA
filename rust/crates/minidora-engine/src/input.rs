@@ -55,6 +55,7 @@ const ATTACHED_CSV_CHART_PARSER_VERSION: &str = "declarative-ja-v231-attached-cs
 const ATTACHED_DOCUMENT_PARSER_VERSION: &str = "declarative-ja-v232-attached-document";
 pub(crate) const DOCUMENT_REVIEW_PARSER_VERSION: &str =
     "declarative-ja-v246-attached-document-fields";
+const IMAGE_TABLE_CELL_PARSER_VERSION: &str = "declarative-ja-v1-image-table-cell";
 pub(crate) const PURPOSE_DOCUMENT_PARSER_VERSION: &str = "declarative-ja-v239-purpose-document";
 const BRANCH_TEXT_PARSER_VERSION: &str = "declarative-ja-v240-branch-source-text";
 const ATTACHED_ANALYSIS_PARSER_VERSION: &str = "declarative-ja-v233-attached-analysis";
@@ -1597,6 +1598,29 @@ pub(crate) fn seal_with_source_context(
             Vec::new(),
         );
     }
+    if let Some(intent) = image_table_cell_intent(&request.text)? {
+        let use_previous = is_previous_attached_document_intent(&intent);
+        let unresolved = if let Some(reason) = image_table_cell_scope(request, use_previous) {
+            vec![reason.into()]
+        } else if use_previous
+            && previous.is_none_or(|result| {
+                result.lifecycle != Lifecycle::Commit || result.guarantee != Guarantee::SourceReport
+            })
+        {
+            vec!["同じ会話で確定した添付画像の回答を指定してください。".into()]
+        } else {
+            Vec::new()
+        };
+        let roles = attached_document_roles(&intent).expect("image table cell roles");
+        return seal_user_input(
+            request,
+            if use_previous { previous } else { None },
+            IMAGE_TABLE_CELL_PARSER_VERSION,
+            intent,
+            roles,
+            unresolved,
+        );
+    }
     if let Some(intent) = review_attached_document_intent(&request.text)? {
         let use_previous = is_previous_attached_document_intent(&intent);
         let unresolved = if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
@@ -2153,6 +2177,7 @@ pub(crate) fn seal_with_source_context(
         }
         Intent::CreateCsvChartFromAttachments { .. } => ATTACHED_CSV_CHART_PARSER_VERSION,
         Intent::ReviewAttachedDocumentFields { .. } => DOCUMENT_REVIEW_PARSER_VERSION,
+        Intent::SelectImageTableCell { .. } => IMAGE_TABLE_CELL_PARSER_VERSION,
         intent if is_attached_document_intent(intent) => ATTACHED_DOCUMENT_PARSER_VERSION,
         Intent::ProduceImage { .. } => IMAGE_PARSER_VERSION,
         Intent::SpeakPreviousAnswer => SPEECH_PARSER_VERSION,
@@ -7227,6 +7252,7 @@ pub(crate) fn is_attached_document_intent(intent: &Intent) -> bool {
             | Intent::FindInAttachedDocuments { .. }
             | Intent::FindInPreviousAttachedDocuments { .. }
             | Intent::ReviewAttachedDocumentFields { .. }
+            | Intent::SelectImageTableCell { .. }
     )
 }
 
@@ -7235,6 +7261,7 @@ pub(crate) fn is_previous_attached_document_intent(intent: &Intent) -> bool {
         intent,
         Intent::FindInPreviousAttachedDocuments { .. }
             | Intent::ReviewAttachedDocumentFields { previous: true, .. }
+            | Intent::SelectImageTableCell { previous: true, .. }
     )
 }
 
@@ -7292,6 +7319,9 @@ fn attached_document_intent(text: &str) -> Result<Option<Intent>> {
     if body.contains(['\r', '\n']) {
         return Ok(None);
     }
+    if let Some(intent) = image_table_cell_intent(text)? {
+        return Ok(Some(intent));
+    }
     if let Some(intent) = review_attached_document_intent(text)? {
         return Ok(Some(intent));
     }
@@ -7321,6 +7351,66 @@ fn attached_document_intent(text: &str) -> Result<Option<Intent>> {
     } else {
         Intent::FindInAttachedDocuments { query }
     }))
+}
+
+fn image_table_cell_intent(text: &str) -> Result<Option<Intent>> {
+    let body = terminal_trim(text);
+    if body.len() > 1024
+        || !body.contains("表")
+        || !body.contains('「')
+        || body
+            .chars()
+            .any(|character| character.is_control() || matches!(character, '\u{2028}' | '\u{2029}'))
+    {
+        return Ok(None);
+    }
+    let Some(fields) = regex(concat!(
+        r"\A(?:(?:(?P<previous>同じ|前の|前回の|前に)|今回の)?添付(?:した|された|の)?(?:画像|写真)の表|この表)(?:の|で|から)?",
+        r"[、，, 　]*「(?P<row>[^「」]{1,128})」(?:の)?行(?:[、，, 　]+|[ 　]*(?:と|の))[ 　]*",
+        r"「(?P<column>[^「」]{1,128})」(?:の)?列",
+        r"(?P<operation>はいくら(?:ですか)?|(?:が交わるセル|の(?:値|内容|文字|金額|セル))?を(?:読んで|読み取って|教えて|確認して)(?:ください)?|の(?:値|内容|文字|金額|セル)は(?:何|いくら)(?:ですか)?)\z"
+    ))?
+    .captures(body)
+    else {
+        return Ok(None);
+    };
+    let row = fields.name("row").expect("image table row capture");
+    let column = fields.name("column").expect("image table column capture");
+    if [row.as_str(), column.as_str()]
+        .into_iter()
+        .any(|label| label.is_empty() || label.trim() != label)
+    {
+        return Ok(None);
+    }
+    let offset = text.len() - text.trim_start().len();
+    let span = |label: regex::Match<'_>| {
+        source_span_at(text, offset + label.start(), offset + label.end())
+            .ok_or_else(attached_document_input_error)
+    };
+    Ok(Some(Intent::SelectImageTableCell {
+        row: span(row)?,
+        column: span(column)?,
+        previous: fields.name("previous").is_some(),
+        amount: fields.name("operation").is_some_and(|operation| {
+            operation.as_str().contains("いくら") || operation.as_str().contains("金額")
+        }),
+    }))
+}
+
+fn image_table_cell_scope(request: &RequestEnvelope, previous: bool) -> Option<&'static str> {
+    if !matches!(request.locale.as_str(), "ja" | "ja-JP") {
+        Some("画像の表は日本語で依頼してください。")
+    } else if previous && !request.attachments.is_empty() {
+        Some("前の添付画像を使う場合は、新しい添付を外してください。")
+    } else if !previous && request.context_ref.is_some() {
+        Some("今回添付する画像を使う場合は、前の回答指定を外してください。")
+    } else if !previous
+        && !matches!(request.attachments.as_slice(), [file] if RequestAttachment::is_image_name(&file.name))
+    {
+        Some("表が写ったPNGまたはJPEG画像を1枚添付してください。")
+    } else {
+        None
+    }
 }
 
 const DOCUMENT_FIELD_SEPARATORS: &[&str] =
@@ -7473,6 +7563,12 @@ fn attached_document_roles(intent: &Intent) -> Option<BTreeMap<String, Vec<Sourc
                 )])
             });
         }
+        Intent::SelectImageTableCell { row, column, .. } => {
+            return Some(BTreeMap::from([
+                ("/SelectImageTableCell/row".into(), vec![row.clone()]),
+                ("/SelectImageTableCell/column".into(), vec![column.clone()]),
+            ]));
+        }
         _ => return None,
     };
     Some(BTreeMap::from([(role.into(), vec![query.clone()])]))
@@ -7488,6 +7584,42 @@ fn attached_document_input_error() -> Error {
 pub(crate) fn verify_attached_document_input(bundle: &InputBundle) -> Result<()> {
     validate_request_attachments(&bundle.request)?;
     let meaning = &bundle.meaning;
+    if let Intent::SelectImageTableCell { previous, .. } = &meaning.intent {
+        let request = &bundle.request;
+        let text = &request.text;
+        let has_context = bundle.context_sha256 != identity(&None::<&ResultRecord>)?;
+        let scope_matches = if *previous {
+            has_context
+                && meaning
+                    .context_result_ref
+                    .as_ref()
+                    .is_some_and(|id| !id.is_empty())
+                && request
+                    .context_ref
+                    .as_ref()
+                    .is_none_or(|id| Some(id) == meaning.context_result_ref.as_ref())
+        } else {
+            !has_context && meaning.context_result_ref.is_none()
+        };
+        let version = IMAGE_TABLE_CELL_PARSER_VERSION;
+        if scope_matches
+            && image_table_cell_scope(request, *previous).is_none()
+            && meaning.parser_version == version
+            && meaning.source_kind == "USER_REQUEST"
+            && meaning.unresolved.is_empty()
+            && text.len() <= request.budget.max_input_bytes
+            && matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
+            && bundle.raw_sha256 == digest(text.as_bytes())
+            && bundle.semantic_signature == identity(meaning)?
+            && bundle.fingerprint
+                == identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
+            && attached_document_roles(&meaning.intent).as_ref() == Some(&meaning.source_roles)
+            && image_table_cell_intent(text)?.as_ref() == Some(&meaning.intent)
+        {
+            return Ok(());
+        }
+        return Err(attached_document_input_error());
+    }
     if let Intent::ReviewAttachedDocumentFields { previous, .. } = &meaning.intent {
         let request = &bundle.request;
         let text = &request.text;

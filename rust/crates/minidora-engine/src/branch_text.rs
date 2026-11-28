@@ -107,6 +107,15 @@ fn evaluate(store: &Store, bundle: &InputBundle, started: Instant) -> Result<Out
                     "分岐元の文書レビューは履歴で確認できます。分岐先で要点を整理するには、資料を添付して項目を指定してください。",
                 ));
             }
+            if matches!(
+                source_input.meaning.intent,
+                Intent::SelectImageTableCell { .. }
+            ) {
+                return Err(failure(
+                    "BRANCH_IMAGE_TABLE_SUMMARY_UNAVAILABLE",
+                    "画像の表の値と根拠は分岐元の回答で確認できます。",
+                ));
+            }
             let plan = source.content_plan.as_ref().ok_or_else(mismatch)?;
             let render = source.render.as_ref().ok_or_else(mismatch)?;
             let quotes = if input::is_attached_document_intent(&source_input.meaning.intent) {

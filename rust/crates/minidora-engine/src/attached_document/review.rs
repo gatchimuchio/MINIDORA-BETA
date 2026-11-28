@@ -153,7 +153,7 @@ fn observe<'a>(
         FileContent::UnreadablePdf(failure) => {
             search.gap(source, None, None, failure.code, failure.message)
         }
-        FileContent::Image(_) => search.gap(
+        FileContent::Image { .. } => search.gap(
             source,
             None,
             None,

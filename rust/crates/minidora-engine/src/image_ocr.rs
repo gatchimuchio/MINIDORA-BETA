@@ -9,6 +9,7 @@ const MAX_SIDE: u32 = 2048;
 const MAX_WORDS: usize = 512;
 const MAX_WORD_BYTES: usize = 384;
 const MIN_CONFIDENCE: u8 = 50;
+const TABLE_READER_VERSION: &str = "tesseract-5.5.3.20260724-legacy-jpn-psm6-masked-grid-tsv-v1";
 const UNCLEAR: &str = "［不明］";
 const TSV_HEADER: &str =
     "level\tpage_num\tblock_num\tpar_num\tline_num\tword_num\tleft\ttop\twidth\theight\tconf\ttext";
@@ -36,7 +37,7 @@ impl Bounds {
                 .is_some_and(|bottom| bottom <= height)
     }
 
-    fn union(self, other: Self) -> Self {
+    pub(crate) fn union(self, other: Self) -> Self {
         let x = self.x.min(other.x);
         let y = self.y.min(other.y);
         Self {
@@ -50,10 +51,10 @@ impl Bounds {
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
-struct Word {
-    bounds: Bounds,
-    confidence_floor: u8,
-    text: Option<String>,
+pub(crate) struct Word {
+    pub(crate) bounds: Bounds,
+    pub(crate) confidence_floor: u8,
+    pub(crate) text: Option<String>,
 }
 
 #[derive(Debug, PartialEq, Eq, Deserialize, Serialize)]
@@ -65,6 +66,10 @@ pub(crate) struct Line {
 }
 
 impl Line {
+    pub(crate) fn words(&self) -> impl Iterator<Item = &Word> {
+        self.words.iter()
+    }
+
     pub fn has_text(&self) -> bool {
         self.words.iter().any(|word| word.text.is_some())
     }
@@ -88,6 +93,14 @@ pub(crate) struct Observation {
     pub lines: Vec<Line>,
     reader_version: String,
     coordinate_space: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    masked_pgm_sha256: Option<String>,
+}
+
+impl Observation {
+    pub(crate) fn used_rule_mask(&self) -> bool {
+        self.masked_pgm_sha256.is_some()
+    }
 }
 
 fn invalid_image() -> minidora_domain::Error {
@@ -119,7 +132,7 @@ fn reader<'a>(bytes: &'a [u8], media_type: &str) -> Result<ImageReader<Cursor<&'
     Ok(reader)
 }
 
-fn deadline_check(deadline: Instant) -> Result<()> {
+pub(crate) fn deadline_check(deadline: Instant) -> Result<()> {
     if Instant::now() >= deadline {
         return Err(failure(
             "RESOURCE_LIMIT",
@@ -129,45 +142,133 @@ fn deadline_check(deadline: Instant) -> Result<()> {
     Ok(())
 }
 
-pub(crate) fn observe(bytes: &[u8], media_type: &str, deadline: Instant) -> Result<Observation> {
-    deadline_check(deadline)?;
-    let raster = reader(bytes, media_type)?
+pub(crate) fn decode_rgba(bytes: &[u8], media_type: &str) -> Result<image::RgbaImage> {
+    Ok(reader(bytes, media_type)?
         .decode()
-        .map_err(|_| invalid_image())?;
-    let rgba = raster.into_rgba8();
+        .map_err(|_| invalid_image())?
+        .into_rgba8())
+}
+
+pub(crate) fn luma_on_white(pixel: &image::Rgba<u8>) -> u8 {
+    let [r, g, b, alpha] = pixel.0.map(u32::from);
+    let luma = (77 * r + 150 * g + 29 * b + 128) / 256;
+    ((alpha * luma + (255 - alpha) * 255 + 127) / 255) as u8
+}
+
+struct OcrInput {
+    width: u32,
+    height: u32,
+    pgm: Vec<u8>,
+    masked_pgm_sha256: Option<String>,
+}
+
+fn prepare(bytes: &[u8], media_type: &str, table: bool, deadline: Instant) -> Result<OcrInput> {
+    deadline_check(deadline)?;
+    let rgba = decode_rgba(bytes, media_type)?;
     let (width, height) = (rgba.width(), rgba.height());
     if !(1..=MAX_SIDE).contains(&width) || !(1..=MAX_SIDE).contains(&height) {
         return Err(invalid_image());
     }
     let mut pgm = format!("P5\n{width} {height}\n255\n").into_bytes();
+    let first_pixel = pgm.len();
     pgm.reserve((width * height) as usize);
-    for pixel in rgba.pixels() {
-        let [r, g, b, alpha] = pixel.0.map(u32::from);
-        let luma = (77 * r + 150 * g + 29 * b + 128) / 256;
-        pgm.push(((alpha * luma + (255 - alpha) * 255 + 127) / 255) as u8);
-    }
+    pgm.extend(rgba.pixels().map(luma_on_white));
+    let masked_pgm_sha256 = if table
+        && crate::image_table::mask_verified_rules(
+            &mut pgm[first_pixel..],
+            width,
+            height,
+            deadline,
+        )? {
+        Some(digest(&pgm))
+    } else {
+        None
+    };
     deadline_check(deadline)?;
-    let report = ocr_worker::recognize(&pgm, deadline)?;
-    let lines = parse_tsv(&report, width, height)?;
-    deadline_check(deadline)?;
-    Ok(Observation {
-        image_sha256: digest(bytes),
-        media_type: media_type.into(),
+    Ok(OcrInput {
         width,
         height,
-        lines,
-        reader_version: ocr_worker::READER_VERSION.into(),
-        coordinate_space: "TOP_LEFT_RASTER_PIXELS".into(),
+        pgm,
+        masked_pgm_sha256,
     })
 }
 
+fn observe_prepared(
+    bytes: &[u8],
+    media_type: &str,
+    prepared: OcrInput,
+    deadline: Instant,
+) -> Result<Observation> {
+    let report = ocr_worker::recognize(&prepared.pgm, deadline)?;
+    let lines = parse_tsv(&report, prepared.width, prepared.height)?;
+    deadline_check(deadline)?;
+    let reader_version = reader_version(prepared.masked_pgm_sha256.as_deref());
+    Ok(Observation {
+        image_sha256: digest(bytes),
+        media_type: media_type.into(),
+        width: prepared.width,
+        height: prepared.height,
+        lines,
+        reader_version: reader_version.into(),
+        coordinate_space: "TOP_LEFT_RASTER_PIXELS".into(),
+        masked_pgm_sha256: prepared.masked_pgm_sha256,
+    })
+}
+
+pub(crate) fn observe(bytes: &[u8], media_type: &str, deadline: Instant) -> Result<Observation> {
+    let prepared = prepare(bytes, media_type, false, deadline)?;
+    observe_prepared(bytes, media_type, prepared, deadline)
+}
+
+pub(crate) fn observe_table(
+    bytes: &[u8],
+    media_type: &str,
+    deadline: Instant,
+) -> Result<Observation> {
+    let prepared = prepare(bytes, media_type, true, deadline)?;
+    observe_prepared(bytes, media_type, prepared, deadline)
+}
+
+fn reader_version(masked_pgm_sha256: Option<&str>) -> &'static str {
+    if masked_pgm_sha256.is_some() {
+        TABLE_READER_VERSION
+    } else {
+        ocr_worker::READER_VERSION
+    }
+}
+
 pub(crate) fn verify(observation: &Observation, bytes: &[u8], media_type: &str) -> Result<()> {
+    verify_prepared(observation, bytes, media_type, None)
+}
+
+pub(crate) fn verify_table(
+    observation: &Observation,
+    bytes: &[u8],
+    media_type: &str,
+    deadline: Instant,
+) -> Result<()> {
+    let prepared = prepare(bytes, media_type, true, deadline)?;
+    verify_prepared(
+        observation,
+        bytes,
+        media_type,
+        prepared.masked_pgm_sha256.as_deref(),
+    )
+}
+
+fn verify_prepared(
+    observation: &Observation,
+    bytes: &[u8],
+    media_type: &str,
+    masked_pgm_sha256: Option<&str>,
+) -> Result<()> {
     let (width, height) = reader(bytes, media_type)?
         .into_dimensions()
         .map_err(|_| invalid_image())?;
     if observation.image_sha256 != digest(bytes)
         || observation.media_type != media_type
-        || observation.reader_version != ocr_worker::READER_VERSION
+        || observation.reader_version != reader_version(masked_pgm_sha256)
+        || observation.masked_pgm_sha256.as_deref() != masked_pgm_sha256
         || observation.coordinate_space != "TOP_LEFT_RASTER_PIXELS"
         || (observation.width, observation.height) != (width, height)
         || !(1..=MAX_SIDE).contains(&width)
@@ -209,7 +310,7 @@ fn line_bounds(words: &[Word]) -> Option<Bounds> {
     words.iter().map(|word| word.bounds).reduce(Bounds::union)
 }
 
-fn line_text(words: &[Word]) -> String {
+pub(crate) fn line_text<'a>(words: impl IntoIterator<Item = &'a Word>) -> String {
     let mut line = String::new();
     for word in words {
         let next = word.text.as_deref().unwrap_or(UNCLEAR);

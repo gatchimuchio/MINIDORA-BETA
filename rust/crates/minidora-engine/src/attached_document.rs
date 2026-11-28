@@ -6,6 +6,7 @@ pub(crate) use decision_field::{DecisionFieldSource, decision_field_source};
 
 use crate::document::revalidate_previous_document_render;
 use crate::image_ocr::{self, Bounds, Observation};
+use crate::image_table::{self, CellLookup};
 use crate::input::{self, PURPOSE_DOCUMENT_PARSER_VERSION, verify_attached_document_input};
 use crate::pdf_worker::{self, Page, PageState};
 use crate::store::Store;
@@ -81,6 +82,7 @@ struct ImagePreparation<'a> {
     case: &'a str,
     retained: Option<&'a RetainedObservations>,
     max_evidence_bytes: usize,
+    table_cells: bool,
 }
 
 impl ImagePreparation<'_> {
@@ -106,14 +108,22 @@ impl ImagePreparation<'_> {
                 return Err(invalid_context());
             }
             let observation: Observation = serde_json::from_slice(&stored)?;
-            image_ocr::verify(&observation, raw, media_type)?;
+            if self.table_cells {
+                image_ocr::verify_table(&observation, raw, media_type, deadline)?;
+            } else {
+                image_ocr::verify(&observation, raw, media_type)?;
+            }
             let actual = make_ref(&observation, &stored);
             if actual != *reference || canonical(&observation)? != stored {
                 return Err(invalid_context());
             }
             Ok((observation, actual))
         } else {
-            let observation = image_ocr::observe(raw, media_type, deadline)?;
+            let observation = if self.table_cells {
+                image_ocr::observe_table(raw, media_type, deadline)?
+            } else {
+                image_ocr::observe(raw, media_type, deadline)?
+            };
             let bytes = canonical(&observation)?;
             if bytes.len() > MAX_OCR_EVIDENCE_BYTES {
                 return Err(resource_limit());
@@ -144,7 +154,10 @@ enum FileContent<'a> {
     Text(&'a str),
     Pdf(Vec<Page>),
     ScannedPdf(pdf_scan::Document),
-    Image(Observation),
+    Image {
+        observation: Observation,
+        raster: Vec<u8>,
+    },
     UnreadablePdf(PdfFailure),
 }
 
@@ -598,22 +611,25 @@ fn prepare_files<'a>(
             } else {
                 FileContent::Pdf(pages)
             }
-        } else if image.is_some() {
+        } else if let Some(raster) = image {
             let images = images.ok_or_else(|| {
                 failure(
                     "ATTACHED_DOCUMENT_FORMAT",
                     "画像は文字の読み取りまたは検索に使用できます。",
                 )
             })?;
-            let media = if raw.starts_with(b"\x89PNG\r\n\x1a\n") {
+            let media = if raster.starts_with(b"\x89PNG\r\n\x1a\n") {
                 "image/png"
             } else {
                 "image/jpeg"
             };
-            let (observation, reference) = images.prepare(&file.name, raw, media, deadline)?;
+            let (observation, reference) = images.prepare(&file.name, &raster, media, deadline)?;
             source.media_type = Some(media);
             source.image_observation = Some(reference);
-            FileContent::Image(observation)
+            FileContent::Image {
+                observation,
+                raster,
+            }
         } else {
             ensure_displayable_text(&file.text, &file.name)?;
             FileContent::Text(&file.text)
@@ -1073,7 +1089,7 @@ pub(crate) fn lookup_field(
             FileContent::UnreadablePdf(failure) => {
                 search.gap(source, None, None, failure.code, failure.message)
             }
-            FileContent::Image(_) | FileContent::ScannedPdf(_) => return Err(invalid_context()),
+            FileContent::Image { .. } | FileContent::ScannedPdf(_) => return Err(invalid_context()),
         }
     }
     check_deadline(deadline)?;
@@ -1377,7 +1393,7 @@ fn compute(
                 &mut units,
                 deadline,
             )?,
-            FileContent::Image(observation) => collect_from_image(
+            FileContent::Image { observation, .. } => collect_from_image(
                 observation,
                 None,
                 operation,
@@ -1526,6 +1542,118 @@ fn lineage(origin: &str, parent: &str) -> Vec<String> {
     references
 }
 
+#[derive(Serialize)]
+struct ImageTableReport<'a> {
+    kind: &'static str,
+    manifest_sha256: &'a str,
+    source: &'a ManifestSource<'a>,
+    row: &'a str,
+    column: &'a str,
+    amount: bool,
+    selection: CellLookup,
+}
+
+fn image_table_attachment_scope() -> Error {
+    failure(
+        "IMAGE_TABLE_ATTACHMENT_SCOPE",
+        "表のセルを読むには、PNGまたはJPEG画像を1枚指定してください。",
+    )
+}
+
+fn table_coordinates(label: &str, bounds: Bounds) -> String {
+    format!(
+        "{label} 左上 ({}, {}) 幅 {} 高さ {} px",
+        bounds.x, bounds.y, bounds.width, bounds.height
+    )
+}
+
+fn is_printed_amount(text: &str) -> bool {
+    static AMOUNT: std::sync::LazyLock<regex::Regex> = std::sync::LazyLock::new(|| {
+        regex::Regex::new(
+            r"\A(?:[￥¥][ 　]*)?(?:[0-9０-９]{1,3}(?:[,，][0-9０-９]{3})+|[0-9０-９]+)(?:[.．][0-9０-９]+)?(?:[ 　]*円)?\z",
+        )
+        .expect("visible currency syntax")
+    });
+    AMOUNT.is_match(text)
+}
+
+fn compute_image_table(
+    files: &[PreparedFile<'_>],
+    manifest_ref: &str,
+    row: &str,
+    column: &str,
+    amount: bool,
+    deadline: Instant,
+) -> Result<Computation> {
+    let [file] = files else {
+        return Err(image_table_attachment_scope());
+    };
+    let FileContent::Image {
+        observation,
+        raster,
+    } = &file.content
+    else {
+        return Err(image_table_attachment_scope());
+    };
+    let media_type = file.source.media_type.ok_or_else(invalid_context)?;
+    let selection =
+        match image_table::read_cell(raster, media_type, observation, row, column, deadline)? {
+            CellLookup::Found { ref value, .. } if amount && !is_printed_amount(&value.text) => {
+                CellLookup::Unknown {
+                    reason: "AMOUNT_UNREADABLE",
+                }
+            }
+            read => read,
+        };
+    let mut units = vec![source_heading(file.source.name, &file.source.sha256)];
+    match &selection {
+        CellLookup::Found {
+            row: row_label,
+            column: heading,
+            value,
+        } => {
+            units.push(format!(
+                "「{row}」の行と「{column}」の列が交わるセルの値は「{}」です。",
+                value.text
+            ));
+            units.push(table_coordinates("行見出し", row_label.pixels));
+            units.push(table_coordinates("列見出し", heading.pixels));
+            units.push(table_coordinates("値の文字", value.pixels));
+            units.push(table_coordinates("交点セル", value.cell));
+        }
+        CellLookup::Unknown { reason } => {
+            units.push(format!(
+                "「{row}」の行と「{column}」の列で指定されたセルの値を確認できませんでした。"
+            ));
+            let detail = match *reason {
+                "LABEL_NOT_FOUND" => "指定された行名または列名が見つかりませんでした。",
+                "LABEL_AMBIGUOUS" => "同じ行名または列名が複数あります。",
+                "LABEL_UNREADABLE" => "行または列の見出しに読み取れない文字があります。",
+                "VALUE_UNREADABLE" => "交点のセルで、表示できる文字を確認できませんでした。",
+                "AMOUNT_UNREADABLE" => "読み取った文字を金額として確定できませんでした。",
+                "TEXT_TOUCHES_RULE" | "TEXT_CROSSES_RULE" => {
+                    "文字の範囲を罫線から分離できませんでした。"
+                }
+                _ => "画像上で一つの完全な罫線表を確認できませんでした。",
+            };
+            units.push(detail.into());
+        }
+    }
+    let report_bytes = canonical(&ImageTableReport {
+        kind: "minidora.image-table-cell-report.v1",
+        manifest_sha256: manifest_ref,
+        source: &file.source,
+        row,
+        column,
+        amount,
+        selection,
+    })?;
+    Ok(Computation {
+        units,
+        report_bytes,
+    })
+}
+
 fn compute_bundle(
     files: &[PreparedFile<'_>],
     manifest_ref: &str,
@@ -1537,6 +1665,22 @@ fn compute_bundle(
     } = &bundle.meaning.intent
     {
         return review::compute(files, manifest_ref, *operation, fields, deadline);
+    }
+    if let Intent::SelectImageTableCell {
+        row,
+        column,
+        amount,
+        ..
+    } = &bundle.meaning.intent
+    {
+        return compute_image_table(
+            files,
+            manifest_ref,
+            &row.text,
+            &column.text,
+            *amount,
+            deadline,
+        );
     }
     compute(
         files,
@@ -1607,6 +1751,11 @@ pub(crate) fn produce(
         .map_or(origin_bundle.request.attachments.as_slice(), |profile| {
             profile.attachments.as_slice()
         });
+    if matches!(bundle.meaning.intent, Intent::SelectImageTableCell { .. })
+        && !matches!(origin_attachments, [source] if RequestAttachment::is_image_name(&source.name))
+    {
+        return Err(image_table_attachment_scope());
+    }
     let has_images = origin_attachments
         .iter()
         .any(|file| RequestAttachment::is_image_name(&file.name));
@@ -1660,6 +1809,13 @@ pub(crate) fn produce(
         case: &state.case_id,
         retained: retained_observations.as_ref(),
         max_evidence_bytes: budget.max_evidence_bytes,
+        table_cells: matches!(
+            origin_bundle.meaning.intent,
+            Intent::SelectImageTableCell {
+                previous: false,
+                ..
+            }
+        ),
     };
     let files = prepare_files(
         origin_attachments.iter(),

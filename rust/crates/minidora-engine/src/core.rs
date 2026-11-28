@@ -12103,6 +12103,7 @@ impl Engine {
             Intent::SummarizeAttachedDocuments
             | Intent::FindInAttachedDocuments { .. }
             | Intent::FindInPreviousAttachedDocuments { .. }
+            | Intent::SelectImageTableCell { .. }
             | Intent::ReviewAttachedDocumentFields { .. } => {
                 let document = match crate::attached_document::produce(
                     &self.store,

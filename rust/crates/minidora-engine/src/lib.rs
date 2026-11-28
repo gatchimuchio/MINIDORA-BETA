@@ -32,6 +32,7 @@ mod hearing;
 mod image_artifact;
 mod image_delivery;
 mod image_ocr;
+mod image_table;
 pub mod input;
 pub mod language;
 pub mod math;

@@ -903,6 +903,12 @@ pub enum Intent {
         fields: Vec<SourceSpan>,
         previous: bool,
     },
+    SelectImageTableCell {
+        row: SourceSpan,
+        column: SourceSpan,
+        previous: bool,
+        amount: bool,
+    },
     ProduceImage {
         operation: ImageOperation,
     },

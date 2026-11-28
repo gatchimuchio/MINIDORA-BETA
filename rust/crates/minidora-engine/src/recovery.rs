@@ -5466,15 +5466,20 @@ fn inspect(
     }
     const ATTACHED_DOCUMENT_MISMATCH: &str = "RECOVERY_ATTACHED_DOCUMENT_MISMATCH";
     let requires_attached_document = crate::input::is_attached_document_intent(&goal.intent);
-    let document_review = matches!(goal.intent, Intent::ReviewAttachedDocumentFields { .. })
-        || matches!(
-            bundle.meaning.intent,
-            Intent::ReviewAttachedDocumentFields { .. }
-        );
+    let has_structured_document_selectors =
+        [&goal.intent, &bundle.meaning.intent]
+            .into_iter()
+            .any(|intent| {
+                matches!(
+                    intent,
+                    Intent::ReviewAttachedDocumentFields { .. }
+                        | Intent::SelectImageTableCell { .. }
+                )
+            });
     if requires_attached_document
         != (goal.required_predicates.first().map(String::as_str)
             == Some(crate::core::ATTACHED_DOCUMENT_PREDICATE))
-        || (document_review && goal.intent != bundle.meaning.intent)
+        || (has_structured_document_selectors && goal.intent != bundle.meaning.intent)
     {
         return Err(failure(
             ATTACHED_DOCUMENT_MISMATCH,
