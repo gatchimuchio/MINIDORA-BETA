@@ -1870,6 +1870,7 @@ pub(crate) fn goal_predicates(
 ) -> Vec<String> {
     let mut predicates = Vec::new();
     match &meaning.intent {
+        Intent::IndependentRequests { .. } => predicates.push(crate::composition::PREDICATE.into()),
         Intent::ClarifyPreviousLength
         | Intent::ClarifyFilteredCsvStatistics
         | Intent::SupplyHearingAnswer { .. } => predicates.push(hearing::PREDICATE.into()),
@@ -2136,6 +2137,7 @@ fn verify_report_goal_content(
                 | CORRECTION_ASSERTION_PREDICATE
                 | WEB_ANSWER_PREDICATE
                 | crate::research_goal::PREDICATE
+                | crate::composition::PREDICATE
                 | crate::news::PREDICATE
                 | crate::counterfactual::PREDICATE
                 | crate::news::EXPLANATION_PREDICATE
@@ -9718,6 +9720,12 @@ impl Engine {
         };
         let mut nodes = Vec::new();
         let mut compute_requires = Vec::new();
+        if let Intent::IndependentRequests { items } = &bundle.meaning.intent {
+            for node in crate::composition::nodes(items) {
+                compute_requires.push(node.id.clone());
+                nodes.push(node);
+            }
+        }
         let statistics_explanation_unavailable = matches!(
             &bundle.meaning.intent,
             Intent::DescribeStatistics {
@@ -10773,8 +10781,10 @@ impl Engine {
         let english = supports_english_output_locale(&request.locale);
         let english_display = english
             && goal.output_path.is_none()
-            && (matches!(&goal.intent, Intent::Greet { .. })
-                || bundle.meaning.parser_version == input::ENGLISH_CALCULATION_PARSER_VERSION
+            && (matches!(
+                &goal.intent,
+                Intent::Greet { .. } | Intent::IndependentRequests { .. }
+            ) || bundle.meaning.parser_version == input::ENGLISH_CALCULATION_PARSER_VERSION
                 || matches!(&goal.intent, Intent::ExplainPrevious)
                     && verified_plain_calculation_predecessor(
                         &bundle,
@@ -10937,6 +10947,7 @@ impl Engine {
         let mut decision_pending = false;
         let mut news_partial = false;
         let mut web_research_partial = false;
+        let mut independent_requests_partial = false;
         let mut applied_rule_adaptation = None;
         let mut generation_model = None;
         let mut generation_emission = None;
@@ -10987,6 +10998,31 @@ impl Engine {
             })
         };
         match &goal.intent {
+            Intent::IndependentRequests { .. } => {
+                let observed =
+                    match crate::composition::produce(&self.store, &bundle, &mut graph, started) {
+                        Ok(observed) => observed,
+                        Err(Error::Contract { code, message }) => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    };
+                independent_requests_partial = !observed.complete();
+                result.dependencies = observed
+                    .branches
+                    .iter()
+                    .map(|branch| branch.artifact_ref.clone())
+                    .collect();
+                result.branch_outcomes = observed.branches;
+                units = observed.units;
+                result.guarantee = observed.guarantee;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: crate::composition::PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
             Intent::Calculate { expression } => match language::calculate(expression) {
                 Ok(calculation) => {
                     result.guarantee = Guarantee::Computed;
@@ -12523,6 +12559,7 @@ impl Engine {
                     &BTreeMap::from([(READ_NODE.into(), observed.observation.clone())]),
                 )?;
                 result.dependencies = observed.dependencies();
+                result.branch_outcomes = observed.branches;
                 result.evidence = observed.evidence;
                 units = observed.units;
                 web_research_partial = !observed.complete;
@@ -17714,6 +17751,7 @@ impl Engine {
             || decision_file_budget_blocked
             || news_partial
             || web_research_partial
+            || independent_requests_partial
         {
             result.execution_graph_ref = Some(store_execution_graph(
                 &self.store,
@@ -17722,6 +17760,18 @@ impl Engine {
                 &graph,
             )?);
             state.result = Some(result);
+            if independent_requests_partial {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "INDEPENDENT_REQUESTS_INCOMPLETE",
+                    if english {
+                        "The request still has unfinished items. Completed results and item status are shown above."
+                    } else {
+                        "依頼全体には未完了の項目があります。確定した結果と各項目の状態を表示しました。"
+                    },
+                );
+            }
             if web_research_partial {
                 return self.stop(
                     &mut state,
@@ -19153,6 +19203,7 @@ pub(crate) fn base_result(request: &RequestEnvelope) -> ResultRecord {
         dependencies: Vec::new(),
         actor_memory_revision: None,
         execution_graph_ref: None,
+        branch_outcomes: Vec::new(),
     }
 }
 
@@ -28223,6 +28274,7 @@ mod previous_relation_meaning_tests {
             dependencies: vec!["legacy-direct-premise".into()],
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
 
         let meaning =

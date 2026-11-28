@@ -8,8 +8,9 @@ use crate::{
     web_research,
 };
 use minidora_domain::{
-    Calculation, ContentPlan, Error, EvidencePacket, Guarantee, InputBundle, Intent, Permissions,
-    RequestEnvelope, Result, ResultRecord, canonical, digest, failure,
+    BranchOutcome, BranchState, Calculation, ContentPlan, Error, EvidencePacket, Guarantee,
+    InputBundle, Intent, Permissions, RequestEnvelope, Result, ResultRecord, canonical, digest,
+    failure,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -58,6 +59,7 @@ pub(crate) struct Outcome {
     pub units: Vec<String>,
     pub evidence: Vec<EvidencePacket>,
     pub complete: bool,
+    pub branches: Vec<BranchOutcome>,
 }
 
 impl Outcome {
@@ -118,6 +120,46 @@ fn local_calculation(expression: Option<&str>) -> Result<Option<LocalCalculation
             Err(error) => Err(error),
         })
         .transpose()
+}
+
+fn branch_outcomes(
+    calculation: Option<(&LocalCalculation, &str)>,
+    observation: &Observation,
+    observation_ref: &str,
+    comparison_complete: bool,
+    comparison_ref: &str,
+) -> Vec<BranchOutcome> {
+    let mut branches = Vec::with_capacity(1 + usize::from(calculation.is_some()));
+    if let Some((calculation, reference)) = calculation {
+        let (state, reason_code) = match calculation {
+            LocalCalculation::Confirmed(_) => (BranchState::Confirmed, None),
+            LocalCalculation::Unresolved(code) => (BranchState::Failed, Some(code.clone())),
+        };
+        branches.push(BranchOutcome {
+            node_id: CALC_NODE.into(),
+            state,
+            reason_code,
+            artifact_ref: reference.into(),
+        });
+    }
+    let (state, reason_code, artifact_ref) = if comparison_complete {
+        (BranchState::Confirmed, None, comparison_ref)
+    } else if let Some(reason) = &observation.stop {
+        (BranchState::Blocked, Some(reason.clone()), observation_ref)
+    } else {
+        (
+            BranchState::Blocked,
+            Some("WEB_RESEARCH_INSUFFICIENT_SOURCES".into()),
+            comparison_ref,
+        )
+    };
+    branches.push(BranchOutcome {
+        node_id: REPORT_NODE.into(),
+        state,
+        reason_code,
+        artifact_ref: artifact_ref.into(),
+    });
+    branches
 }
 
 fn read(
@@ -368,9 +410,7 @@ fn materialize(
             "調査結果が出力の証拠予算を超えました。",
         ));
     }
-    let complete =
-        report.complete() && !matches!(calculation, Some(LocalCalculation::Unresolved(_)));
-    Ok((report_bytes, units, retry_evidence, complete))
+    Ok((report_bytes, units, retry_evidence, report.complete()))
 }
 
 pub(crate) fn produce(
@@ -392,15 +432,27 @@ pub(crate) fn produce(
         .map(|calc| store.put_artifact(actor, case, calc))
         .transpose()?;
     let observation = read(store, request, topic, retrieval, admit)?;
-    let (comparison, units, evidence, complete) =
+    let (comparison, units, evidence, comparison_complete) =
         materialize(store, bundle, &observation, &calculation)?;
+    let observation_ref = store.put_artifact(actor, case, &observation)?;
+    let comparison_ref = store.put_bytes(actor, case, &comparison)?;
+    let branches = branch_outcomes(
+        calculation.as_ref().zip(calculation_ref.as_deref()),
+        &observation,
+        &observation_ref,
+        comparison_complete,
+        &comparison_ref,
+    );
     Ok(Outcome {
         calculation: calculation_ref,
-        observation: store.put_artifact(actor, case, &observation)?,
-        comparison: store.put_bytes(actor, case, &comparison)?,
+        observation: observation_ref,
+        comparison: comparison_ref,
         units,
         evidence,
-        complete,
+        complete: branches
+            .iter()
+            .all(|branch| branch.state == BranchState::Confirmed),
+        branches,
     })
 }
 
@@ -433,9 +485,20 @@ pub(crate) fn verify_delivery(
         ([], None) => None,
         _ => return Err(mismatch()),
     };
-    let (expected, units, evidence, complete) =
+    let (expected, units, evidence, comparison_complete) =
         materialize(store, bundle, &observed, &calculation)?;
+    let branches = branch_outcomes(
+        calculation.as_ref().zip(calc_ref.as_deref()),
+        &observed,
+        observation,
+        comparison_complete,
+        comparison,
+    );
+    let complete = branches
+        .iter()
+        .all(|branch| branch.state == BranchState::Confirmed);
     if !complete
+        || (!result.branch_outcomes.is_empty() && result.branch_outcomes != branches)
         || result.guarantee != Guarantee::SourceReport
         || plan.guarantee != result.guarantee
         || result.calculation.is_some()
@@ -454,6 +517,7 @@ pub(crate) fn verify_delivery(
         units,
         evidence,
         complete,
+        branches,
     })
 }
 

@@ -2005,6 +2005,7 @@ mod tests {
             dependencies: Vec::new(),
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
         let lines = previous_math_report_explanation(&previous)
             .unwrap()
@@ -2067,6 +2068,7 @@ mod tests {
                 dependencies: Vec::new(),
                 actor_memory_revision: None,
                 execution_graph_ref: None,
+                branch_outcomes: Vec::new(),
             };
             assert!(
                 previous_math_report_explanation(&previous)
@@ -2113,6 +2115,7 @@ mod tests {
             dependencies: Vec::new(),
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
         let lines = previous_math_report_explanation(&previous)
             .unwrap()
@@ -2168,6 +2171,7 @@ mod tests {
                 dependencies: Vec::new(),
                 actor_memory_revision: None,
                 execution_graph_ref: None,
+                branch_outcomes: Vec::new(),
             };
             let lines = previous_math_report_explanation(&previous)
                 .unwrap_or_else(|error| panic!("equation report {index}: {error}"))
@@ -2212,6 +2216,7 @@ mod tests {
                 dependencies: Vec::new(),
                 actor_memory_revision: None,
                 execution_graph_ref: None,
+                branch_outcomes: Vec::new(),
             };
             let lines = previous_math_report_explanation(&previous)
                 .unwrap_or_else(|error| panic!("symbolic report {index}: {error}"))

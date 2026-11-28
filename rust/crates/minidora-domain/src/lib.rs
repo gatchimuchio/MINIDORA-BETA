@@ -630,6 +630,9 @@ pub struct ConversationEvent {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum Intent {
+    IndependentRequests {
+        items: Vec<IndependentRequest>,
+    },
     Greet {
         salutation: String,
     },
@@ -1200,6 +1203,12 @@ pub enum Intent {
     },
     ConvertPreviousJsonTableToCsv,
 }
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IndependentRequest {
+    pub source: SourceSpan,
+    pub intent: Box<Intent>,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SourceSpan {
     pub start: usize,
@@ -1859,6 +1868,24 @@ pub struct Calculation {
     pub exact_value: String,
     pub steps: Vec<String>,
 }
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+pub enum BranchState {
+    Confirmed,
+    Blocked,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BranchOutcome {
+    pub node_id: String,
+    pub state: BranchState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reason_code: Option<String>,
+    /// References the recorded branch outcome, including a blocked or failed observation.
+    pub artifact_ref: String,
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResultRecord {
     pub id: String,
@@ -1879,6 +1906,8 @@ pub struct ResultRecord {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub actor_memory_revision: Option<u64>,
     pub execution_graph_ref: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub branch_outcomes: Vec<BranchOutcome>,
 }
 /// A child conversation anchored to a specific immutable source revision.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1948,8 +1977,10 @@ mod tests {
             dependencies: Vec::new(),
             actor_memory_revision: Some(3),
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
         let mut legacy = serde_json::to_value(current).unwrap();
+        assert!(legacy.get("branch_outcomes").is_none());
         assert!(
             legacy
                 .as_object_mut()
@@ -1960,6 +1991,7 @@ mod tests {
 
         let restored: ResultRecord = serde_json::from_value(legacy.clone()).unwrap();
         assert_eq!(restored.actor_memory_revision, None);
+        assert!(restored.branch_outcomes.is_empty());
         assert_eq!(serde_json::to_value(restored).unwrap(), legacy);
     }
 

@@ -3950,6 +3950,7 @@ mod tests {
                 dependencies: vec![],
                 actor_memory_revision: None,
                 execution_graph_ref: None,
+                branch_outcomes: Vec::new(),
             };
             next.parent_revision = Some(next.revision);
             next.revision += 1;

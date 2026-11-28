@@ -2296,6 +2296,7 @@ mod tests {
             dependencies: Vec::new(),
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
 
         let carried = carry_forward_candidate_evidence(&prior, &observation).unwrap();
@@ -2348,6 +2349,7 @@ mod tests {
             dependencies: Vec::new(),
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
 
         let error = carry_forward_candidate_evidence(&prior, &observation).unwrap_err();

@@ -167,6 +167,7 @@ fn seed_fetched_source_case_with_mode<'a>(
         dependencies: packet_refs.clone(),
         actor_memory_revision: None,
         execution_graph_ref: Some(graph_ref),
+        branch_outcomes: Vec::new(),
     };
     let mut state = CaseRevision {
         schema_version: SCHEMA_VERSION.into(),
@@ -5800,6 +5801,39 @@ fn v6_branch_text_respects_cross_case_memory_policy() {
     assert!(store.actions("owner", CHILD).unwrap().is_empty());
     let parent = v6_memory_policy_state(&store, "owner", SOURCE);
     assert_eq!(parent["result"], source);
+}
+
+#[test]
+fn independent_items_keep_verified_results_when_another_item_cannot_run() {
+    let scratch = Scratch::new();
+    let shown = math_chat(
+        &scratch.0,
+        "/paste\n- 8/0を計算して\n- 17*9を計算して\n- 2、4、6の平均を教えて\n- 今日のニュースは？\n/end\n/exit\n",
+    );
+    assert!(
+        shown.contains("153") && shown.contains("平均は 4"),
+        "{shown}"
+    );
+
+    let state = inspect_normal_case(&scratch.0, "owner");
+    let result = &state["result"];
+    assert_eq!(result["lifecycle"], "SUSPEND");
+    let outcomes = result["branch_outcomes"].as_array().unwrap();
+    let states: Vec<_> = outcomes
+        .iter()
+        .map(|branch| branch["state"].as_str().unwrap())
+        .collect();
+    assert_eq!(states, ["FAILED", "CONFIRMED", "CONFIRMED", "BLOCKED"]);
+    assert_eq!(result["receipts"], serde_json::json!([]));
+    assert_eq!(result["evidence"], serde_json::json!([]));
+    let graph = result["execution_graph_ref"].as_str().unwrap();
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let bytes = store.get_bytes("owner", "normal-route", graph).unwrap();
+    let graph: Value = serde_json::from_slice(&bytes).unwrap();
+    for branch in outcomes {
+        let id = branch["node_id"].as_str().unwrap();
+        assert_eq!(graph[1][id], branch["artifact_ref"]);
+    }
 }
 
 #[test]

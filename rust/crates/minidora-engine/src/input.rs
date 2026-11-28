@@ -1839,6 +1839,7 @@ pub(crate) fn seal_with_source_context(
         | SourceContext::AutonomousTopicWeb => None,
     });
     let parser_version = match &intent {
+        Intent::IndependentRequests { .. } => crate::composition::PARSER_VERSION,
         Intent::ExplainPreviousStop => PREVIOUS_STOP_EXPLANATION_PARSER_VERSION,
         Intent::ExplainPrevious
             if matches!(
@@ -3882,6 +3883,12 @@ fn has_token_boundaries(haystack: &str, start: usize, end: usize, needle: &str) 
 /// comes from the untouched original byte slice. Unknown's generated reason
 /// is deliberately excluded from source evidence.
 fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec<SourceSpan>>> {
+    if let Intent::IndependentRequests { items } = intent {
+        return Ok(BTreeMap::from([(
+            "/IndependentRequests/items".into(),
+            items.iter().map(|item| item.source.clone()).collect(),
+        )]));
+    }
     if let Intent::CompareWebResearch { topic, expression } = intent {
         return web_research_source_roles(text, topic, expression.as_deref());
     }
@@ -8473,7 +8480,18 @@ fn unavailable_web_freshness() -> Intent {
     }
 }
 
+pub(crate) fn parse_independent_requests(text: &str) -> Result<Option<Intent>> {
+    crate::composition::parse(text, interpret_single)
+}
+
 fn interpret(text: &str) -> Result<Intent> {
+    match parse_independent_requests(text)? {
+        Some(intent) => Ok(intent),
+        None => interpret_single(text),
+    }
+}
+
+fn interpret_single(text: &str) -> Result<Intent> {
     let statement = terminal_trim(text);
     if let Some(intent) = return_function_intent(text)? {
         return Ok(intent);
@@ -12450,6 +12468,7 @@ mod tests {
             dependencies: Vec::new(),
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
         let text = "　その答えを０．５０倍にして。";
         let request = RequestEnvelope::new("case", "input", "actor", text);
@@ -14182,6 +14201,7 @@ mod tests {
             dependencies: Vec::new(),
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
         let packet_id = "b".repeat(64);
         let mut request = RequestEnvelope::new(
@@ -14635,6 +14655,7 @@ mod structured_document_tests {
             dependencies: Vec::new(),
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
         let request = RequestEnvelope::new(
             "case",

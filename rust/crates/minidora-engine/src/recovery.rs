@@ -9628,6 +9628,7 @@ mod tests {
             dependencies: Vec::new(),
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
         let mut request = RequestEnvelope::new(
             "case",
@@ -9679,6 +9680,7 @@ mod tests {
             dependencies: dependencies.clone(),
             actor_memory_revision: None,
             execution_graph_ref: None,
+            branch_outcomes: Vec::new(),
         };
         let goal = GoalContract {
             input_fingerprint: fingerprint.clone(),
