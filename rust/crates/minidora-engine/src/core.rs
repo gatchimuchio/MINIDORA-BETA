@@ -1775,7 +1775,7 @@ pub(crate) fn web_dependencies_after_topic_lookup<'a>(
     result: &'a ResultRecord,
 ) -> Result<(u32, &'a [String])> {
     let request = &bundle.request;
-    if bundle.meaning.parser_version != input::AUTONOMOUS_TOPIC_WEB_PARSER_VERSION {
+    if input::autonomous_topic_web_provider(&bundle.meaning.parser_version).is_none() {
         return Ok((0, &result.dependencies));
     }
     let invalid = || {
@@ -7011,14 +7011,23 @@ pub(crate) fn indexed_premise_inventory_from_store(
 pub(crate) fn premise_inventory_units<'a>(
     subject: &'a str,
     inventory: &'a relations::RelationInventory,
+    english: bool,
 ) -> impl Iterator<Item = String> + 'a {
-    let disclosure = format!(
-        "会話に保存された「{subject}」に関する有効な関係です。保存記録の範囲に限った列挙で、現実世界の真偽や全件網羅性を確認したものではありません。"
-    );
+    let disclosure = if english {
+        format!("These are the active relations about {subject} in your saved records.")
+    } else {
+        format!(
+            "会話に保存された「{subject}」に関する有効な関係です。保存記録の範囲に限った列挙で、現実世界の真偽や全件網羅性を確認したものではありません。"
+        )
+    };
     let conflict = std::iter::once_with(move || {
         inventory.has_conflict.then(|| {
-            "一部の関係には肯定と否定の根拠が併存するため、どちらも確定せず根拠を併記します。"
-                .to_string()
+            if english {
+                "Some saved records conflict. Both sides are shown as evidence."
+            } else {
+                "一部の関係には肯定と否定の根拠が併存するため、どちらも確定せず根拠を併記します。"
+            }
+            .to_string()
         })
     })
     .flatten();
@@ -7033,6 +7042,59 @@ pub(crate) fn premise_inventory_units<'a>(
     })
     .flatten()
     .map(move |fact| {
+        if english {
+            let proposition = &fact.proposition;
+            let relation = if proposition.predicate == "is" {
+                format!(
+                    "{} is {}“{}”",
+                    proposition.subject,
+                    if proposition.negative { "not " } else { "" },
+                    proposition.object,
+                )
+            } else {
+                format!(
+                    "{} / {} / {} ({})",
+                    proposition.subject,
+                    proposition.predicate,
+                    proposition.object,
+                    if proposition.negative {
+                        "negated"
+                    } else {
+                        "affirmed"
+                    },
+                )
+            };
+            let kind = match fact.guarantee {
+                Guarantee::UserPremise => "User premise",
+                Guarantee::Derived => "Deduction",
+                Guarantee::Computed => "Calculation",
+                Guarantee::SourceReport => "Source report",
+                Guarantee::Hypothesis | Guarantee::Unknown => "Unconfirmed record",
+            };
+            let mut modifiers = vec![format!("scope {}", proposition.scope)];
+            if let Some(time) = &proposition.temporal_scope {
+                modifiers.push(format!("time {time}"));
+            }
+            if !proposition.condition_refs.is_empty() {
+                modifiers.push(format!(
+                    "conditions {}",
+                    proposition
+                        .condition_refs
+                        .iter()
+                        .cloned()
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            modifiers.push(format!("record {}", fact.id));
+            if !fact.dependencies.is_empty() {
+                modifiers.push(format!("dependencies {}", fact.dependencies.join(", ")));
+            }
+            if inventory.contested_fact_ids.contains(&fact.id) {
+                modifiers.push("contested".into());
+            }
+            return format!("- {kind}: {relation} ({})", modifiers.join("; "));
+        }
         let (category, origin) = match &fact.guarantee {
             Guarantee::UserPremise => ("提示前提", format!("提示前提ID: {}", fact.id)),
             Guarantee::Derived => (
@@ -10769,10 +10831,15 @@ impl Engine {
         let mut probed_topic_inventory = None;
         let mut autonomous_topic_lookup = None;
         let mut topic_actions = 0;
+        let english_local_topic = input::verified_english_local_first_topic_input(&bundle)?;
+        let english_topic_host = search::SearchProvider::WikipediaEnglish.host();
+        let english_topic_web_allowed =
+            english_local_topic && request.permissions.read_hosts.contains(english_topic_host);
         if has_compute_budget
-            && supports_japanese_output_locale(&request.locale)
-            && bundle.meaning.parser_version == input::LOCAL_FIRST_TOPIC_PARSER_VERSION
-            && input::verified_local_first_topic_input(&bundle)?
+            && (english_topic_web_allowed
+                || supports_japanese_output_locale(&request.locale)
+                    && bundle.meaning.parser_version == input::LOCAL_FIRST_TOPIC_PARSER_VERSION
+                    && input::verified_local_first_topic_input(&bundle)?)
             && let Intent::InspectPremises { subject } = &bundle.meaning.intent
         {
             let (revision, inventory) =
@@ -11999,6 +12066,14 @@ impl Engine {
         }
         let probability_action = crate::math::ProbabilityAction::bind(&goal.intent);
         let english = supports_english_output_locale(&request.locale);
+        let english_calculation_explanation = english
+            && matches!(&goal.intent, Intent::ExplainPrevious)
+            && (previous_math_report_explanation.is_some()
+                || verified_plain_calculation_predecessor(
+                    &bundle,
+                    previous,
+                    prior_explanation_input.as_ref(),
+                ));
         let english_analysis = matches!(&goal.intent, Intent::AnalyzeAttachments { .. })
             && input::uses_english_attached_analysis(&bundle);
         let english_statistics = input::uses_english_statistics_output(&bundle);
@@ -12015,24 +12090,21 @@ impl Engine {
                     )
                 || input::uses_english_conversation_event(&bundle)
                 || input::uses_english_current_news(&bundle)
+                || english_local_topic
                 || matches!(
                     bundle.meaning.parser_version.as_str(),
                     input::WEB_RESEARCH_V2_PARSER_VERSION
                         | input::WEB_RESEARCH_DIVERSE_PARSER_VERSION
+                        | input::AUTONOMOUS_TOPIC_WEB_ENGLISH_PARSER_VERSION
+                        | input::WEB_ANSWER_EXPLANATION_PARSER_VERSION
                 )
                 || goal.output_path.is_none()
                     && (matches!(&goal.intent, Intent::Greet { .. })
                         || probability_action.is_some()
-                        || previous_math_report_explanation.is_some()
                         || compound_explanation
+                        || english_calculation_explanation
                         || bundle.meaning.parser_version
-                            == input::ENGLISH_CALCULATION_PARSER_VERSION
-                        || matches!(&goal.intent, Intent::ExplainPrevious)
-                            && verified_plain_calculation_predecessor(
-                                &bundle,
-                                previous,
-                                prior_explanation_input.as_ref(),
-                            )));
+                            == input::ENGLISH_CALCULATION_PARSER_VERSION));
         if !supports_japanese_output_locale(&request.locale)
             && !english_output
             && !(english && is_translation_intent(&goal.intent))
@@ -13828,10 +13900,11 @@ impl Engine {
             } => {
                 use crate::web_answer::{self, ANSWER_NODE, BODY_NODE, LISTING_NODE};
 
+                let provider = search::web_answer_provider(&bundle);
                 let answer = (|| {
                     let mut budget = retrieval_budget(2, &state, &self.store)?;
                     let listed = search::search_with_budget(
-                        search::SearchProvider::Wikipedia,
+                        provider,
                         topic,
                         &goal.permissions,
                         &goal.budget,
@@ -13851,7 +13924,8 @@ impl Engine {
                     if let Some(reason) = &observation.failure {
                         return Err(failure("WEB_SEARCH_UNAVAILABLE", reason));
                     }
-                    let candidate = web_answer::select_candidate(&observation, &goal.permissions)?;
+                    let candidate =
+                        web_answer::select_candidate(&observation, &goal.permissions, provider)?;
                     graph.observe(LISTING_NODE, &listing_ref, &BTreeMap::new())?;
                     self.advance(
                         &mut state,
@@ -13882,6 +13956,7 @@ impl Engine {
                         candidate,
                         &packet,
                         &goal.permissions,
+                        provider,
                     )?;
                     let answer_units = answer.units();
                     let answer_bytes = canonical(&answer)?;
@@ -13918,16 +13993,22 @@ impl Engine {
                             &mut state,
                             Lifecycle::Suspend,
                             &code,
-                            "許可された接続先の範囲では、Web資料を取得できません。ローカルでの対話は続けられます。",
+                            if english {
+                                "Public-source lookup requires read permission for en.wikipedia.org."
+                            } else {
+                                "許可された接続先の範囲では、Web資料を取得できません。ローカルでの対話は続けられます。"
+                            },
                         );
                     }
                     Err(Error::Contract { code, message }) => {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            &code,
-                            &format!("Web資料を使った回答を保留しました。{message}"),
-                        );
+                        let message = if english {
+                            format!(
+                                "I could not verify an answer from the public source. {message}"
+                            )
+                        } else {
+                            format!("Web資料を使った回答を保留しました。{message}")
+                        };
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
                     }
                     Err(error) => return Err(error),
                 };
@@ -14434,7 +14515,7 @@ impl Engine {
                     units: units.clone(),
                 });
             }
-            Intent::ExplainPrevious if english => {
+            Intent::ExplainPrevious if english_calculation_explanation => {
                 let Some(prior) = previous else {
                     return self.stop(
                         &mut state,
@@ -17275,7 +17356,11 @@ impl Engine {
                             &mut state,
                             Lifecycle::Suspend,
                             "MISSING_PREMISES",
-                            "この対象について有効な提示前提または規則導出はありません。",
+                            if english {
+                                "I don't have a saved premise for this topic. To look it up in English Wikipedia, grant read access to en.wikipedia.org."
+                            } else {
+                                "この対象について有効な提示前提または規則導出はありません。"
+                            },
                         );
                     }
                     Err(Error::Contract { code, message }) if code == "DEADLINE" => {
@@ -17293,7 +17378,9 @@ impl Engine {
                 };
 
                 let mut evidence_bytes = 0usize;
-                for (index, line) in premise_inventory_units(subject, &inventory).enumerate() {
+                for (index, line) in
+                    premise_inventory_units(subject, &inventory, english).enumerate()
+                {
                     evidence_bytes = evidence_bytes
                         .checked_add(line.len())
                         .and_then(|total| total.checked_add(if index == 0 { 0 } else { 1 }))
@@ -20430,7 +20517,7 @@ pub(crate) fn verify_retained_retry_source(
     }
     if result.actor_memory_revision.is_some()
         && let Some((_, bundle)) = read_input()?
-        && bundle.meaning.parser_version == input::AUTONOMOUS_TOPIC_WEB_PARSER_VERSION
+        && let Some(provider) = input::autonomous_topic_web_provider(&bundle.meaning.parser_version)
     {
         let (_, deps) = web_dependencies_after_topic_lookup(store, &bundle, result)?;
         let [listing, rest @ ..] = result.evidence.as_slice() else {
@@ -20442,7 +20529,7 @@ pub(crate) fn verify_retained_retry_source(
         let Intent::AskWeb { topic, .. } = &bundle.meaning.intent else {
             return Err(invalid());
         };
-        if observation.provider != search::SearchProvider::Wikipedia
+        if observation.provider != provider
             || observation.query != *topic
             || &observation.listing != listing
             || canonical(&observation)? != listing_bytes
@@ -20456,7 +20543,7 @@ pub(crate) fn verify_retained_retry_source(
         if !matches!(rest, [body] if body == packet) || deps.len() != 2 {
             return Err(invalid());
         }
-        let candidate = crate::web_answer::select_candidate(&observation, permissions)?;
+        let candidate = crate::web_answer::select_candidate(&observation, permissions, provider)?;
         let bytes = canonical(packet)?;
         if packet.provider_id != "https-direct-url-v1"
             || packet.request_uri != search::candidate_body_uri(candidate)?

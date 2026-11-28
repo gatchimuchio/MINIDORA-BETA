@@ -1134,7 +1134,11 @@ fn partial_web_candidate_observation(
     {
         return Err(invalid());
     }
-    let candidate = web_answer::select_candidate(&observation, &goal.permissions)?;
+    let candidate = web_answer::select_candidate(
+        &observation,
+        &goal.permissions,
+        web_answer_provider(&original),
+    )?;
     ports::validate_observed_route(packet, &goal.permissions)?;
     if packet.mode != "LIVE"
         || packet.packet_kind != "FETCH_FAILURE"
@@ -1191,6 +1195,11 @@ fn invalid_web_answer_context() -> minidora_domain::Error {
 
 /// Direct Web questions retain their original parser. Autonomous Web questions
 /// must revalidate the exact subject recovered from the original natural text.
+pub(crate) fn web_answer_provider(bundle: &InputBundle) -> SearchProvider {
+    crate::input::autonomous_topic_web_provider(&bundle.meaning.parser_version)
+        .unwrap_or(SearchProvider::Wikipedia)
+}
+
 pub(crate) fn verified_web_answer_input(bundle: &InputBundle) -> Result<bool> {
     if bundle.meaning.parser_version == WEB_QUESTION_PARSER_VERSION {
         return Ok(matches!(bundle.meaning.intent, Intent::AskWeb { .. }));
@@ -1430,9 +1439,12 @@ fn explain_web_answer(
     let [listing, body] = previous.evidence.as_slice() else {
         return Err(invalid_web_answer_context());
     };
-    let units = proof
-        .answer
-        .explanation_units(listing, &proof.candidate, body);
+    let units = proof.answer.explanation_units(
+        listing,
+        &proof.candidate,
+        body,
+        crate::core::supports_english_output_locale(&bundle.request.locale),
+    );
     if units.join("\n").len() > bundle.request.budget.max_evidence_bytes {
         return Err(failure(
             "RESOURCE_LIMIT",

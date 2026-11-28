@@ -1232,8 +1232,12 @@ fn verify_explain_previous_premise_inventory_memory_result(
         subject,
         prior_bundle.request.budget.max_actions,
     )?;
-    let original_units =
-        crate::core::premise_inventory_units(subject, &original_inventory).collect::<Vec<_>>();
+    let original_units = crate::core::premise_inventory_units(
+        subject,
+        &original_inventory,
+        crate::core::supports_english_output_locale(&prior_bundle.request.locale),
+    )
+    .collect::<Vec<_>>();
     if previous.dependencies != original_inventory.dependencies
         || previous.guarantee != original_inventory.guarantee
         || prior_plan.required_units != original_units
@@ -3254,7 +3258,7 @@ fn verify_result_memory_provenance(
 ) -> Result<Option<RetainedRelationProof>> {
     if matches!(goal.intent, Intent::AskWeb { .. })
         && state.bundle.as_ref().is_some_and(|bundle| {
-            bundle.meaning.parser_version == crate::input::AUTONOMOUS_TOPIC_WEB_PARSER_VERSION
+            crate::input::autonomous_topic_web_provider(&bundle.meaning.parser_version).is_some()
         })
     {
         // The Web proof verifies the original lookup against its recorded
@@ -3342,9 +3346,15 @@ fn verify_result_memory_provenance(
             )?;
         }
         Intent::InspectPremises { subject } => {
-            let (dependencies, guarantee) =
-                premise_memory_inventory(&memory, subject, goal.budget.max_actions)?;
-            if dependencies != result.dependencies || guarantee != result.guarantee {
+            let inventory =
+                crate::relations::inventory_about(&memory, subject, goal.budget.max_actions)?;
+            let english = crate::core::supports_english_output_locale(&request.locale);
+            if inventory.dependencies != result.dependencies
+                || inventory.guarantee != result.guarantee
+                || english
+                    && !crate::core::premise_inventory_units(subject, &inventory, true)
+                        .eq(plan.required_units.iter().cloned())
+            {
                 return Err(failure(
                     "RECOVERY_MEMORY_PROOF_MISMATCH",
                     "the retained premise inventory does not match its actor-memory revision",
@@ -6536,6 +6546,12 @@ fn inspect(
                     && crate::input::uses_english_attached_analysis(bundle))
                 || (requires_conversation && crate::input::uses_english_conversation_event(bundle))
                 || (requires_current_news && crate::input::uses_english_current_news(bundle))
+                || (crate::core::supports_english_output_locale(&plan.locale)
+                    && (matches!(
+                        bundle.meaning.parser_version.as_str(),
+                        crate::input::AUTONOMOUS_TOPIC_WEB_ENGLISH_PARSER_VERSION
+                            | crate::input::WEB_ANSWER_EXPLANATION_PARSER_VERSION
+                    ) || crate::input::verified_english_local_first_topic_input(bundle)?))
                 || (requires_research
                     && matches!(
                         bundle.meaning.parser_version.as_str(),
@@ -9006,13 +9022,16 @@ pub(crate) fn verify_web_answer<'a>(
     {
         return Err(invalid());
     }
-    let candidate = crate::web_answer::select_candidate(&observation, &request.permissions)?;
+    let provider = search::web_answer_provider(bundle);
+    let candidate =
+        crate::web_answer::select_candidate(&observation, &request.permissions, provider)?;
     let answer = crate::web_answer::answer(
         topic,
         *elevation_in_kilometres,
         candidate,
         body,
         &request.permissions,
+        provider,
     )?;
     let answer_bytes = canonical(&answer)?;
     let units = answer.units();

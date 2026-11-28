@@ -17,6 +17,14 @@ const MAX_SUMMARY_PASSAGES: usize = 128;
 const MAX_SENTENCE_BYTES: usize = 1_536;
 const MAX_TOPIC_BYTES: usize = 512;
 const MOUNTAIN_DEFINITION_ANSWER: &str = "minidora.web-answer.wikipedia-prose.v3";
+const ENGLISH_DEFINITION_ANSWER: &str = "minidora.web-answer.wikipedia-en-prose.v1";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ProseMode {
+    Japanese,
+    English,
+    EnglishDefinition,
+}
 
 pub(crate) fn nodes() -> [GoalNode; 3] {
     [
@@ -41,26 +49,51 @@ pub(crate) fn nodes() -> [GoalNode; 3] {
 pub(crate) fn select_candidate<'a>(
     observation: &'a SearchObservation,
     permissions: &Permissions,
+    expected_provider: SearchProvider,
 ) -> Result<&'a SearchCandidate> {
     search::validate_stored_observation(observation, Some(permissions))?;
-    if observation.provider != SearchProvider::Wikipedia {
+    let english = expected_provider == SearchProvider::WikipediaEnglish;
+    if !expected_provider.is_wikipedia() || observation.provider != expected_provider {
         return Err(failure(
             "WEB_ANSWER_PROVIDER_UNSUPPORTED",
-            "日本語本文を回答に使える検索接続がありません。",
+            if english {
+                "The saved search uses a different source from the English Wikipedia edition required by this question."
+            } else {
+                "日本語本文を回答に使える検索接続がありません。"
+            },
         ));
     }
+    let matches_title = |candidate: &SearchCandidate| {
+        !english || english_title_matches(&observation.query, &candidate.title)
+    };
     observation
         .candidates
         .iter()
+        .filter(|candidate| matches_title(candidate))
         .filter(|candidate| {
             search::candidate_body_uri(candidate)
                 .and_then(|uri| ports::approved_url(&uri, permissions))
                 .is_ok()
         })
-        .min_by_key(|candidate| candidate.rank)
+        .min_by_key(|candidate| {
+            (
+                english && !candidate.title.eq_ignore_ascii_case(&observation.query),
+                candidate.rank,
+            )
+        })
         .ok_or_else(|| {
-            if observation.candidates.is_empty() {
+            if english && !observation.candidates.iter().any(matches_title) {
+                failure(
+                    "SEARCH_CANDIDATE_UNAVAILABLE",
+                    "No English Wikipedia article title matches the requested topic.",
+                )
+            } else if observation.candidates.is_empty() {
                 failure("SEARCH_CANDIDATE_UNAVAILABLE", "検索候補がありません。")
+            } else if english {
+                failure(
+                    ports::READ_PERMISSION_REQUIRED,
+                    "The matching English Wikipedia article requires permission to read its exact host.",
+                )
             } else {
                 failure(
                     ports::READ_PERMISSION_REQUIRED,
@@ -109,6 +142,18 @@ impl WebAnswer {
     }
 
     pub(crate) fn units(&self) -> Vec<String> {
+        if self.kind == ENGLISH_DEFINITION_ANSWER {
+            return vec![
+                format!("The retrieved article describes {} as follows.", self.topic),
+                format!("“{}”", self.passage.text),
+                format!("Source: {}", self.source_uri),
+                format!(
+                    "Retrieved at Unix time {} ms. Body SHA-256: {}",
+                    self.observed_at_unix_ms, self.raw_body_sha256
+                ),
+                "Links and notes were removed from this excerpt. Independent verification and broader coverage remain open.".into(),
+            ];
+        }
         let mut units = vec![
             format!(
                 "「{}」について、取得した本文には次の記述があります。",
@@ -153,7 +198,68 @@ impl WebAnswer {
         listing: &EvidencePacket,
         candidate: &SearchCandidate,
         body: &EvidencePacket,
+        english: bool,
     ) -> Vec<String> {
+        if english {
+            let mut units = vec![
+                format!(
+                    "The previous search looked up {:?} with {} at Unix time {} ms.",
+                    self.topic,
+                    candidate.provider.provider_id(),
+                    listing.observed_at_unix_ms
+                ),
+                format!(
+                    "Search listing: {} / packet ID: {} / raw SHA-256: {}",
+                    listing.final_uri, listing.id, listing.raw_sha256
+                ),
+                format!(
+                    "Selected article: {:?} / search rank: {} / candidate URL: {}",
+                    candidate.title, candidate.rank, candidate.uri
+                ),
+                format!(
+                    "Article body: {} / HTTP {} / retrieved at Unix time {} ms / packet ID: {} / raw SHA-256: {}",
+                    body.final_uri,
+                    body.http_status,
+                    body.observed_at_unix_ms,
+                    body.id,
+                    body.raw_sha256
+                ),
+                format!(
+                    "The answer used article bytes [{}..{}). Span SHA-256: {}",
+                    self.passage.source_start,
+                    self.passage.source_end,
+                    self.passage.source_span_sha256
+                ),
+                format!("Excerpt after removing markup: “{}”", self.passage.text),
+            ];
+            if let Some(title) = &self.case_matched_article_title {
+                units.push(format!(
+                    "The query {:?} and the article title {title:?} match ignoring letter case.",
+                    self.topic
+                ));
+            }
+            if let Some(elevation) = &self.elevation {
+                units.push(format!(
+                    "The elevation stated in the article is {} m. Dividing by 1000 gives {} km.",
+                    elevation.metres, elevation.calculation.exact_value
+                ));
+            }
+            units.push(
+                "This explanation checks the retained listing, article body and excerpt. The article's completeness, accuracy and currency remain unverified.".into(),
+            );
+            return units;
+        }
+        let candidate_reason = if self.kind == ENGLISH_DEFINITION_ANSWER {
+            format!(
+                "取得した候補から、英語の質問語と記事名を照合して {} 位の {:?} を選びました。候補URL: {}",
+                candidate.rank, candidate.title, candidate.uri
+            )
+        } else {
+            format!(
+                "本文取得を許可された候補のうち、掲載順位が最上位だった {} 位の {:?} を選びました。候補URL: {}",
+                candidate.rank, candidate.title, candidate.uri
+            )
+        };
         let mut units = vec![
             format!(
                 "前回は {:?} を {} で検索しました。一覧取得時刻は Unix時刻 {} ミリ秒です。",
@@ -165,10 +271,7 @@ impl WebAnswer {
                 "検索一覧: {} / packet ID: {} / 原応答 SHA-256: {}",
                 listing.final_uri, listing.id, listing.raw_sha256
             ),
-            format!(
-                "本文取得を許可された候補のうち、掲載順位が最上位だった {} 位の {:?} を選びました。候補URL: {}",
-                candidate.rank, candidate.title, candidate.uri
-            ),
+            candidate_reason,
             format!(
                 "本文: {} / HTTP {} / 取得時刻（Unix ms）: {} / packet ID: {} / 原本文 SHA-256: {}",
                 body.final_uri,
@@ -184,10 +287,17 @@ impl WebAnswer {
             format!("記法を除いて表示した箇所: 「{}」", self.passage.text),
         ];
         if let Some(title) = &self.case_matched_article_title {
-            units.push(format!(
-                "質問語「{}」と記事名「{title}」の英字の大小を照合し、原本文を記事名と同じ表記で確認しました。",
-                self.topic,
-            ));
+            units.push(if self.kind == ENGLISH_DEFINITION_ANSWER {
+                format!(
+                    "質問語「{}」と記事名「{title}」は英字の大小を区別せず照合し、本文で同じ話題の定義を確認しました。",
+                    self.topic
+                )
+            } else {
+                format!(
+                    "質問語「{}」と記事名「{title}」の英字の大小を照合し、原本文を記事名と同じ表記で確認しました。",
+                    self.topic
+                )
+            });
         }
         if let Some(elevation) = &self.elevation {
             let source = if self.kind == MOUNTAIN_DEFINITION_ANSWER {
@@ -214,29 +324,49 @@ pub(crate) fn answer(
     candidate: &SearchCandidate,
     packet: &EvidencePacket,
     permissions: &Permissions,
+    expected_provider: SearchProvider,
 ) -> Result<WebAnswer> {
+    let english = expected_provider == SearchProvider::WikipediaEnglish;
     if topic.trim().is_empty()
         || topic.len() > MAX_TOPIC_BYTES
         || topic.chars().any(char::is_control)
     {
         return Err(failure(
             "WEB_ANSWER_TOPIC_UNSUPPORTED",
-            "本文と照合できる短い話題を指定してください。",
+            if english {
+                "Specify one short topic that can be matched to the article."
+            } else {
+                "本文と照合できる短い話題を指定してください。"
+            },
         ));
     }
-    ports::validate_successful_packet(packet, permissions)?;
-    if candidate.provider != SearchProvider::Wikipedia
+    if english {
+        search::validate_research_body(candidate, packet, permissions)?;
+    } else {
+        ports::validate_successful_packet(packet, permissions)?;
+    }
+    if !expected_provider.is_wikipedia()
+        || candidate.provider != expected_provider
         || packet.request_uri != search::candidate_body_uri(candidate)?
+        || (english && elevation_in_kilometres)
     {
         return Err(failure(
             "WEB_ANSWER_SOURCE_MISMATCH",
-            "取得本文と選択した検索候補が一致しません。",
+            if english {
+                "The retrieved article or requested operation differs from the supported English source question."
+            } else {
+                "取得本文と選択した検索候補が一致しません。"
+            },
         ));
     }
     let article = packet.extracted_text.as_deref().ok_or_else(|| {
         failure(
             "WEB_ANSWER_SOURCE_MISMATCH",
-            "取得本文のUTF-8記録がありません。",
+            if english {
+                "The retrieved article has no verified UTF-8 text."
+            } else {
+                "取得本文のUTF-8記録がありません。"
+            },
         )
     })?;
     if elevation_in_kilometres && candidate.title != topic {
@@ -245,7 +375,14 @@ pub(crate) fn answer(
             "検索候補の記事名と標高を調べる対象が一致しません。",
         ));
     }
-    let selected = if elevation_in_kilometres {
+    let selected = if english {
+        find_english_definition(article, topic, &candidate.title).map(|passage| {
+            let matched_title = (candidate.title != topic
+                && candidate.title.eq_ignore_ascii_case(topic))
+            .then_some(candidate.title.as_str());
+            (passage, matched_title, false)
+        })
+    } else if elevation_in_kilometres {
         find_elevation_passage(article, topic)
             .map(|(passage, definition)| (passage, None, definition))
     } else {
@@ -256,7 +393,11 @@ pub(crate) fn answer(
         selected.ok_or_else(|| {
             failure(
                 "WEB_ANSWER_NO_SUPPORTED_PASSAGE",
-                "取得本文で話題に一致する読み取れる日本語の文を確認できませんでした。",
+                if english {
+                    "The beginning of the retrieved article does not contain a readable definition of the requested topic."
+                } else {
+                    "取得本文で話題に一致する読み取れる日本語の文を確認できませんでした。"
+                },
             )
         })?;
     let elevation = if elevation_in_kilometres {
@@ -279,7 +420,9 @@ pub(crate) fn answer(
         None
     };
     Ok(WebAnswer {
-        kind: if uses_mountain_definition {
+        kind: if english {
+            ENGLISH_DEFINITION_ANSWER
+        } else if uses_mountain_definition {
             MOUNTAIN_DEFINITION_ANSWER
         } else if case_matched_article_title.is_some() {
             "minidora.web-answer.wikipedia-prose.v2"
@@ -404,7 +547,7 @@ fn find_passage(
         unquoted_only,
         false,
         false,
-        false,
+        ProseMode::Japanese,
         matches_topic,
         &mut |passage| {
             selected = Some(passage);
@@ -425,7 +568,7 @@ fn find_elevation_passage(article: &str, topic: &str) -> Option<(Passage, bool)>
         true,
         false,
         false,
-        false,
+        ProseMode::Japanese,
         &|sentence| {
             stated_elevation_metres(sentence).is_some()
                 || mountain_definition_metres(topic, sentence).is_some()
@@ -457,6 +600,71 @@ fn find_elevation_passage(article: &str, topic: &str) -> Option<(Passage, bool)>
     }
 }
 
+fn strip_ascii_case_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    text.get(..prefix.len())
+        .filter(|opening| opening.eq_ignore_ascii_case(prefix))
+        .map(|_| &text[prefix.len()..])
+}
+
+fn english_definition_sentence(sentence: &str, title: &str) -> bool {
+    let Some(sentence) = sentence.strip_suffix('.') else {
+        return false;
+    };
+    ["", "the ", "an ", "a "].into_iter().any(|article| {
+        let Some(mut predicate) = strip_ascii_case_prefix(sentence, article)
+            .and_then(|body| strip_ascii_case_prefix(body, title))
+            .and_then(|rest| rest.strip_prefix(' '))
+            .map(str::trim_start)
+        else {
+            return false;
+        };
+        if let Some(rest) = predicate.strip_prefix('(')
+            && let Some((aside, after)) = rest.split_once(')')
+            && !aside.contains('(')
+        {
+            predicate = after.trim_start();
+        }
+        ["is ", "are "].into_iter().any(|copula| {
+            let Some(definition) = strip_ascii_case_prefix(predicate, copula).map(str::trim) else {
+                return false;
+            };
+            let normalized = definition.to_ascii_lowercase();
+            definition.contains(char::is_alphabetic)
+                && !normalized.starts_with("not ")
+                && !normalized.contains(" may refer to")
+                && !normalized.contains(" can refer to")
+        })
+    })
+}
+
+fn english_title_matches(topic: &str, title: &str) -> bool {
+    topic.eq_ignore_ascii_case(title)
+        || ["a ", "an "].into_iter().any(|article| {
+            strip_ascii_case_prefix(topic, article)
+                .is_some_and(|title_query| title_query.eq_ignore_ascii_case(title))
+        })
+}
+
+fn find_english_definition(article: &str, topic: &str, title: &str) -> Option<Passage> {
+    if !english_title_matches(topic, title) {
+        return None;
+    }
+    let mut definition = None;
+    let _ = visit_passages(
+        article,
+        true,
+        true,
+        true,
+        ProseMode::EnglishDefinition,
+        &|sentence| english_definition_sentence(sentence, title),
+        &mut |passage| {
+            definition = Some(passage);
+            true
+        },
+    );
+    definition
+}
+
 fn find_topic_passage<'a>(
     article: &str,
     topic: &str,
@@ -476,7 +684,7 @@ fn find_topic_passage<'a>(
         false,
         false,
         false,
-        false,
+        ProseMode::Japanese,
         &|sentence| sentence.contains(topic) || sentence.contains(title),
         &mut |passage| {
             if passage.text.contains(topic) {
@@ -530,7 +738,11 @@ fn readable_passages_with_markup(
         true,
         summary_lead_only,
         nested_footnotes,
-        english_prose,
+        if english_prose {
+            ProseMode::English
+        } else {
+            ProseMode::Japanese
+        },
         &matches_topic,
         &mut |passage| {
             if !passage.text.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
@@ -547,7 +759,7 @@ fn visit_passages(
     unquoted_only: bool,
     summary_lead_only: bool,
     nested_footnotes: bool,
-    english_prose: bool,
+    mode: ProseMode,
     matches_topic: &impl Fn(&str) -> bool,
     stop: &mut impl FnMut(Passage) -> bool,
 ) -> Option<()> {
@@ -559,8 +771,12 @@ fn visit_passages(
         if summary_lead_only && rest.starts_with('=') {
             break;
         }
+        if mode == ProseMode::EnglishDefinition && is_figure(rest) {
+            rest = &rest[figure_end(rest)?..];
+            continue;
+        }
         if rest.starts_with("{{") {
-            rest = &rest[prose_markup_end(rest, unquoted_only, nested_footnotes)?.0..];
+            rest = &rest[prose_markup_end(rest, unquoted_only, nested_footnotes, mode)?.0..];
             continue;
         }
         if let Some(block_end) = block_end(rest) {
@@ -571,7 +787,13 @@ fn visit_passages(
             rest = &rest[end + block_end.len()..];
             continue;
         }
-        let line_end = prose_line_end(rest, unquoted_only, summary_lead_only, nested_footnotes)?;
+        let line_end = prose_line_end(
+            rest,
+            unquoted_only,
+            summary_lead_only && mode != ProseMode::EnglishDefinition,
+            nested_footnotes,
+            mode,
+        )?;
         let line = &rest[..line_end];
         let article_offset = bounded.len() - rest.len();
         let is_prose = !line.starts_with(['=', '*', '#', ':', ';', '|', '!', '<'])
@@ -583,7 +805,7 @@ fn visit_passages(
                 &|sentence| is_prose && matches_topic(sentence),
                 unquoted_only.then_some(&mut quotes),
                 nested_footnotes,
-                english_prose,
+                mode,
                 stop,
             ) == Some(true)
         {
@@ -610,12 +832,47 @@ fn block_end(rest: &str) -> Option<&'static str> {
     .find_map(|(start, end)| rest.starts_with(start).then_some(end))
 }
 
+fn is_figure(text: &str) -> bool {
+    text.strip_prefix("[[").is_some_and(|contents| {
+        ["file:", "image:"]
+            .into_iter()
+            .any(|prefix| strip_ascii_case_prefix(contents.trim_start(), prefix).is_some())
+    })
+}
+
+/// Figure captions can contain links and references. Consume the complete
+/// figure before looking for article prose, including a multiline caption.
+fn figure_end(text: &str) -> Option<usize> {
+    let mut depth = 1;
+    let mut at = 2;
+    while let Some(rest) = text.get(at..).filter(|rest| !rest.is_empty()) {
+        if rest.starts_with("[[") {
+            at += 2;
+            depth += 1;
+        } else if rest.starts_with("]]") {
+            at += 2;
+            depth -= 1;
+            if depth == 0 {
+                return Some(at);
+            }
+        } else if rest.starts_with("{{") {
+            at += template_end(rest, true)?;
+        } else if is_reference(rest) || rest.starts_with("<!--") {
+            at += markup_end(rest, true)?;
+        } else {
+            at += rest.chars().next()?.len_utf8();
+        }
+    }
+    None
+}
+
 /// Do not start a new candidate line inside a multiline note or template.
 fn prose_line_end(
     text: &str,
     unquoted_only: bool,
     stop_at_unknown_tag: bool,
     nested_footnotes: bool,
+    mode: ProseMode,
 ) -> Option<usize> {
     let mut at = 0;
     while at < text.len() {
@@ -625,7 +882,10 @@ fn prose_line_end(
             b'[' if rest.starts_with("[[") => at += markup_end(rest, unquoted_only)?,
             b'{' if stop_at_unknown_tag && rest.starts_with("{|") => return None,
             b'{' if rest.starts_with("{{") || rest.starts_with("{|") => {
-                at += prose_markup_end(rest, unquoted_only, nested_footnotes)?.0;
+                at += prose_markup_end(rest, unquoted_only, nested_footnotes, mode)?.0;
+            }
+            b'(' if mode == ProseMode::EnglishDefinition => {
+                at += pronunciation_end(rest).unwrap_or(1);
             }
             b'<' if is_reference(rest)
                 || block_end(rest).is_some()
@@ -640,11 +900,18 @@ fn prose_line_end(
     Some(at)
 }
 
-fn template_end(text: &str) -> Option<usize> {
+fn template_end(text: &str, opaque_notes: bool) -> Option<usize> {
     let mut depth = 1;
     let mut at = 2;
     let bytes = text.as_bytes();
     while at + 1 < bytes.len() {
+        if opaque_notes && bytes[at] == b'<' {
+            let tail = &text[at..];
+            if is_reference(tail) || tail.starts_with("<!--") {
+                at += markup_end(tail, true)?;
+                continue;
+            }
+        }
         match &bytes[at..at + 2] {
             b"{{" => {
                 depth += 1;
@@ -669,21 +936,28 @@ fn line_passage(
     matches_topic: &impl Fn(&str) -> bool,
     mut quotes: Option<&mut QuotationContext>,
     nested_footnotes: bool,
-    english_prose: bool,
+    mode: ProseMode,
     stop: &mut impl FnMut(Passage) -> bool,
 ) -> Option<bool> {
     let mut at = 0;
     let mut sentence_start = 0;
     let mut text = String::new();
     let mut recognized = true;
+    let english_prose = mode != ProseMode::Japanese;
     let mut quoted = quotes.as_deref().is_some_and(QuotationContext::is_open);
     while at < line.len() {
         let remaining = &line[at..];
         if let Some((end, omit_note)) =
-            prose_markup_end(remaining, quotes.is_some(), nested_footnotes)
+            prose_markup_end(remaining, quotes.is_some(), nested_footnotes, mode)
         {
             let markup = &remaining[..end];
             let visible = if omit_note {
+                if mode == ProseMode::EnglishDefinition
+                    && text.ends_with(' ')
+                    && remaining[end..].starts_with(' ')
+                {
+                    text.pop();
+                }
                 Some("")
             } else {
                 visible_markup(markup)
@@ -716,10 +990,22 @@ fn line_passage(
         }
         text.push(next);
         at += next.len_utf8();
-        let english_end = english_prose
-            && matches!(next, '.' | '!' | '?')
-            && line[at..].chars().next().is_none_or(char::is_whitespace);
-        if next != '。' && !english_end {
+        let english_end = if english_prose && matches!(next, '.' | '!' | '?') {
+            if mode == ProseMode::EnglishDefinition {
+                after_definition_references(line, at)
+            } else {
+                line[at..]
+                    .chars()
+                    .next()
+                    .is_none_or(char::is_whitespace)
+                    .then_some(at)
+            }
+        } else {
+            None
+        };
+        if let Some(end) = english_end {
+            at = end;
+        } else if next != '。' {
             continue;
         }
         let visible = text.trim();
@@ -748,12 +1034,62 @@ fn line_passage(
     Some(false)
 }
 
+fn after_definition_references(text: &str, mut at: usize) -> Option<usize> {
+    while is_reference(&text[at..]) {
+        at += markup_end(&text[at..], true)?;
+    }
+    text[at..]
+        .chars()
+        .next()
+        .is_none_or(char::is_whitespace)
+        .then_some(at)
+}
+
+fn template_named(text: &str, name: &str) -> bool {
+    text.strip_prefix("{{")
+        .and_then(|body| strip_ascii_case_prefix(body, name))
+        .is_some_and(|tail| tail.trim_start().starts_with('|'))
+}
+
+fn pronunciation_template(text: &str) -> Option<usize> {
+    ["IPAc-en", "IPA", "IPA-en", "Respell"]
+        .into_iter()
+        .any(|name| template_named(text, name))
+        .then(|| template_end(text, true))
+        .flatten()
+}
+
+fn pronunciation_end(text: &str) -> Option<usize> {
+    let mut rest = text.strip_prefix('(')?.trim_start();
+    loop {
+        let end = pronunciation_template(rest)?;
+        rest = rest[end..].trim_start();
+        if rest.starts_with(')') {
+            return Some(text.len() - rest.len() + 1);
+        }
+        rest = rest.strip_prefix(',').unwrap_or(rest).trim_start();
+    }
+}
+
 /// The second value identifies a verified note that has no visible prose.
 fn prose_markup_end(
     text: &str,
     unquoted_only: bool,
     nested_footnotes: bool,
+    mode: ProseMode,
 ) -> Option<(usize, bool)> {
+    if mode == ProseMode::EnglishDefinition {
+        let note = if text.starts_with('(') {
+            pronunciation_end(text)
+        } else if template_named(text, "notetag") {
+            template_end(text, true)
+        } else {
+            pronunciation_template(text)
+        };
+        if let Some(end) = note {
+            return Some((end, true));
+        }
+    }
     if nested_footnotes && let Some(body) = nested_footnote_body(text) {
         let (end, omit_note) = nested_footnote_end(body)?;
         return Some((text.len() - body.len() + end, omit_note));
@@ -817,7 +1153,7 @@ fn markup_end(text: &str, unquoted_only: bool) -> Option<usize> {
         return text[2..].find("]]").map(|end| end + 4);
     }
     if text.starts_with("{{") {
-        return template_end(text);
+        return template_end(text, false);
     }
     if let Some(block_end) = block_end(text) {
         return text.find(block_end).map(|end| end + block_end.len());
@@ -1090,6 +1426,179 @@ mod tests {
         assert_eq!(passage.source_span_sha256, digest(stated.as_bytes()));
     }
 
+    fn wiki_body(
+        provider: SearchProvider,
+        title: &str,
+        raw: &str,
+    ) -> (SearchCandidate, EvidencePacket) {
+        let candidate = SearchCandidate {
+            id: digest(title.as_bytes()),
+            rank: 1,
+            title: title.into(),
+            uri: format!("https://{}/wiki/{title}", provider.host()),
+            provider,
+            provider_id: provider.provider_id().into(),
+            source_key: title.into(),
+            search_packet_id: "f".repeat(64),
+        };
+        let uri = search::candidate_body_uri(&candidate).unwrap();
+        let mut packet = EvidencePacket {
+            id: String::new(),
+            mode: "LIVE".into(),
+            packet_kind: "FETCHED_BODY".into(),
+            request_uri: uri.clone(),
+            final_uri: uri.clone(),
+            redirect_chain: vec![uri.clone()],
+            observed_at_unix_ms: 1,
+            provider_id: "https-direct-url-v1".into(),
+            http_status: 200,
+            raw_body: raw.as_bytes().into(),
+            raw_sha256: digest(raw.as_bytes()),
+            extracted_text: Some(raw.into()),
+            parser_version: "strict-utf8-identity-v1".into(),
+            independence_group: uri,
+            failure: None,
+            retry_after: None,
+        };
+        packet.id = ports::fetch_packet_identity(&packet).unwrap();
+        (candidate, packet)
+    }
+
+    #[test]
+    fn english_definition_checks_named_lead_prose_and_bound_source_edition() {
+        let title = "Thermocouple";
+        let provider = SearchProvider::WikipediaEnglish;
+        let mut permissions = Permissions::default();
+        permissions.read_hosts.insert(provider.host().into());
+        permissions
+            .read_hosts
+            .insert(SearchProvider::Wikipedia.host().into());
+        let lead = "A '''Thermocouple''' is a [[sensor]] for measuring temperature<ref>Note with internal markup.</ref>.";
+        let raw = format!("{{{{Short description|Temperature sensor}}}}\n{lead}\n== Use ==\n");
+        let (candidate, body) = wiki_body(provider, title, &raw);
+        let result = answer(
+            "thermocouple",
+            false,
+            &candidate,
+            &body,
+            &permissions,
+            provider,
+        )
+        .unwrap();
+        assert_eq!(result.kind, ENGLISH_DEFINITION_ANSWER);
+        assert_eq!(
+            result.passage.text,
+            "A Thermocouple is a sensor for measuring temperature."
+        );
+        assert_eq!(
+            &raw[result.passage.source_start..result.passage.source_end],
+            lead
+        );
+        assert_eq!(result.passage.source_span_sha256, digest(lead.as_bytes()));
+        assert!(
+            result
+                .units()
+                .iter()
+                .any(|unit| unit.starts_with("Source: https://en.wikipedia.org/"))
+        );
+        assert!(
+            answer(
+                "thermocouple",
+                false,
+                &candidate,
+                &body,
+                &permissions,
+                SearchProvider::Wikipedia,
+            )
+            .is_err()
+        );
+        let mut redirected_body = body.clone();
+        redirected_body.final_uri = redirected_body
+            .request_uri
+            .replace("en.wikipedia.org", "ja.wikipedia.org");
+        redirected_body
+            .redirect_chain
+            .push(redirected_body.final_uri.clone());
+        redirected_body.independence_group = redirected_body.final_uri.clone();
+        redirected_body.id = ports::fetch_packet_identity(&redirected_body).unwrap();
+        assert!(
+            answer(
+                "thermocouple",
+                false,
+                &candidate,
+                &redirected_body,
+                &permissions,
+                provider
+            )
+            .is_err()
+        );
+        for raw in [
+            "The thermocouplehouse is a fictional structure.",
+            "Thermocouple may refer to the following items.",
+            "A thermocouple is a term that may refer to these things.",
+            "== History ==\nA thermocouple is a temperature sensor.",
+            "\"A thermocouple is a temperature sensor.\"",
+        ] {
+            assert!(
+                find_english_definition(raw, "thermocouple", title).is_none(),
+                "{raw}"
+            );
+        }
+        assert!(find_english_definition(&raw, "couple", title).is_none());
+        assert!(find_english_definition(&raw, "a thermocouple", title).is_some());
+        assert!(find_english_definition(&raw, "the thermocouple", title).is_none());
+    }
+
+    #[test]
+    fn english_definitions_keep_provenance_through_ordinary_wiki_lead_markup() {
+        let preamble = concat!(
+            "{{Short description|A sample definition}}\n",
+            "[[File:diagram.png|thumb|Caption with [[nested link]] and a newline.\n",
+            "Sample term is a claim in the caption.<ref>]] is a note delimiter here.</ref>]]\n\n",
+        );
+        let explanation = "Sample term is a measurable property.";
+        for (intro, reference) in [
+            (
+                "'''Sample term'''{{notetag|{{IPAc-en|s|a|m|p|l}} {{Respell|SAM|pul}}<ref>Unrelated }} in a citation.</ref>}}",
+                "",
+            ),
+            (
+                "'''Sample term''' ({{IPAc-en|s|a|m|p|l}} {{respell|SAM|pul}})",
+                "",
+            ),
+            (
+                "'''Sample term'''",
+                "<ref>{{Cite book|title=Source}}</ref><ref name=\"second\"/>",
+            ),
+        ] {
+            let lead = format!("{intro} is a [[measurement|measurable]] property.{reference}");
+            let article =
+                format!("{preamble}{lead} An unrelated exponent is m<sup>−1</sup>.\n== Body ==\n");
+            let definition =
+                find_english_definition(&article, "sample term", "Sample term").unwrap();
+            assert_eq!(definition.text, explanation);
+            assert_eq!(
+                &article[definition.source_start..definition.source_end],
+                lead
+            );
+            assert_eq!(definition.source_span_sha256, digest(lead.as_bytes()));
+        }
+        assert!(find_english_definition(preamble, "sample term", "Sample term").is_none());
+        assert!(find_english_definition(
+            "[[File:diagram.png|caption starts.\nSample term is a claim in an unclosed caption.",
+            "sample term",
+            "Sample term",
+        ).is_none());
+        assert!(
+            find_english_definition(
+                "'''Sample term''' {{unsupported|definition}} is a measurable property.",
+                "sample term",
+                "Sample term",
+            )
+            .is_none()
+        );
+    }
+
     #[test]
     fn verified_elevation_exposes_the_legacy_quotient_without_making_prose_a_quantity() {
         let provider = SearchProvider::Wikipedia;
@@ -1111,38 +1620,10 @@ mod tests {
                 "377556 cm",
             ),
         ] {
-            let candidate = SearchCandidate {
-                id: digest(title.as_bytes()),
-                rank: 1,
-                title: title.into(),
-                uri: format!("https://{}/wiki/{title}", provider.host()),
-                provider,
-                provider_id: provider.provider_id().into(),
-                source_key: title.into(),
-                search_packet_id: "f".repeat(64),
-            };
-            let uri = search::candidate_body_uri(&candidate).unwrap();
-            let mut packet = EvidencePacket {
-                id: String::new(),
-                mode: "LIVE".into(),
-                packet_kind: "FETCHED_BODY".into(),
-                request_uri: uri.clone(),
-                final_uri: uri.clone(),
-                redirect_chain: vec![uri.clone()],
-                observed_at_unix_ms: 1,
-                provider_id: "https-direct-url-v1".into(),
-                http_status: 200,
-                raw_body: raw.as_bytes().into(),
-                raw_sha256: digest(raw.as_bytes()),
-                extracted_text: Some(raw.into()),
-                parser_version: "strict-utf8-identity-v1".into(),
-                independence_group: uri,
-                failure: None,
-                retry_after: None,
-            };
-            packet.id = ports::fetch_packet_identity(&packet).unwrap();
+            let (candidate, packet) = wiki_body(provider, title, raw);
 
-            let ordinary = answer(title, false, &candidate, &packet, &permissions).unwrap();
+            let ordinary =
+                answer(title, false, &candidate, &packet, &permissions, provider).unwrap();
             assert!(ordinary.elevation_calculation().is_none());
             assert!(
                 serde_json::to_value(ordinary)
@@ -1151,7 +1632,8 @@ mod tests {
                     .is_none()
             );
 
-            let elevation = answer(title, true, &candidate, &packet, &permissions).unwrap();
+            let elevation =
+                answer(title, true, &candidate, &packet, &permissions, provider).unwrap();
             let calculation = elevation.elevation_calculation().unwrap();
             assert_eq!(calculation.expression, expression);
             assert_eq!(calculation.exact_value, quotient);

@@ -21,6 +21,8 @@ pub(crate) const BILINGUAL_STATISTICS_PARSER_VERSION: &str = "declarative-ja-en-
 pub(crate) const LOCAL_FIRST_TOPIC_PARSER_VERSION: &str = "declarative-ja-v216-local-first-topic";
 pub(crate) const AUTONOMOUS_TOPIC_WEB_PARSER_VERSION: &str =
     "declarative-ja-v217-autonomous-topic-web";
+pub(crate) const AUTONOMOUS_TOPIC_WEB_ENGLISH_PARSER_VERSION: &str =
+    "declarative-en-v1-autonomous-topic-web";
 pub(crate) const PARTIAL_WEB_CANDIDATE_FOLLOWUP_PARSER_VERSION: &str =
     "declarative-ja-v180-partial-web-candidate-followup";
 pub(crate) const CONTEXTUAL_ASSERTION_RELATION_QUERY_PARSER_VERSION: &str =
@@ -2238,7 +2240,13 @@ fn seal_existing_input(
         return Ok(bundle);
     }
     let mut intent = if matches!(request.locale.as_str(), "ja" | "en" | "ja-JP" | "en-US") {
-        if asks_for_previous_answer_source(&request.text)? {
+        let english_web_followup = matches!(request.locale.as_str(), "en" | "en-US")
+            && asks_for_english_web_answer_source(&request.text)
+            && match previous {
+                Some(result) => has_web_answer_source(result)?,
+                None => false,
+            };
+        if english_web_followup || asks_for_previous_answer_source(&request.text)? {
             if previous.is_some_and(|result| {
                 result.lifecycle == Lifecycle::Commit
                     && result.guarantee == Guarantee::SourceReport
@@ -2343,8 +2351,7 @@ fn seal_existing_input(
                 interpret_conversation_reply(&request.text, intent)?
             } else if matches!(source_context, Some(SourceContext::AutonomousTopicWeb))
                 && let Intent::InspectPremises { subject } = &intent
-                && local_first_topic_span(&request.text)?
-                    .is_some_and(|topic| topic.text == *subject)
+                && autonomous_topic_web_version(request, subject)?.is_some()
             {
                 Intent::AskWeb {
                     topic: subject.clone(),
@@ -2597,10 +2604,8 @@ fn seal_existing_input(
         Intent::AskWeb {
             topic,
             elevation_in_kilometres: false,
-        } if matches!(source_context, Some(SourceContext::AutonomousTopicWeb))
-            && local_first_topic_span(&request.text)?.is_some_and(|span| span.text == *topic) =>
-        {
-            AUTONOMOUS_TOPIC_WEB_PARSER_VERSION
+        } if matches!(source_context, Some(SourceContext::AutonomousTopicWeb)) => {
+            autonomous_topic_web_version(request, topic)?.unwrap_or(WEB_QUESTION_PARSER_VERSION)
         }
         Intent::AskWeb { .. } => WEB_QUESTION_PARSER_VERSION,
         Intent::CompareWebResearch { .. } => WEB_RESEARCH_PARSER_VERSION,
@@ -2847,16 +2852,7 @@ fn seal_existing_input(
         }
         Intent::ExplainPrevious
             if let Some(result) = previous
-                && result.lifecycle == Lifecycle::Commit
-                && result.guarantee == Guarantee::SourceReport
-                && let [listing, body] = result.evidence.as_slice()
-                && listing.packet_kind == "SEARCH_LIST"
-                && body.packet_kind == "FETCHED_BODY"
-                && let [.., body_ref, _] = result.dependencies.as_slice()
-                && (result.dependencies.len() == 3
-                    || (result.dependencies.len() == 4
-                        && result.actor_memory_revision.is_some()))
-                && digest(&canonical(body)?) == *body_ref =>
+                && has_web_answer_source(result)? =>
         {
             WEB_ANSWER_EXPLANATION_PARSER_VERSION
         }
@@ -4754,6 +4750,14 @@ fn source_role_spans(text: &str, intent: &Intent) -> Result<BTreeMap<String, Vec
     {
         return Ok(BTreeMap::from([(role.into(), vec![span])]));
     }
+    if let Intent::AskWeb {
+        topic,
+        elevation_in_kilometres: false,
+    } = intent
+        && let Some(span) = english_local_first_topic_span(text)?.filter(|span| &span.text == topic)
+    {
+        return Ok(BTreeMap::from([("/AskWeb/topic".into(), vec![span])]));
+    }
     let conversation_role = match intent {
         Intent::OpenConversationTopic { topic } => Some(("/OpenConversationTopic/topic", topic)),
         Intent::RespondOnConversationTopic { remark } => {
@@ -5260,6 +5264,33 @@ fn terminal_trim(text: &str) -> &str {
 fn asks_for_previous_answer_source(text: &str) -> Result<bool> {
     Ok(regex(r"^(?:この|その|前の|前回の)(?:回答|答え)の出典(?:は(?:何|どこ)(?:ですか|でしょうか)|を(?:教えて|示して)(?:ください)?)$")?
         .is_match(terminal_trim(text)))
+}
+
+fn asks_for_english_web_answer_source(text: &str) -> bool {
+    let statement = terminal_trim(text);
+    [
+        "what is the source",
+        "what was the source",
+        "where did that come from",
+    ]
+    .iter()
+    .any(|phrase| statement.eq_ignore_ascii_case(phrase))
+}
+
+fn has_web_answer_source(result: &ResultRecord) -> Result<bool> {
+    let [listing, body] = result.evidence.as_slice() else {
+        return Ok(false);
+    };
+    let [.., body_ref, _] = result.dependencies.as_slice() else {
+        return Ok(false);
+    };
+    Ok(result.lifecycle == Lifecycle::Commit
+        && result.guarantee == Guarantee::SourceReport
+        && listing.packet_kind == "SEARCH_LIST"
+        && body.packet_kind == "FETCHED_BODY"
+        && (result.dependencies.len() == 3
+            || (result.dependencies.len() == 4 && result.actor_memory_revision.is_some()))
+        && digest(&canonical(body)?) == *body_ref)
 }
 
 fn valid_calculation_step_id(value: &str) -> bool {
@@ -6510,6 +6541,125 @@ fn local_first_topic_span(text: &str) -> Result<Option<SourceSpan>> {
     Ok(source_span_at(text, start, start + topic.len()))
 }
 
+fn english_local_first_topic_scope(request: &RequestEnvelope) -> bool {
+    matches!(request.locale.as_str(), "en" | "en-US")
+        && request.context_ref.is_none()
+        && request.attachments.is_empty()
+        && request.speech.is_none()
+        && request.purpose.is_none()
+}
+
+fn english_local_first_topic_span(text: &str) -> Result<Option<SourceSpan>> {
+    if asks_for_english_web_answer_source(text) {
+        return Ok(None);
+    }
+    let statement = terminal_trim(text);
+    let Some(captures) = regex(r"(?i)^what (?:is|are) (.+)$")?.captures(statement) else {
+        return Ok(None);
+    };
+    let matched = captures.get(1).expect("English definition has a subject");
+    let topic = matched.as_str().trim();
+    if text.chars().any(char::is_control)
+        || !(2..=80).contains(&topic.len())
+        || !regex(r"^[A-Za-z]+(?:-[A-Za-z]+)*(?: [A-Za-z]+(?:-[A-Za-z]+)*){0,6}$")?.is_match(topic)
+        || nonpublic_web_topic(topic)
+    {
+        return Ok(None);
+    }
+
+    let folded = topic.to_ascii_lowercase();
+    if folded.split([' ', '-']).any(|word| {
+        matches!(
+            word,
+            "my" | "our"
+                | "your"
+                | "his"
+                | "her"
+                | "their"
+                | "its"
+                | "this"
+                | "that"
+                | "these"
+                | "those"
+                | "here"
+                | "there"
+                | "previous"
+                | "earlier"
+                | "latest"
+                | "current"
+                | "today"
+                | "yesterday"
+                | "private"
+                | "confidential"
+                | "internal"
+                | "unpublished"
+                | "secret"
+                | "secrets"
+                | "password"
+                | "passwords"
+                | "passphrase"
+                | "token"
+                | "tokens"
+                | "credentials"
+                | "address"
+                | "email"
+                | "phone"
+                | "invoice"
+                | "document"
+                | "file"
+                | "messages"
+                | "and"
+                | "or"
+                | "then"
+                | "send"
+                | "save"
+                | "delete"
+                | "execute"
+                | "write"
+        )
+    }) || ["sk-proj", "sk-live", "ghp", "github-pat", "xoxb"]
+        .iter()
+        .any(|prefix| folded.starts_with(prefix))
+    {
+        return Ok(None);
+    }
+
+    let start = text.len() - text.trim_start().len() + matched.start() + matched.as_str().len()
+        - matched.as_str().trim_start().len();
+    Ok(source_span_at(text, start, start + topic.len()))
+}
+
+fn autonomous_topic_web_version(
+    request: &RequestEnvelope,
+    topic: &str,
+) -> Result<Option<&'static str>> {
+    if local_first_topic_span(&request.text)?.is_some_and(|span| span.text == topic) {
+        return Ok(Some(AUTONOMOUS_TOPIC_WEB_PARSER_VERSION));
+    }
+    if english_local_first_topic_scope(request)
+        && request
+            .permissions
+            .read_hosts
+            .contains(crate::search::SearchProvider::WikipediaEnglish.host())
+        && english_local_first_topic_span(&request.text)?.is_some_and(|span| span.text == topic)
+    {
+        return Ok(Some(AUTONOMOUS_TOPIC_WEB_ENGLISH_PARSER_VERSION));
+    }
+    Ok(None)
+}
+
+pub(crate) fn autonomous_topic_web_provider(
+    version: &str,
+) -> Option<crate::search::SearchProvider> {
+    match version {
+        AUTONOMOUS_TOPIC_WEB_PARSER_VERSION => Some(crate::search::SearchProvider::Wikipedia),
+        AUTONOMOUS_TOPIC_WEB_ENGLISH_PARSER_VERSION => {
+            Some(crate::search::SearchProvider::WikipediaEnglish)
+        }
+        _ => None,
+    }
+}
+
 fn nonpublic_web_topic(topic: &str) -> bool {
     let folded = topic.to_ascii_lowercase();
     singular_previous_subject(topic)
@@ -6599,6 +6749,7 @@ fn verified_local_first_topic_seal(
     bundle: &InputBundle,
     version: &str,
     topic: &str,
+    span: Option<SourceSpan>,
 ) -> Result<bool> {
     let request = &bundle.request;
     let meaning = &bundle.meaning;
@@ -6609,7 +6760,7 @@ fn verified_local_first_topic_seal(
         && text.len() <= request.budget.max_input_bytes
         && matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
         && matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
-        && local_first_topic_span(text)?.is_some_and(|span| span.text == topic)
+        && span.is_some_and(|span| span.text == topic)
         && matches!(interpret(text)?, Intent::InspectPremises { subject } if subject == topic)
         && source_role_spans(text, &meaning.intent)? == meaning.source_roles
         && bundle.raw_sha256 == digest(text.as_bytes())
@@ -6622,7 +6773,27 @@ pub(crate) fn verified_local_first_topic_input(bundle: &InputBundle) -> Result<b
     let Intent::InspectPremises { subject } = &bundle.meaning.intent else {
         return Ok(false);
     };
-    verified_local_first_topic_seal(bundle, LOCAL_FIRST_TOPIC_PARSER_VERSION, subject)
+    verified_local_first_topic_seal(
+        bundle,
+        LOCAL_FIRST_TOPIC_PARSER_VERSION,
+        subject,
+        local_first_topic_span(&bundle.request.text)?,
+    )
+}
+
+pub(crate) fn verified_english_local_first_topic_input(bundle: &InputBundle) -> Result<bool> {
+    let Intent::InspectPremises { subject } = &bundle.meaning.intent else {
+        return Ok(false);
+    };
+    if !english_local_first_topic_scope(&bundle.request) {
+        return Ok(false);
+    }
+    verified_local_first_topic_seal(
+        bundle,
+        PARSER_VERSION,
+        subject,
+        english_local_first_topic_span(&bundle.request.text)?,
+    )
 }
 
 pub(crate) fn verified_autonomous_topic_web_input(bundle: &InputBundle) -> Result<bool> {
@@ -6633,7 +6804,15 @@ pub(crate) fn verified_autonomous_topic_web_input(bundle: &InputBundle) -> Resul
     else {
         return Ok(false);
     };
-    verified_local_first_topic_seal(bundle, AUTONOMOUS_TOPIC_WEB_PARSER_VERSION, topic)
+    let Some(version) = autonomous_topic_web_version(&bundle.request, topic)? else {
+        return Ok(false);
+    };
+    let span = if version == AUTONOMOUS_TOPIC_WEB_ENGLISH_PARSER_VERSION {
+        english_local_first_topic_span(&bundle.request.text)?
+    } else {
+        local_first_topic_span(&bundle.request.text)?
+    };
+    verified_local_first_topic_seal(bundle, version, topic, span)
 }
 
 fn inspect_premises_intent(text: &str) -> Result<Option<Intent>> {
@@ -14043,6 +14222,72 @@ mod tests {
                 .unwrap();
         assert_eq!(explicit.meaning.parser_version, WEB_QUESTION_PARSER_VERSION);
         assert!(!verified_autonomous_topic_web_input(&explicit).unwrap());
+    }
+
+    #[test]
+    fn english_topic_reseals_only_the_original_public_subject_with_its_host_grant() {
+        let text = "　What is solar thermal energy? ";
+        let mut request = RequestEnvelope::new("c", "i", "actor", text);
+        request.locale = "en-US".into();
+        let local = seal(&request, None).unwrap();
+        assert_eq!(local.meaning.parser_version, PARSER_VERSION);
+        assert!(verified_english_local_first_topic_input(&local).unwrap());
+
+        let autonomous = |request: &RequestEnvelope| {
+            seal_with_source_context(request, None, Some(SourceContext::AutonomousTopicWeb))
+                .unwrap()
+        };
+        let denied = autonomous(&request);
+        assert_eq!(denied, local);
+        let english_provider = crate::search::SearchProvider::WikipediaEnglish;
+        request
+            .permissions
+            .read_hosts
+            .insert(crate::search::SearchProvider::Wikipedia.host().into());
+        assert_eq!(autonomous(&request).meaning.parser_version, PARSER_VERSION);
+
+        request
+            .permissions
+            .read_hosts
+            .insert(english_provider.host().into());
+        let web = autonomous(&request);
+        assert_eq!(
+            web.meaning.parser_version,
+            AUTONOMOUS_TOPIC_WEB_ENGLISH_PARSER_VERSION
+        );
+        assert_eq!(
+            autonomous_topic_web_provider(&web.meaning.parser_version),
+            Some(english_provider)
+        );
+        assert!(verified_autonomous_topic_web_input(&web).unwrap());
+        let [span] = &web.meaning.source_roles["/AskWeb/topic"][..] else {
+            panic!("expected one original topic span");
+        };
+        assert_eq!(&text[span.start..span.end], "solar thermal energy");
+
+        for private in [
+            "What is my recovery code?",
+            "What is secret project?",
+            "What is the previous answer?",
+            "What is the source?",
+            "What is the latest report?",
+            "What is thermal expansion and send it?",
+            "What is a@example.com?",
+            "What is sk-proj-foo?",
+            "What facts have been recorded about Coco?",
+        ] {
+            request.text = private.into();
+            let stopped = autonomous(&request);
+            assert!(!verified_english_local_first_topic_input(&stopped).unwrap());
+            assert!(!verified_autonomous_topic_web_input(&stopped).unwrap());
+            assert!(
+                !matches!(stopped.meaning.intent, Intent::AskWeb { .. }),
+                "{private}"
+            );
+        }
+        request.text = text.into();
+        request.context_ref = Some("explicit-context".into());
+        assert!(!english_local_first_topic_scope(&request));
     }
 
     #[test]

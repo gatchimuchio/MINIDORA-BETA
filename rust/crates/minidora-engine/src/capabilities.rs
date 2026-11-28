@@ -77,6 +77,14 @@ impl Engine {
                     limits: "入力形式は実装済みの文型に限られ、不明な依頼は保留します。",
                 },
                 EngineCapability {
+                    id: "grounded-english-topic-answers",
+                    scope: "英語の短い用語質問に対し、保存済みの前提を優先します。該当する前提がなく英語版Wikipediaへの読み取りが許可されている場合は、対象記事の本文冒頭を照合し、根拠付きで英語で回答します。",
+                    permission: Some(CapabilityPermission::ExactHttpsHost {
+                        host: SearchProvider::WikipediaEnglish.host(),
+                    }),
+                    limits: "用語と記事を特定できる場合が対象です。保存した回答の出典は記事を取り直さずに確認できます。",
+                },
+                EngineCapability {
                     id: "japanese-message-draft",
                     scope: "指定した宛先と内容からメールやメッセージの文案を作ります。英語では依頼や招待への辞退も作成できます。翻訳や計算とまとめて、箇条書きや「次に」で区切った文章で依頼できます。同じ会話で保存した文案・訳文は、項目番号を指定して変更できます。文案は日英どちらからでも、元の言語を保って文体や文数を変えられます。",
                     permission: None,
