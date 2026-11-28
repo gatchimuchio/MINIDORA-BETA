@@ -35,14 +35,17 @@ pub(crate) const SEARCH_CANDIDATE_LISTING_NODE: &str = "search-candidate-listing
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 pub enum SearchProvider {
     Wikipedia,
+    WikipediaEnglish,
     Crossref,
     EuropePmc,
+    EuropePmcOpenAccess,
 }
 
 impl SearchProvider {
     pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
             "wikipedia" => Some(Self::Wikipedia),
+            "wikipedia-en" => Some(Self::WikipediaEnglish),
             "crossref" => Some(Self::Crossref),
             "europepmc" => Some(Self::EuropePmc),
             _ => None,
@@ -52,30 +55,53 @@ impl SearchProvider {
     pub fn provider_id(self) -> &'static str {
         match self {
             Self::Wikipedia => "wikipedia-ja-rest-search-v1",
+            Self::WikipediaEnglish => "wikipedia-en-rest-search-v1",
             Self::Crossref => "crossref-works-search-v1",
             Self::EuropePmc => "europe-pmc-rest-search-v1",
+            Self::EuropePmcOpenAccess => "europe-pmc-open-access-search-v1",
         }
     }
 
     pub fn host(self) -> &'static str {
         match self {
             Self::Wikipedia => "ja.wikipedia.org",
+            Self::WikipediaEnglish => "en.wikipedia.org",
             Self::Crossref => "api.crossref.org",
-            Self::EuropePmc => "www.ebi.ac.uk",
+            Self::EuropePmc | Self::EuropePmcOpenAccess => "www.ebi.ac.uk",
         }
+    }
+
+    pub(crate) fn is_wikipedia(self) -> bool {
+        matches!(self, Self::Wikipedia | Self::WikipediaEnglish)
+    }
+
+    /// These provider routes cannot redirect to other authorized services.
+    pub(crate) fn restricted_read_permissions(self, original: &Permissions) -> Option<Permissions> {
+        matches!(self, Self::WikipediaEnglish | Self::EuropePmcOpenAccess).then(|| Permissions {
+            read_hosts: original
+                .read_hosts
+                .get(self.host())
+                .cloned()
+                .into_iter()
+                .collect(),
+            ..Permissions::default()
+        })
     }
 
     fn request_uri(self, query: &str) -> Result<Url> {
         let endpoint = match self {
             Self::Wikipedia => "https://ja.wikipedia.org/w/rest.php/v1/search/page",
+            Self::WikipediaEnglish => "https://en.wikipedia.org/w/rest.php/v1/search/page",
             Self::Crossref => "https://api.crossref.org/works",
-            Self::EuropePmc => "https://www.ebi.ac.uk/europepmc/webservices/rest/search",
+            Self::EuropePmc | Self::EuropePmcOpenAccess => {
+                "https://www.ebi.ac.uk/europepmc/webservices/rest/search"
+            }
         };
         let mut uri = Url::parse(endpoint)
             .map_err(|_| failure("SEARCH_CONFIGURATION", "Invalid fixed provider endpoint"))?;
         let rows = SEARCH_ROWS.to_string();
         match self {
-            Self::Wikipedia => {
+            Self::Wikipedia | Self::WikipediaEnglish => {
                 uri.query_pairs_mut()
                     .append_pair("q", query)
                     .append_pair("limit", &rows);
@@ -85,7 +111,14 @@ impl SearchProvider {
                     .append_pair("query", query)
                     .append_pair("rows", &rows);
             }
-            Self::EuropePmc => {
+            Self::EuropePmc | Self::EuropePmcOpenAccess => {
+                let filtered;
+                let query = if self == Self::EuropePmcOpenAccess {
+                    filtered = europe_pmc_open_query(query)?;
+                    &filtered
+                } else {
+                    query
+                };
                 uri.query_pairs_mut()
                     .append_pair("query", query)
                     .append_pair("format", "json")
@@ -104,6 +137,22 @@ impl SearchProvider {
     ) -> Result<SearchObservation> {
         search(self, query, permissions, budget)
     }
+}
+
+fn europe_pmc_open_query(topic: &str) -> Result<String> {
+    if topic.trim() != topic
+        || topic.chars().count() > 80
+        || !topic.chars().any(char::is_alphabetic)
+        || !topic
+            .chars()
+            .all(|ch| ch.is_alphanumeric() || matches!(ch, ' ' | '　' | '-' | 'ー' | '・'))
+    {
+        return Err(failure(
+            "INVALID_SEARCH_QUERY",
+            "Europe PMC open access search requires a bounded literal topic",
+        ));
+    }
+    Ok(format!("\"{topic}\" AND OPEN_ACCESS:Y AND IN_EPMC:Y"))
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -227,6 +276,10 @@ pub(crate) fn validate_failed_observation(
         return Err(invalid());
     }
     if let Some(permissions) = permissions {
+        let restricted = observation
+            .provider
+            .restricted_read_permissions(permissions);
+        let permissions = restricted.as_ref().unwrap_or(permissions);
         ports::validate_observed_route(listing, permissions)?;
     }
     let mut fetched = listing.clone();
@@ -281,6 +334,8 @@ pub(crate) fn search_with_budget(
         ));
     }
     let uri = provider.request_uri(query)?;
+    let restricted = provider.restricted_read_permissions(permissions);
+    let permissions = restricted.as_ref().unwrap_or(permissions);
     let read = ports::fetch_with_budget(uri.as_str(), permissions, retrieval, check_admission)?;
     Ok(ports::ReadObservation {
         observation: parse_listing(provider, query, read.observation)?,
@@ -359,11 +414,11 @@ fn article_route(base: &str, segments: &[&str]) -> Result<String> {
 
 fn parse_candidate(provider: SearchProvider, row: &Value) -> Result<(String, String, String)> {
     match provider {
-        SearchProvider::Wikipedia => {
+        SearchProvider::Wikipedia | SearchProvider::WikipediaEnglish => {
             let title = field(row, "title")?;
             let key = field(row, "key")?;
             let uri = article_route(
-                "https://ja.wikipedia.org/",
+                &format!("https://{}/", provider.host()),
                 &["wiki", &key.replace(' ', "_")],
             )?;
             Ok((title.into(), uri, key.into()))
@@ -409,6 +464,21 @@ fn parse_candidate(provider: SearchProvider, row: &Value) -> Result<(String, Str
             };
             Ok((title.into(), uri, format!("{source}:{id}")))
         }
+        SearchProvider::EuropePmcOpenAccess => {
+            let title = field(row, "title")?;
+            let pmcid = field(row, "pmcid")?;
+            if ["isOpenAccess", "inEPMC"].into_iter().any(|key| {
+                row.get(key)
+                    .is_some_and(|value| value.as_str() != Some("Y"))
+            }) {
+                return Err(failure(
+                    "MALFORMED_SEARCH_CANDIDATE",
+                    "Europe PMC returned a candidate outside the open-access full-text collection",
+                ));
+            }
+            let uri = europe_pmc_open_body_uri(pmcid)?;
+            Ok((title.into(), uri, pmcid.into()))
+        }
     }
 }
 
@@ -438,6 +508,9 @@ pub fn parse_listing(
     let expected_request = provider.request_uri(query)?;
     if observation.listing.raw_sha256 != digest(&observation.listing.raw_body)
         || observation.listing.request_uri != expected_request.as_str()
+        || (provider == SearchProvider::EuropePmcOpenAccess
+            && observation.listing.failure.is_none()
+            && observation.listing.final_uri != expected_request.as_str())
         || !matches!(observation.listing.mode.as_str(), "LIVE" | "FIXED_PACKET")
     {
         observation.failure = Some("SEARCH_LIST_IDENTITY_MISMATCH".into());
@@ -458,9 +531,9 @@ pub fn parse_listing(
         ports::json_pointer(raw, "")?;
         let value: Value = serde_json::from_str(raw)?;
         let path = match provider {
-            SearchProvider::Wikipedia => "/pages",
+            SearchProvider::Wikipedia | SearchProvider::WikipediaEnglish => "/pages",
             SearchProvider::Crossref => "/message/items",
-            SearchProvider::EuropePmc => "/resultList/result",
+            SearchProvider::EuropePmc | SearchProvider::EuropePmcOpenAccess => "/resultList/result",
         };
         let rows = value
             .pointer(path)
@@ -625,6 +698,10 @@ pub(crate) fn validate_stored_observation(
             .into(),
     );
     if let Some(permissions) = permissions {
+        let restricted = observation
+            .provider
+            .restricted_read_permissions(permissions);
+        let permissions = restricted.as_ref().unwrap_or(permissions);
         ports::validate_successful_packet(&fetched_packet, permissions)?;
     }
     if parse_listing(observation.provider, &observation.query, fetched_packet)? != *observation {
@@ -2095,14 +2172,81 @@ pub(crate) fn validate_next_candidate_body_capacity(evidence: &[EvidencePacket])
     Ok(())
 }
 
+fn europe_pmc_open_body_uri(pmcid: &str) -> Result<String> {
+    let digits = pmcid.strip_prefix("PMC").unwrap_or_default();
+    if !(1..=16).contains(&digits.len())
+        || digits.starts_with('0')
+        || !digits.bytes().all(|ch| ch.is_ascii_digit())
+    {
+        return Err(failure(
+            "INVALID_SEARCH_CANDIDATE",
+            "Europe PMC candidate requires a canonical PMCID",
+        ));
+    }
+    article_route(
+        "https://www.ebi.ac.uk/europepmc/webservices/rest",
+        &[pmcid, "fullTextXML"],
+    )
+}
+
 pub(crate) fn candidate_body_uri(candidate: &SearchCandidate) -> Result<String> {
+    if candidate.provider == SearchProvider::EuropePmcOpenAccess {
+        let expected = europe_pmc_open_body_uri(&candidate.source_key)?;
+        if candidate.uri != expected {
+            return Err(failure(
+                "INVALID_SEARCH_CANDIDATE",
+                "Europe PMC candidate URL differs from its canonical full-text route",
+            ));
+        }
+        return Ok(expected);
+    }
     let checked = source_uri(&candidate.uri)?;
     let mut uri = Url::parse(&checked)
         .map_err(|_| failure("INVALID_SEARCH_CANDIDATE", "Candidate URL is malformed"))?;
-    if candidate.provider == SearchProvider::Wikipedia {
+    if candidate.provider == SearchProvider::WikipediaEnglish
+        && uri.host_str() != Some(candidate.provider.host())
+    {
+        return Err(failure(
+            "INVALID_SEARCH_CANDIDATE",
+            "The article URL differs from the selected Wikipedia edition",
+        ));
+    }
+    if candidate.provider.is_wikipedia() {
         uri.query_pairs_mut().append_pair("action", "raw");
     }
     source_uri(uri.as_str())
+}
+
+pub(crate) fn validate_research_body(
+    candidate: &SearchCandidate,
+    packet: &EvidencePacket,
+    permissions: &Permissions,
+) -> Result<()> {
+    if candidate.provider_id != candidate.provider.provider_id()
+        || candidate.rank == 0
+        || packet.request_uri != candidate_body_uri(candidate)?
+        || (candidate.provider == SearchProvider::EuropePmcOpenAccess
+            && candidate.expected_identity()? != candidate.id)
+    {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "The research body differs from the retained source candidate",
+        ));
+    }
+    let restricted = candidate.provider.restricted_read_permissions(permissions);
+    let permissions = restricted.as_ref().unwrap_or(permissions);
+    match candidate.provider {
+        SearchProvider::EuropePmcOpenAccess => {
+            ports::validate_research_xml_packet(packet, permissions)
+        }
+        SearchProvider::Wikipedia | SearchProvider::WikipediaEnglish => {
+            ports::validate_successful_packet(packet, permissions)
+        }
+        _ => Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "This provider does not supply typed research articles",
+        )),
+    }
 }
 
 pub(crate) fn candidate_body_lines(
@@ -2155,7 +2299,13 @@ pub(crate) fn fetch_candidate_with_budget(
         ));
     }
     let body_uri = candidate_body_uri(candidate)?;
-    ports::fetch_with_budget(&body_uri, permissions, retrieval, check_admission)
+    let restricted = candidate.provider.restricted_read_permissions(permissions);
+    let permissions = restricted.as_ref().unwrap_or(permissions);
+    if candidate.provider == SearchProvider::EuropePmcOpenAccess {
+        ports::fetch_research_xml_with_budget(&body_uri, permissions, retrieval, check_admission)
+    } else {
+        ports::fetch_with_budget(&body_uri, permissions, retrieval, check_admission)
+    }
 }
 
 #[cfg(test)]
@@ -2439,6 +2589,53 @@ mod tests {
         assert!(validate_stored_observation(&changed, None).is_err());
     }
     #[test]
+    fn english_wikipedia_list_and_body_require_the_exact_edition_grant() {
+        let provider = SearchProvider::WikipediaEnglish;
+        let query = "thermal expansion";
+        let raw = r#"{"pages":[{"key":"Thermal_expansion","title":"Thermal expansion","excerpt":"Listing excerpt"}]}"#;
+        let observation =
+            parse_listing(provider, query, live_fixture(provider, query, raw)).unwrap();
+        assert_eq!(
+            observation.listing.request_uri,
+            "https://en.wikipedia.org/w/rest.php/v1/search/page?q=thermal+expansion&limit=5"
+        );
+        assert_eq!(
+            observation.listing.provider_id,
+            "wikipedia-en-rest-search-v1"
+        );
+        assert!(observation.listing.extracted_text.is_none());
+        let candidate = &observation.candidates[0];
+        assert_eq!(
+            candidate_body_uri(candidate).unwrap(),
+            "https://en.wikipedia.org/wiki/Thermal_expansion?action=raw"
+        );
+        assert!(
+            candidate_body_uri(&SearchCandidate {
+                uri: "https://ja.wikipedia.org/wiki/Thermal_expansion".into(),
+                ..candidate.clone()
+            })
+            .is_err()
+        );
+
+        let japanese_only = Permissions {
+            read_hosts: BTreeSet::from(["ja.wikipedia.org".into()]),
+            ..Permissions::default()
+        };
+        assert!(validate_stored_observation(&observation, Some(&japanese_only)).is_err());
+        let both = Permissions {
+            read_hosts: BTreeSet::from(["ja.wikipedia.org".into(), "en.wikipedia.org".into()]),
+            ..Permissions::default()
+        };
+        validate_stored_observation(&observation, Some(&both)).unwrap();
+        assert_eq!(
+            provider
+                .restricted_read_permissions(&both)
+                .unwrap()
+                .read_hosts,
+            BTreeSet::from(["en.wikipedia.org".into()])
+        );
+    }
+    #[test]
     fn crossref_uses_returned_title_doi_and_uri_not_abstract_text() {
         let raw = r#"{"message":{"items":[{"title":["Measured article"],"DOI":"10.1234/AbC","URL":"https://doi.org/10.1234/AbC","abstract":"not a fetched paper"}]}}"#;
         let observation = parse_listing(
@@ -2470,6 +2667,55 @@ mod tests {
             observation.candidates[1].uri,
             "https://europepmc.org/article/PMC/PMC456"
         );
+    }
+    #[test]
+    fn europe_pmc_open_access_pins_the_literal_search_and_xml_candidate() {
+        let provider = SearchProvider::EuropePmcOpenAccess;
+        let topic = "Fourier transform";
+        let query = provider.request_uri(topic).unwrap();
+        assert_eq!(
+            query
+                .query_pairs()
+                .find(|(key, _)| key == "query")
+                .unwrap()
+                .1,
+            "\"Fourier transform\" AND OPEN_ACCESS:Y AND IN_EPMC:Y"
+        );
+        assert!(provider.request_uri("Fourier\" OR anything").is_err());
+        let raw = r#"{"resultList":{"result":[{"pmcid":"PMC6562564","title":"Transform study","isOpenAccess":"Y","inEPMC":"Y","abstractText":"Listing only","fullTextUrlList":{"fullTextUrl":[{"url":"https://unrelated.example/full"}]}},{"pmcid":"PMC001","title":"Noncanonical identifier"},{"pmcid":"PMC2","title":"Closed article","isOpenAccess":"N"}]}}"#;
+        let observation =
+            parse_listing(provider, topic, live_fixture(provider, topic, raw)).unwrap();
+        let [candidate] = observation.candidates.as_slice() else {
+            panic!("only the admissible canonical PMCID should be retained");
+        };
+        assert!(observation.listing.extracted_text.is_none());
+        assert_eq!(candidate.source_key, "PMC6562564");
+        assert_eq!(
+            candidate_body_uri(candidate).unwrap(),
+            "https://www.ebi.ac.uk/europepmc/webservices/rest/PMC6562564/fullTextXML"
+        );
+        let permissions = Permissions {
+            read_hosts: BTreeSet::from(["www.ebi.ac.uk".into(), "en.wikipedia.org".into()]),
+            ..Permissions::default()
+        };
+        validate_stored_observation(&observation, Some(&permissions)).unwrap();
+        let mut xml = fixture_candidate_body(
+            candidate,
+            "<article><body><p>Source text.</p></body></article>",
+        );
+        xml.mode = "LIVE".into();
+        xml.provider_id = "https-direct-url-v1".into();
+        xml.packet_kind = ports::RESEARCH_XML_PACKET_KIND.into();
+        xml.parser_version = ports::RESEARCH_XML_PARSER_VERSION.into();
+        xml.id = ports::fetch_packet_identity(&xml).unwrap();
+        validate_research_body(candidate, &xml, &permissions).unwrap();
+        assert!(ports::validate_successful_packet(&xml, &permissions).is_err());
+        assert!(validate_research_body(candidate, &xml, &Permissions::default()).is_err());
+        xml.final_uri = "https://www.ebi.ac.uk/another-article".into();
+        xml.redirect_chain.push(xml.final_uri.clone());
+        xml.independence_group.clone_from(&xml.final_uri);
+        xml.id = ports::fetch_packet_identity(&xml).unwrap();
+        assert!(validate_research_body(candidate, &xml, &permissions).is_err());
     }
     #[test]
     fn malformed_duplicate_and_failed_lists_retain_original_packet() {

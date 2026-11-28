@@ -136,23 +136,32 @@ pub(crate) fn run_calculation_sequence<'a>(
                     })
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
-        let resolved = language::calculate_sequence_expression(&span.text, &inputs)?;
-        let consumed: BTreeMap<_, _> = resolved
-            .consumed
+        let input_refs = inputs
             .iter()
-            .map(|reference| {
-                (
-                    format!("sequence-{}", reference.step_id),
-                    reference.artifact_sha256.clone(),
-                )
-            })
-            .collect();
-        if consumed.len() != inputs.len() {
-            return Err(failure(
+            .map(|(id, value)| (id.clone(), value.artifact_sha256.clone()))
+            .collect::<BTreeMap<_, _>>();
+        let action = language::CalculationAction::with_references(&span.text, &step.requires);
+        let dependency_mismatch = || {
+            failure(
                 "SEQUENCE_DEPENDENCY_MISMATCH",
                 "計算器が実際に消費した参照集合が封印済みの参照集合と一致しません。",
-            ));
-        }
+            )
+        };
+        let observation = action
+            .observe(&inputs, &input_refs)
+            .map_err(|error| match error {
+                Error::Contract { code, .. } if code == "BRANCH_REFERENCE_MISMATCH" => {
+                    dependency_mismatch()
+                }
+                error => error,
+            })?;
+        let language::CalculationObservation::Referenced(resolved) = observation else {
+            return Err(dependency_mismatch());
+        };
+        let consumed = input_refs
+            .into_iter()
+            .map(|(id, hash)| (format!("sequence-{id}"), hash))
+            .collect();
         let artifact = CalculationSequenceStepArtifact {
             id: step.id.clone(),
             source_expression: span.clone(),
@@ -2397,14 +2406,16 @@ pub(crate) fn verified_calculation_in_context(
                 {
                     return Err(invalid());
                 }
-                match &input.meaning.intent {
-                    Intent::Calculate { expression } => {
-                        let value = language::calculate(expression)?;
-                        if current.calculation.as_ref() != Some(&value) {
-                            return Err(invalid());
-                        }
-                        break Origin::Scalar(value);
+                if let Some(action) = language::CalculationAction::bind(&input.meaning.intent)
+                    .filter(|action| action.is_literal())
+                {
+                    let value = action.observe_literal()?;
+                    if current.calculation.as_ref() != Some(&value) {
+                        return Err(invalid());
                     }
+                    break Origin::Scalar(value);
+                }
+                match &input.meaning.intent {
                     Intent::CalculateSequence { steps } if !correcting => {
                         if steps.len() > context_actions.saturating_sub(links.len()) {
                             return Err(insufficient());
@@ -2508,13 +2519,15 @@ pub(crate) fn verify_goal_content(
     }) else {
         return Ok(());
     };
-    let Intent::Calculate { expression } = &goal.intent else {
+    let Some(action) =
+        language::CalculationAction::bind(&goal.intent).filter(|action| action.is_literal())
+    else {
         return Err(failure(
             "GOAL_CALCULATION_MISMATCH",
             "厳密計算の完了条件に封印済みの式がありません。",
         ));
     };
-    let calculation = language::calculate(expression)?;
+    let calculation = action.observe_literal()?;
     let equation = exact_calculation_unit(&calculation);
     let matches_surface = if predicate == EXACT_CALCULATION_PREDICATE {
         plan.required_units.as_slice() == std::slice::from_ref(&equation) && plan.text == equation
@@ -10456,7 +10469,13 @@ impl Engine {
             None
         };
         let previous_math_report_explanation = if legacy_explanation && let Some(prior) = previous {
-            registered_math_report_explanation(&self.store, actor, &request.case_id, prior)?
+            registered_math_report_explanation(
+                &self.store,
+                actor,
+                &request.case_id,
+                prior,
+                supports_english_output_locale(&request.locale),
+            )?
         } else {
             None
         };
@@ -10854,11 +10873,16 @@ impl Engine {
             && effective_output_path.is_some();
         let independent_file_budget_blocked =
             independent_file && request.budget.max_actions as usize == nodes.len() - 1;
+        let news_file = matches!(&bundle.meaning.intent, Intent::AskCurrentNews { .. })
+            && effective_output_path.is_some();
+        let news_file_budget_blocked =
+            news_file && request.budget.max_actions as usize == nodes.len() - 1;
         let blocked_nodes = usize::from(statistics_explanation_blocked)
             + usize::from(
                 (statistics_preview
                     || decision_file_budget_blocked
-                    || independent_file_budget_blocked)
+                    || independent_file_budget_blocked
+                    || news_file_budget_blocked)
                     && effective_output_path.is_some(),
             );
         let required_actions = nodes.len() - blocked_nodes
@@ -10956,11 +10980,23 @@ impl Engine {
                 "取消を記録しました。既発生・未確定の作用は消去せず保持しています。",
             );
         }
+        let probability_action = crate::math::ProbabilityAction::bind(&goal.intent);
         let english = supports_english_output_locale(&request.locale);
-        let english_display = english
+        let english_analysis = matches!(&goal.intent, Intent::AnalyzeAttachments { .. })
+            && input::uses_english_attached_analysis(&bundle);
+        let english_output = english
             && (matches!(&goal.intent, Intent::IndependentRequests { .. })
+                || english_analysis
+                || input::uses_english_current_news(&bundle)
+                || matches!(
+                    bundle.meaning.parser_version.as_str(),
+                    input::WEB_RESEARCH_V2_PARSER_VERSION
+                        | input::WEB_RESEARCH_DIVERSE_PARSER_VERSION
+                )
                 || goal.output_path.is_none()
                     && (matches!(&goal.intent, Intent::Greet { .. })
+                        || probability_action.is_some()
+                        || previous_math_report_explanation.is_some()
                         || compound_explanation
                         || bundle.meaning.parser_version
                             == input::ENGLISH_CALCULATION_PARSER_VERSION
@@ -10971,7 +11007,7 @@ impl Engine {
                                 prior_explanation_input.as_ref(),
                             )));
         if !supports_japanese_output_locale(&request.locale)
-            && !english_display
+            && !english_output
             && !(english && is_translation_intent(&goal.intent))
         {
             return self.stop(
@@ -11125,6 +11161,7 @@ impl Engine {
         let mut decision_plan = None;
         let mut decision_pending = false;
         let mut news_partial = false;
+        let mut news_file_proof_over_budget = false;
         let mut web_research_partial = false;
         let mut independent_requests_partial = false;
         let mut applied_rule_adaptation = None;
@@ -11176,6 +11213,8 @@ impl Engine {
                 Ok(())
             })
         };
+        let exact_calculation =
+            language::CalculationAction::bind(&goal.intent).filter(|action| action.is_literal());
         match &goal.intent {
             Intent::ExplainPrevious if compound_explanation => {
                 let explanation = compound_explanation_parent
@@ -11219,10 +11258,7 @@ impl Engine {
                 });
             }
             Intent::IndependentRequests { items } => {
-                let reads = items
-                    .iter()
-                    .filter(|item| crate::composition_source::read_url(item).is_some())
-                    .count();
+                let reads = crate::composition::live_read_count(&bundle, items);
                 let retrieval = (reads != 0).then(|| retrieval_budget(reads, &state, &self.store));
                 let mut observed = crate::composition::Outcome::new();
                 let executed = crate::composition::produce(
@@ -11261,7 +11297,7 @@ impl Engine {
                     units: units.clone(),
                 });
             }
-            Intent::Calculate { expression } => match language::calculate(expression) {
+            _ if let Some(action) = &exact_calculation => match action.observe_literal() {
                 Ok(calculation) => {
                     result.guarantee = Guarantee::Computed;
                     if goal
@@ -11714,16 +11750,19 @@ impl Engine {
                 }
                 result.guarantee = Guarantee::Computed;
             }
-            Intent::NormalizeProbabilityWeights { weights } => {
-                match crate::math::normalize_probability_weights(weights) {
-                    Ok(distribution) => {
-                        units.push(serde_json::to_string_pretty(&distribution)?);
+            Intent::NormalizeProbabilityWeights { .. } | Intent::FiniteEventProbability { .. } => {
+                let action = probability_action.as_ref().ok_or_else(|| {
+                    failure("PROBABILITY_INPUT_MISMATCH", "確率の入力を照合できません。")
+                })?;
+                match action.observe() {
+                    Ok(observed) => {
+                        units.push(observed.unit);
                         result.guarantee = Guarantee::Computed;
                     }
                     Err(error) => {
                         let code = match &error {
                             minidora_domain::Error::Contract { code, .. } => code.as_str(),
-                            _ => "PROBABILITY_NORMALIZATION_UNSUPPORTED",
+                            _ => action.fallback_code(),
                         };
                         return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
                     }
@@ -11744,23 +11783,6 @@ impl Engine {
                     }
                 }
             }
-            Intent::FiniteEventProbability {
-                outcomes,
-                weights,
-                event_values,
-            } => match crate::math::finite_event_probability(outcomes, weights, event_values) {
-                Ok(probability) => {
-                    units.push(serde_json::to_string_pretty(&probability)?);
-                    result.guarantee = Guarantee::Computed;
-                }
-                Err(error) => {
-                    let code = match &error {
-                        minidora_domain::Error::Contract { code, .. } => code.as_str(),
-                        _ => "EVENT_PROBABILITY_UNSUPPORTED",
-                    };
-                    return self.stop(&mut state, Lifecycle::Suspend, code, &error.to_string());
-                }
-            },
             Intent::PreviousFiniteEventProbability { .. } => {
                 let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
                 else {
@@ -12468,12 +12490,17 @@ impl Engine {
                 result.guarantee = Guarantee::UserPremise;
             }
             Intent::ExplainCurrentNews { origin } => {
+                let english_news = input::uses_english_current_news(&bundle);
                 if goal.output_path.is_some() {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "NEWS_FILE_DELIVERY_UNAVAILABLE",
-                        "ニュースの説明はチャットに表示できます。保存先の指定を外して依頼してください。",
+                        if english_news {
+                            "The news explanation is available in chat. Ask again without a file destination."
+                        } else {
+                            "ニュースの説明はチャットに表示できます。保存先の指定を外して依頼してください。"
+                        },
                     );
                 }
                 let linked = if let Some(previous) = previous {
@@ -12489,10 +12516,14 @@ impl Engine {
                         &mut state,
                         Lifecycle::Suspend,
                         "NEWS_CONTEXT_REQUIRED",
-                        "この会話で、説明できるニュースの依頼を確認できません。",
+                        if english_news {
+                            "I found no eligible news request to explain in this conversation."
+                        } else {
+                            "この会話で、説明できるニュースの依頼を確認できません。"
+                        },
                     );
                 };
-                units = crate::news::explanation_units(original);
+                units = crate::news::localized_explanation_units(original, english_news);
                 result.dependencies.push(self.store.put_artifact(
                     actor,
                     &request.case_id,
@@ -12506,19 +12537,27 @@ impl Engine {
                     units: units.clone(),
                 });
             }
-            Intent::AskCurrentNews { topic, period } => {
+            intent @ Intent::AskCurrentNews { .. } => {
                 use crate::{
-                    news::{self, NewsCitation, NewsReport, NewsReview, NewsWindow},
-                    ports::NewsWebFormat,
+                    composition_source::{NewsTranscript, ordinary_news_candidate_limit},
+                    news::{self, NewsAction, NewsFetch, NewsWindow},
                 };
-                if bundle.meaning.parser_version == crate::news_input::NATURAL_PARSER_VERSION
-                    && !input::verified_current_news_input(&bundle)?
-                {
+
+                let action = NewsAction::bind(intent).expect("current news intent");
+                let english_news = input::uses_english_current_news(&bundle);
+                let verify_authored = news_file
+                    || english_news
+                    || bundle.meaning.parser_version != crate::news_input::PARSER_VERSION;
+                if verify_authored && !input::verified_current_news_input(&bundle)? {
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "NEWS_SOURCE_INVALID",
-                        "ニュース依頼の原文と時間・話題を照合できません。",
+                        if english_news {
+                            "The requested news time and topic could not be verified against the original wording."
+                        } else {
+                            "ニュース依頼の原文と時間・話題を照合できません。"
+                        },
                     );
                 }
                 if news_publishers.is_empty() {
@@ -12526,172 +12565,83 @@ impl Engine {
                         &mut state,
                         Lifecycle::Suspend,
                         ports::READ_PERMISSION_REQUIRED,
-                        "ニュースの確認にはWeb接続が必要です。起動時に --allow-read-host で news.web.nhk または www.sankei.com を許可し、通信設定を /net で確認してください。",
+                        if english_news {
+                            "Allow read access to news.web.nhk or www.sankei.com with --allow-read-host at startup. Use /net to check connectivity settings."
+                        } else {
+                            "ニュースの確認にはWeb接続が必要です。起動時に --allow-read-host で news.web.nhk または www.sankei.com を許可し、通信設定を /net で確認してください。"
+                        },
                     );
                 }
-                if goal.output_path.is_some() {
-                    return self.stop(
-                        &mut state,
-                        Lifecycle::Suspend,
-                        "NEWS_FILE_DELIVERY_UNAVAILABLE",
-                        "ニュースの回答はチャットに表示できます。保存先の指定を外して依頼してください。",
-                    );
-                }
-                let window = NewsWindow::new(*period)?;
-                let mut budget =
-                    match retrieval_budget(2 * news_publishers.len(), &state, &self.store) {
-                        Ok(budget) => budget,
-                        Err(Error::Contract { code, .. }) => {
-                            return self.stop(
+                let window = NewsWindow::new(action.period)?;
+                let mut budget = match retrieval_budget(
+                    2 * news_publishers.len(),
+                    &state,
+                    &self.store,
+                ) {
+                    Ok(budget) => budget,
+                    Err(Error::Contract { code, .. }) => {
+                        return self.stop(
                                 &mut state,
                                 Lifecycle::Suspend,
                                 &code,
-                                "現在の通信条件と実行予算では、ニュースを確認できません。",
+                                if english_news {
+                                    "The current connection and execution budget do not allow this news check."
+                                } else {
+                                    "現在の通信条件と実行予算では、ニュースを確認できません。"
+                                },
                             );
-                        }
-                        Err(error) => return Err(error),
-                    };
-                let candidate_limit = (1
-                    + (goal.budget.max_actions as usize - required_actions)
-                        / news_publishers.len())
-                .min(news::MAX_CANDIDATES_PER_PUBLISHER);
+                    }
+                    Err(error) => return Err(error),
+                };
+                let candidate_limit = ordinary_news_candidate_limit(
+                    goal.budget.max_actions,
+                    required_actions,
+                    news_publishers.len(),
+                )
+                .expect("publisher count and action budget were checked");
+                let file_eligible = news_file
+                    && !news_file_budget_blocked
+                    && required_file_permission_stop(&goal).is_none();
+                let mut transcript = file_eligible
+                    .then(|| NewsTranscript::new(&bundle, (0, request.text.len()), &window));
                 let mut reviews = Vec::new();
                 for publisher in news_publishers {
-                    let mut review = NewsReview::new(publisher);
-                    let permissions = publisher.read_permissions();
-                    let listing = (|| {
-                        let listed = ports::fetch_news_with_budget(
-                            publisher.listing_url(),
-                            publisher.listing_format(),
-                            &permissions,
-                            &mut budget,
-                            &read_admission(&state)?,
-                        )?;
-                        let packet = listed.observation;
-                        review.listing_ref =
-                            Some(self.retain_news_packet(&mut state, &mut result, &packet)?);
-                        if let Some(wait) = listed.redirect_wait {
-                            return Err(failure(ports::RETRY_DEFERRED, wait));
-                        }
-                        if let Some(code) = &packet.failure {
-                            return Err(failure(code, "公開記事一覧を取得できませんでした。"));
-                        }
-                        ports::validate_news_packet(
-                            &packet,
-                            publisher.listing_format(),
-                            &permissions,
-                        )?;
-                        if packet.request_uri != publisher.listing_url()
-                            || packet.final_uri != publisher.listing_url()
-                        {
-                            return Err(failure(
-                                "NEWS_LISTING_ROUTE",
-                                "公開記事一覧の取得元を確認できません。",
-                            ));
-                        }
-                        publisher.listing(packet.extracted_text.as_deref().unwrap_or_default())
-                    })();
-                    match listing {
-                        Err(error) if read_case_changed(&error) => return Err(error),
-                        Err(Error::Contract { code, .. }) => review.unavailable(code),
-                        Err(error) => return Err(error),
-                        Ok(mut candidates) => {
-                            window.prioritize_candidates(
-                                publisher,
-                                &mut candidates,
-                                topic.as_deref(),
-                            );
-                            for candidate in candidates.into_iter().take(candidate_limit) {
-                                let article = (|| {
-                                    if !publisher.valid_article_uri(&candidate.uri) {
-                                        return Err(failure(
-                                            "NEWS_ARTICLE_ROUTE",
-                                            "記事候補の接続先を確認できません。",
-                                        ));
-                                    }
-                                    let fetched = ports::fetch_news_with_budget(
-                                        &candidate.uri,
-                                        NewsWebFormat::ArticleHtml,
-                                        &permissions,
-                                        &mut budget,
-                                        &read_admission(&state)?,
-                                    )?;
-                                    let packet = fetched.observation;
-                                    let body_ref =
-                                        self.retain_news_packet(&mut state, &mut result, &packet)?;
-                                    review.attempted_articles.push(body_ref.clone());
-                                    if let Some(wait) = fetched.redirect_wait {
-                                        return Err(failure(ports::RETRY_DEFERRED, wait));
-                                    }
-                                    if let Some(code) = &packet.failure {
-                                        return Err(failure(
-                                            code,
-                                            "記事の本文を取得できませんでした。",
-                                        ));
-                                    }
-                                    ports::validate_news_packet(
-                                        &packet,
-                                        NewsWebFormat::ArticleHtml,
-                                        &permissions,
-                                    )?;
-                                    if packet.request_uri != candidate.uri
-                                        || packet.final_uri != candidate.uri
-                                    {
-                                        return Err(failure(
-                                            "NEWS_ARTICLE_ROUTE",
-                                            "一覧で見つけた記事と取得した記事を照合できません。",
-                                        ));
-                                    }
-                                    let article = publisher.article(
-                                        &packet.final_uri,
-                                        packet.extracted_text.as_deref().unwrap_or_default(),
-                                        topic.as_deref(),
-                                    )?;
-                                    let published_at_unix_ms = window.admits(&article, &packet)?;
-                                    if !news::matches_topic(&article, topic.as_deref()) {
-                                        return Err(failure(
-                                            "NEWS_TOPIC_UNCONFIRMED",
-                                            "指定された話題を記事本文と照合できません。",
-                                        ));
-                                    }
-                                    Ok(NewsCitation {
-                                        source: publisher,
-                                        body_ref,
-                                        uri: packet.final_uri,
-                                        observed_at_unix_ms: packet.observed_at_unix_ms,
-                                        published_at_unix_ms,
-                                        candidate,
-                                        article,
-                                    })
-                                })();
-                                match article {
-                                    Ok(citation) => {
-                                        review.status = "NEWS_ARTICLE_CONFIRMED";
-                                        review.diagnostic = None;
-                                        review.citation = Some(citation);
-                                        break;
-                                    }
-                                    Err(error) if read_case_changed(&error) => return Err(error),
-                                    Err(Error::Contract { code, .. }) => {
-                                        let end_publisher = matches!(
-                                            code.as_str(),
-                                            ports::DEADLINE_EXCEEDED
-                                                | ports::RETRY_DEFERRED
-                                                | ports::REDIRECT_RETRY_DEFERRED
-                                                | "HTTP_RATE_LIMITED"
-                                                | "HTTP_START_BUDGET_EXHAUSTED"
-                                                | "RESOURCE_LIMIT"
-                                        );
-                                        review.unavailable(code);
-                                        if end_publisher {
-                                            break;
-                                        }
-                                    }
-                                    Err(error) => return Err(error),
-                                }
+                    let review = action.review_publisher(
+                        publisher,
+                        &request.permissions,
+                        &window,
+                        candidate_limit,
+                        &mut |uri, format, permissions| {
+                            let fetched = (|| {
+                                let fetched = ports::fetch_news_with_budget(
+                                    uri,
+                                    format,
+                                    permissions,
+                                    &mut budget,
+                                    &read_admission(&state)?,
+                                )?;
+                                let packet = fetched.observation;
+                                let reference =
+                                    self.retain_news_packet(&mut state, &mut result, &packet)?;
+                                Ok(NewsFetch {
+                                    packet,
+                                    reference,
+                                    redirect_wait: fetched.redirect_wait,
+                                })
+                            })();
+                            match &mut transcript {
+                                Some(transcript) => transcript.observe(
+                                    &self.store,
+                                    &bundle,
+                                    uri,
+                                    format,
+                                    permissions,
+                                    fetched,
+                                ),
+                                None => fetched,
                             }
-                        }
-                    }
+                        },
+                    )?;
                     let review_ref = self.store.put_artifact(actor, &request.case_id, &review)?;
                     let listing_observation_ref = review
                         .listing_ref
@@ -12713,19 +12663,20 @@ impl Engine {
                     result.dependencies.push(review_ref);
                     reviews.push(review);
                 }
-                let report = NewsReport {
-                    kind: "minidora.core.current-news.v1",
-                    window: &window,
-                    topic: topic.as_deref(),
-                    reviews: &reviews,
-                };
+                let report = action.report(&window, &reviews);
                 if !reviews.iter().any(|review| review.citation.is_some()) {
-                    let mut message = report.unavailable_units().join(" ");
-                    if bundle.meaning.parser_version == crate::news_input::NATURAL_PARSER_VERSION {
-                        message = format!(
-                            "{}のニュースについて、今回の確認範囲では該当記事を確定できませんでした。 {message}",
-                            report.requested_scope()
-                        );
+                    let mut message = report.localized_unavailable(english_news).join(" ");
+                    if verify_authored {
+                        let scope = report.localized_requested_scope(english_news);
+                        message = if english_news {
+                            format!(
+                                "I could not confirm a matching news article for {scope}. {message}"
+                            )
+                        } else {
+                            format!(
+                                "{scope}のニュースについて、今回の確認範囲では該当記事を確定できませんでした。 {message}"
+                            )
+                        };
                         let bytes = canonical(&report)?;
                         if bytes.len().saturating_add(message.len())
                             <= goal.budget.max_evidence_bytes
@@ -12745,17 +12696,20 @@ impl Engine {
                         &message,
                     );
                 }
-                units = report.units();
+                units = report.localized_units(english_news);
                 let report_bytes = canonical(&report)?;
-                if report_bytes.len().saturating_add(units.join("\n").len())
-                    > goal.budget.max_evidence_bytes
-                {
+                let report_size = report_bytes.len().saturating_add(units.join("\n").len());
+                if report_size > goal.budget.max_evidence_bytes {
                     state.result = Some(result);
                     return self.stop(
                         &mut state,
                         Lifecycle::Suspend,
                         "RESOURCE_LIMIT",
-                        "ニュース記事の照合結果が出力予算を超えました。",
+                        if english_news {
+                            "The verified news result exceeded the output budget."
+                        } else {
+                            "ニュース記事の照合結果が出力予算を超えました。"
+                        },
                     );
                 }
                 result.dependencies.push(self.store.put_bytes(
@@ -12765,6 +12719,23 @@ impl Engine {
                 )?);
                 result.guarantee = Guarantee::SourceReport;
                 news_partial = reviews.iter().any(|review| review.citation.is_none());
+                if !news_partial && let Some(transcript) = transcript {
+                    match transcript.retain(
+                        &self.store,
+                        &bundle,
+                        goal.budget.max_evidence_bytes - report_size,
+                    ) {
+                        Ok((reference, _)) => result.dependencies.push(reference),
+                        Err(Error::Contract { code, .. }) if code == "RESOURCE_LIMIT" => {
+                            news_file_proof_over_budget = true;
+                        }
+                        Err(Error::Contract { code, message }) => {
+                            state.result = Some(result);
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
                 report_goal_content = Some(ReportGoalContent {
                     predicate: news::PREDICATE,
                     guarantee: result.guarantee.clone(),
@@ -13430,28 +13401,32 @@ impl Engine {
                         "There is no committed calculation to explain in this conversation.",
                     );
                 };
-                let calculation = match calculation_from_context(
-                    &self.store,
-                    &bundle,
-                    prior,
-                    &state.prior_results,
-                    started,
-                ) {
-                    Ok(calculation) => calculation,
-                    Err(Error::Contract { code, .. }) => {
-                        return self.stop(
-                            &mut state,
-                            Lifecycle::Suspend,
-                            &code,
-                            "The previous calculation could not be verified in this conversation.",
-                        );
-                    }
-                    Err(error) => return Err(error),
-                };
-                units.push(format!("Expression: {}", calculation.expression));
-                units.extend(calculation.steps.iter().cloned());
-                units.push(format!("Exact result: {}", calculation.exact_value));
-                result.calculation = Some(calculation);
+                if let Some(explanation) = previous_math_report_explanation.as_ref() {
+                    units.extend(explanation.iter().cloned());
+                } else {
+                    let calculation = match calculation_from_context(
+                        &self.store,
+                        &bundle,
+                        prior,
+                        &state.prior_results,
+                        started,
+                    ) {
+                        Ok(calculation) => calculation,
+                        Err(Error::Contract { code, .. }) => {
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                &code,
+                                "The previous calculation could not be verified in this conversation.",
+                            );
+                        }
+                        Err(error) => return Err(error),
+                    };
+                    units.push(format!("Expression: {}", calculation.expression));
+                    units.extend(calculation.steps.iter().cloned());
+                    units.push(format!("Exact result: {}", calculation.exact_value));
+                    result.calculation = Some(calculation);
+                }
                 result.dependencies.push(prior.id.clone());
                 result.guarantee = Guarantee::Computed;
             }
@@ -17550,6 +17525,12 @@ impl Engine {
                 ]);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::Calculate { .. } => {
+                return Err(failure(
+                    "GOAL_CALCULATION_MISMATCH",
+                    "封印済みの式を厳密計算に結び付けられません。",
+                ));
+            }
             Intent::CalculateFromRequestItems { .. } | Intent::SelectRequestJsonNumber { .. } => {
                 return self.stop(
                     &mut state,
@@ -17938,7 +17919,7 @@ impl Engine {
                 "描画前に元Goalの締切へ達しました。",
             );
         }
-        let independent_file_stop = if independent_file {
+        let file_preview_stop = if independent_file || news_file {
             required_file_permission_stop(&goal)
                 .map(|(code, message)| {
                     (
@@ -17950,12 +17931,22 @@ impl Engine {
                         },
                     )
                 })
-                .or(independent_file_budget_blocked.then_some((
-                    "ACTION_BUDGET_EXHAUSTED",
+                .or(
+                    (independent_file_budget_blocked || news_file_budget_blocked).then_some((
+                        "ACTION_BUDGET_EXHAUSTED",
+                        if english {
+                            "The results are shown above. Saving requires another action."
+                        } else {
+                            "結果を表示しました。保存には追加の行動予算が必要です。"
+                        },
+                    )),
+                )
+                .or(news_file_proof_over_budget.then_some((
+                    "RESOURCE_LIMIT",
                     if english {
-                        "The results are shown above. Saving requires another action."
+                        "The verified articles are shown above. The evidence budget is too small to save this report."
                     } else {
-                        "結果を表示しました。保存には追加の行動予算が必要です。"
+                        "確認できた記事を表示しました。保存の照合に必要な根拠を保持する予算が足りませんでした。"
                     },
                 )))
         } else {
@@ -17966,9 +17957,10 @@ impl Engine {
             || statistics_preview
             || decision_pending
             || decision_file_budget_blocked
+            || (news_partial && news_file)
             || web_research_partial
             || independent_requests_partial
-            || independent_file_stop.is_some())
+            || file_preview_stop.is_some())
         .then(|| {
             let mut preview = goal.clone();
             preview.output_path = None;
@@ -18023,7 +18015,7 @@ impl Engine {
             || news_partial
             || web_research_partial
             || independent_requests_partial
-            || independent_file_stop.is_some()
+            || file_preview_stop.is_some()
         {
             result.execution_graph_ref = Some(store_execution_graph(
                 &self.store,
@@ -18044,15 +18036,16 @@ impl Engine {
                     },
                 );
             }
-            if let Some((code, message)) = independent_file_stop {
-                return self.stop(&mut state, Lifecycle::Suspend, code, message);
-            }
             if web_research_partial {
                 return self.stop(
                     &mut state,
                     Lifecycle::Suspend,
                     "WEB_RESEARCH_INCOMPLETE",
-                    "比較または別件の計算に未確定の部分があります。確認できた結果は本文に示しました。",
+                    if english {
+                        "The comparison or separate calculation is incomplete. Verified results are shown above."
+                    } else {
+                        "比較または別件の計算に未確定の部分があります。確認できた結果は本文に示しました。"
+                    },
                 );
             }
             if news_partial {
@@ -18060,8 +18053,15 @@ impl Engine {
                     &mut state,
                     Lifecycle::Suspend,
                     "NEWS_PARTIALLY_CONFIRMED",
-                    "確認できた記事と、確認できなかった配信元を本文に示しました。",
+                    if input::uses_english_current_news(&bundle) {
+                        "The answer lists the verified articles and the publishers I could not verify."
+                    } else {
+                        "確認できた記事と、確認できなかった配信元を本文に示しました。"
+                    },
                 );
+            }
+            if let Some((code, message)) = file_preview_stop {
+                return self.stop(&mut state, Lifecycle::Suspend, code, message);
             }
             if decision_pending {
                 return self.stop(
@@ -19812,6 +19812,7 @@ pub(crate) fn registered_math_report_explanation(
     actor: &str,
     case: &str,
     previous: &ResultRecord,
+    english: bool,
 ) -> Result<Option<Vec<String>>> {
     if previous.lifecycle != Lifecycle::Commit || previous.guarantee != Guarantee::Computed {
         return Ok(None);
@@ -19821,13 +19822,41 @@ pub(crate) fn registered_math_report_explanation(
     else {
         return Ok(None);
     };
+    if let Some(action) = crate::math::ProbabilityAction::bind(&bundle.meaning.intent) {
+        let report = action.observe()?;
+        if identity(&bundle.request)? != previous.id
+            || !previous.dependencies.is_empty()
+            || previous.calculation.is_some()
+            || report.unit != previous.text
+        {
+            return Err(failure(
+                "MATH_CONTEXT_INVALID",
+                "保存済みの確率計算を元の入力と照合できません。",
+            ));
+        }
+        // Earlier native reports may only retain result text. Recompute the
+        // typed report above and also verify render evidence when present.
+        if previous.content_plan.is_some() || previous.render.is_some() {
+            crate::document::revalidate_previous_document_render(
+                store,
+                actor,
+                case,
+                previous,
+                None,
+                "MATH_CONTEXT_INVALID",
+                "probability report",
+            )?;
+        }
+        return Ok(Some(report.explain(english)));
+    }
+    if english {
+        return Ok(None);
+    }
     if !matches!(
         bundle.meaning.intent,
         Intent::Statistics { .. }
             | Intent::DescribeStatistics { .. }
-            | Intent::NormalizeProbabilityWeights { .. }
             | Intent::FiniteProbabilityStatistics { .. }
-            | Intent::FiniteEventProbability { .. }
             | Intent::EvaluatePolynomial { .. }
             | Intent::LinearSystem { .. }
             | Intent::QuadraticEquation { .. }

@@ -1,8 +1,13 @@
 //! Planning and observation for bounded lists of requests within one Goal.
 use crate::{
-    composition_input, composition_source,
+    attachment_analysis::AnalysisAction,
+    composition_input,
+    composition_source::{self, SourceObservation, SourceRequest},
     core::{exact_calculation_unit, read_case_changed, supports_english_output_locale},
-    input, language, math, ports,
+    input, language, math,
+    news::{self, NewsAction},
+    ports,
+    research_goal::{self, ResearchAction},
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
     store::Store,
 };
@@ -13,12 +18,17 @@ use minidora_domain::{
 };
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::{BTreeMap, BTreeSet},
+    collections::BTreeMap,
     time::{Duration, Instant},
 };
 
 pub(crate) const PREDICATE: &str = "INDEPENDENT_REQUESTS_V1";
 pub(crate) const PARSER_VERSION: &str = "independent-request-list-v1";
+pub(crate) const ATTACHED_PARSER_VERSION: &str = "attached-independent-request-list-v1";
+pub(crate) const NEWS_PARSER_VERSION: &str = "news-independent-request-list-v1";
+pub(crate) const RESEARCH_PARSER_VERSION: &str = "research-independent-request-list-v1";
+pub(crate) const DIVERSE_RESEARCH_PARSER_VERSION: &str =
+    "distinct-publishers-independent-request-list-v1";
 pub(crate) const EXPLANATION_PREDICATE: &str = "PREVIOUS_COMPOUND_EXPLANATION_V1";
 pub(crate) const EXPLANATION_SOURCE_NODE: &str = "previous-compound-observations";
 const MAX_ITEMS: usize = 8;
@@ -123,8 +133,10 @@ fn is_reference_input_stop(code: &str) -> bool {
 }
 
 fn prerequisite_ids(item: &IndependentRequest) -> &[String] {
+    if let Some(action) = language::CalculationAction::bind(&item.intent) {
+        return action.requires();
+    }
     match item.intent.as_ref() {
-        Intent::CalculateFromRequestItems { requires, .. } => requires,
         Intent::SelectRequestJsonNumber { source, .. } => std::slice::from_ref(source),
         _ => &[],
     }
@@ -176,45 +188,35 @@ fn evaluate(
     quantities: &BTreeMap<String, language::SequenceValue>,
     prerequisites: &BTreeMap<String, String>,
 ) -> Result<Branch> {
+    if let Some(action) = language::CalculationAction::bind(&item.intent) {
+        let observed = match action.observe(quantities, prerequisites) {
+            Ok(value) => value,
+            Err(Error::Contract { code, .. }) if code == "CALCULATION_REFERENCE_UNAVAILABLE" => {
+                return Ok(Branch::Blocked("BRANCH_REFERENCE_VALUE_UNAVAILABLE"));
+            }
+            Err(error) => return Err(error),
+        };
+        let calculation = observed.calculation();
+        return Ok(Branch::Value(Value {
+            units: vec![exact_calculation_unit(calculation)],
+            bytes: observed.proof_bytes()?,
+            quantities: BTreeMap::from([("", calculation.exact_value.clone())]),
+            guarantee: Guarantee::Computed,
+        }));
+    }
+    if let Some(action) = math::ProbabilityAction::bind(&item.intent) {
+        let observed = action.observe()?;
+        return Ok(Branch::Value(Value {
+            units: vec![observed.unit],
+            bytes: observed.bytes,
+            quantities: observed
+                .quantity
+                .map_or_else(BTreeMap::new, |value| BTreeMap::from([("", value)])),
+            guarantee: Guarantee::Computed,
+        }));
+    }
     let mut partial_reason = None;
     let value = match item.intent.as_ref() {
-        Intent::Calculate { expression } => {
-            let calculation = language::calculate(expression)?;
-            Value {
-                units: vec![exact_calculation_unit(&calculation)],
-                bytes: canonical(&calculation)?,
-                quantities: BTreeMap::from([("", calculation.exact_value)]),
-                guarantee: Guarantee::Computed,
-            }
-        }
-        Intent::CalculateFromRequestItems { expression, .. } => {
-            let resolved = match language::calculate_sequence_expression(expression, quantities) {
-                Ok(resolved) => resolved,
-                Err(Error::Contract { code, .. })
-                    if code == "CALCULATION_REFERENCE_UNAVAILABLE" =>
-                {
-                    return Ok(Branch::Blocked("BRANCH_REFERENCE_VALUE_UNAVAILABLE"));
-                }
-                Err(error) => return Err(error),
-            };
-            let used: BTreeSet<_> = resolved
-                .consumed
-                .iter()
-                .map(|usage| &usage.artifact_sha256)
-                .collect();
-            if used != prerequisites.values().collect() {
-                return Err(failure(
-                    "BRANCH_REFERENCE_MISMATCH",
-                    "Consumed values do not match the observed prerequisite artifacts.",
-                ));
-            }
-            Value {
-                units: vec![exact_calculation_unit(&resolved.calculation)],
-                bytes: canonical(&resolved)?,
-                quantities: BTreeMap::from([("", resolved.calculation.exact_value)]),
-                guarantee: Guarantee::Computed,
-            }
-        }
         Intent::Statistics { .. }
         | Intent::FiniteProbabilityStatistics { .. }
         | Intent::DescribeStatistics { .. } => {
@@ -322,21 +324,58 @@ pub(crate) fn produce(
     let items = delivery_items(bundle)?;
     let render_reserve = (request.budget.deadline_ms / 4).min(250);
     let compute_limit = Duration::from_millis(request.budget.deadline_ms - render_reserve);
-    let source_count = items
-        .iter()
-        .filter(|item| composition_source::read_url(item).is_some())
-        .count();
-    let mut reads =
-        composition_source::SourceReads::new(retrieval, &request.budget, source_count, admit)?;
+    let source_count = live_read_count(bundle, items);
+    // Keep time for evaluating independent items after a slow external provider.
+    let output_reserve = if bundle.meaning.parser_version == DIVERSE_RESEARCH_PARSER_VERSION {
+        research_goal::output_reserve_time(request.budget.deadline_ms)
+    } else {
+        Duration::from_millis((request.budget.deadline_ms / 4).min(1000))
+    };
+    let mut reads = composition_source::SourceReads::new(
+        retrieval,
+        &request.budget,
+        source_count,
+        output_reserve,
+        admit,
+    )?;
     evaluate_items(
         store,
         bundle,
         items,
         graph,
-        || started.elapsed() >= compute_limit,
-        |_, uri| reads.observe(store, bundle, uri),
+        Some(started + compute_limit),
+        |_, source| reads.observe(store, bundle, source),
         |_, bytes| store.put_bytes(&request.actor_id, &request.case_id, bytes),
         output,
+    )
+}
+
+pub(crate) fn live_read_count(bundle: &InputBundle, items: &[IndependentRequest]) -> usize {
+    let allow_news = news_items_enabled(bundle)
+        && !news::admitted_publishers(&bundle.request.permissions).is_empty();
+    items
+        .iter()
+        .filter(|item| {
+            composition_source::read_url(item).is_some()
+                || (allow_news && NewsAction::bind(&item.intent).is_some())
+                || (research_items_enabled(bundle)
+                    && ResearchAction::for_item(bundle, item)
+                        .is_some_and(|action| action.is_admitted(&bundle.request.permissions)))
+        })
+        .count()
+}
+
+fn news_items_enabled(bundle: &InputBundle) -> bool {
+    matches!(
+        bundle.meaning.parser_version.as_str(),
+        NEWS_PARSER_VERSION | RESEARCH_PARSER_VERSION | DIVERSE_RESEARCH_PARSER_VERSION
+    )
+}
+
+fn research_items_enabled(bundle: &InputBundle) -> bool {
+    matches!(
+        bundle.meaning.parser_version.as_str(),
+        RESEARCH_PARSER_VERSION | DIVERSE_RESEARCH_PARSER_VERSION
     )
 }
 
@@ -349,25 +388,41 @@ fn delivery_items(bundle: &InputBundle) -> Result<&[IndependentRequest]> {
         ));
     };
     let english = supports_english_output_locale(&request.locale);
-    if !request.attachments.is_empty()
-        || request.context_ref.is_some()
-        || request.speech.is_some()
-        || request.purpose.is_some()
-    {
+    if request.context_ref.is_some() || request.speech.is_some() || request.purpose.is_some() {
         return Err(failure(
             "COMPOUND_SCOPE_UNAVAILABLE",
             if english {
-                "Independent items accept standalone text with an optional file destination."
+                "Independent items accept text with optional attachments and a file destination."
             } else {
-                "複数の依頼は入力欄に書いてください。保存先は指定できます。添付、参照先、音声、用途指定は外してください。"
+                "複数の依頼は入力欄に書いてください。添付と保存先を指定できます。参照先、音声、用途指定は外してください。"
             },
         ));
     }
-    if bundle.meaning.parser_version != PARSER_VERSION
-        || !bundle.meaning.unresolved.is_empty()
-        || input::parse_independent_requests(&request.text)?.as_ref()
-            != Some(&bundle.meaning.intent)
-    {
+    let matches_input = match bundle.meaning.parser_version.as_str() {
+        PARSER_VERSION if request.attachments.is_empty() => {
+            bundle.meaning.unresolved.is_empty()
+                && input::parse_independent_requests(&request.text)?.as_ref()
+                    == Some(&bundle.meaning.intent)
+        }
+        ATTACHED_PARSER_VERSION => {
+            input::validate_request_attachments(request)?;
+            input::attached_independent_input(request)?.as_ref() == Some(bundle)
+        }
+        NEWS_PARSER_VERSION => {
+            input::validate_request_attachments(request)?;
+            input::news_independent_input(request)?.as_ref() == Some(bundle)
+        }
+        RESEARCH_PARSER_VERSION => {
+            input::validate_request_attachments(request)?;
+            input::research_independent_input(request)?.as_ref() == Some(bundle)
+        }
+        DIVERSE_RESEARCH_PARSER_VERSION => {
+            input::validate_request_attachments(request)?;
+            input::diverse_research_independent_input(request)?.as_ref() == Some(bundle)
+        }
+        _ => false,
+    };
+    if !matches_input {
         return Err(failure(
             "COMPOUND_INPUT_MISMATCH",
             if english {
@@ -386,8 +441,8 @@ pub(crate) fn evaluate_items(
     bundle: &InputBundle,
     items: &[IndependentRequest],
     graph: &mut Scheduler,
-    time_exhausted: impl Fn() -> bool,
-    mut source_packet: impl FnMut(usize, &str) -> Result<(String, EvidencePacket)>,
+    deadline: Option<Instant>,
+    mut read_source: impl FnMut(usize, SourceRequest<'_>) -> Result<SourceObservation>,
     mut retain_observation: impl FnMut(usize, &[u8]) -> Result<String>,
     output: &mut Outcome,
 ) -> Result<()> {
@@ -397,6 +452,7 @@ pub(crate) fn evaluate_items(
     let mut evidence_remaining = request.budget.max_evidence_bytes / 2;
     let mut sources = BTreeMap::<String, String>::new();
     let mut quantities = BTreeMap::new();
+    let attached = !request.attachments.is_empty();
     for (index, item) in items.iter().enumerate() {
         let id = node_id(index);
         let prerequisites = prerequisite_ids(item)
@@ -415,18 +471,90 @@ pub(crate) fn evaluate_items(
             prerequisites.contains_key(&outcome.node_id) && outcome.state != BranchState::Confirmed
         });
         let mut evidence_ref = None;
-        let mut retry_evidence = None;
+        let mut retry_evidence = Vec::new();
         let available = evidence_remaining / (items.len() - index);
-        let evaluated = if time_exhausted() {
+        let evaluated = if deadline.is_some_and(|end| Instant::now() >= end) {
             Ok(Branch::Blocked("BRANCH_TIME_BUDGET"))
         } else if blocked_predecessor {
             Ok(Branch::Blocked("BRANCH_REFERENCE_PREREQUISITE_UNCONFIRMED"))
+        } else if news_items_enabled(bundle)
+            && let Some(action) = NewsAction::bind(&item.intent)
+        {
+            if news::admitted_publishers(&request.permissions).is_empty() {
+                Ok(Branch::Blocked(ports::READ_PERMISSION_REQUIRED))
+            } else if available < 512 {
+                Ok(Branch::Blocked("BRANCH_EVIDENCE_BUDGET"))
+            } else {
+                read_source(index, SourceRequest::News { item, action }).and_then(|read| {
+                    let SourceObservation::News(read) = read else {
+                        return Err(source_kind_mismatch());
+                    };
+                    evidence_ref = Some(read.reference);
+                    retry_evidence = read.retry_evidence;
+                    let value = Value {
+                        guarantee: if read.confirmed {
+                            Guarantee::SourceReport
+                        } else {
+                            Guarantee::Unknown
+                        },
+                        units: read.units,
+                        bytes: read.report_bytes,
+                        quantities: BTreeMap::new(),
+                    };
+                    if read.complete {
+                        Ok(Branch::Value(value))
+                    } else {
+                        Ok(Branch::Partial(
+                            value,
+                            if read.confirmed {
+                                "NEWS_PARTIALLY_CONFIRMED"
+                            } else {
+                                "NEWS_ARTICLES_UNAVAILABLE"
+                            },
+                        ))
+                    }
+                })
+            }
+        } else if research_items_enabled(bundle)
+            && let Some(action) = ResearchAction::for_item(bundle, item)
+        {
+            if !action.is_admitted(&request.permissions) {
+                Ok(Branch::Blocked(ports::READ_PERMISSION_REQUIRED))
+            } else if available < 512 {
+                Ok(Branch::Blocked("BRANCH_EVIDENCE_BUDGET"))
+            } else {
+                read_source(index, SourceRequest::Research { item, action }).and_then(|read| {
+                    let SourceObservation::Research(read) = read else {
+                        return Err(source_kind_mismatch());
+                    };
+                    evidence_ref = Some(read.observation);
+                    retry_evidence = read.evidence;
+                    let value = Value {
+                        guarantee: if read.has_citations {
+                            Guarantee::SourceReport
+                        } else {
+                            Guarantee::Unknown
+                        },
+                        units: read.units,
+                        bytes: canonical(&read.comparison)?,
+                        quantities: BTreeMap::new(),
+                    };
+                    if read.complete {
+                        Ok(Branch::Value(value))
+                    } else {
+                        Ok(Branch::Partial(value, action.incomplete_reason()))
+                    }
+                })
+            }
         } else if let Some(uri) = composition_source::read_url(item) {
             // The failed branch record must fit even if the read has no value.
             if available < 512 {
                 Ok(Branch::Blocked("BRANCH_EVIDENCE_BUDGET"))
             } else {
-                source_packet(index, uri).and_then(|(reference, packet)| {
+                read_source(index, SourceRequest::Url(uri)).and_then(|read| {
+                    let SourceObservation::Url(reference, packet) = read else {
+                        return Err(source_kind_mismatch());
+                    };
                     let value = if let Some(code) = &packet.failure {
                         Err(failure(code, "The requested source was not obtained."))
                     } else {
@@ -444,11 +572,16 @@ pub(crate) fn evaluate_items(
                     };
                     evidence_ref = Some(reference);
                     if packet.retry_after.is_some() {
-                        retry_evidence = Some(packet);
+                        retry_evidence.push(*packet);
                     }
                     value
                 })
             }
+        } else if attached
+            && let Some(action) = AnalysisAction::bind(&item.intent)
+            && let Some(end) = deadline
+        {
+            evaluate_attached_item(&action, bundle, english, end, available)
         } else if let Intent::SelectRequestJsonNumber { source, pointer } = item.intent.as_ref() {
             match sources.get(source) {
                 Some(reference) => {
@@ -522,6 +655,7 @@ pub(crate) fn evaluate_items(
         let reference = retain_observation(index, &bytes)?;
         graph.observe(&id, &reference, &prerequisites)?;
         if observed.state == BranchState::Confirmed
+            && composition_source::read_url(item).is_some()
             && let Some(evidence) = observed.evidence_ref
         {
             sources.insert(id.clone(), evidence.to_owned());
@@ -531,6 +665,11 @@ pub(crate) fn evaluate_items(
                 || value.guarantee == Guarantee::Hypothesis
                 || (output.guarantee == Guarantee::Computed
                     && value.guarantee == Guarantee::SourceReport)
+                || (value.guarantee == Guarantee::Derived
+                    && matches!(
+                        output.guarantee,
+                        Guarantee::Computed | Guarantee::SourceReport
+                    ))
             {
                 output.guarantee = value.guarantee;
             }
@@ -560,11 +699,50 @@ pub(crate) fn evaluate_items(
             reason_code,
             artifact_ref: reference,
         });
-        if let Some(packet) = retry_evidence {
-            output.retry_evidence.push(packet);
-        }
+        output.retry_evidence.extend(retry_evidence);
     }
     Ok(())
+}
+
+fn source_kind_mismatch() -> Error {
+    failure(
+        "COMPOUND_SOURCE_MISMATCH",
+        "The read observation does not match the authored operation.",
+    )
+}
+
+fn evaluate_attached_item(
+    action: &AnalysisAction<'_>,
+    bundle: &InputBundle,
+    english: bool,
+    deadline: Instant,
+    available: usize,
+) -> Result<Branch> {
+    let observed = action.observe(&bundle.request.attachments, english, deadline, available)?;
+    let bytes = observed.proof_bytes()?;
+    let value = Value {
+        guarantee: Guarantee::Derived,
+        units: observed.units,
+        bytes,
+        quantities: observed
+            .exact_value
+            .map(|exact| ("", exact))
+            .into_iter()
+            .collect(),
+    };
+    if !observed.condition_confirmed {
+        Ok(Branch::Partial(
+            value,
+            "BRANCH_ATTACHMENT_CONDITION_UNCONFIRMED",
+        ))
+    } else if value.quantities.is_empty() {
+        Ok(Branch::Partial(
+            value,
+            "BRANCH_ATTACHMENT_VALUE_UNAVAILABLE",
+        ))
+    } else {
+        Ok(Branch::Value(value))
+    }
 }
 
 fn observation_size(bytes: &[u8], units: &[String]) -> usize {
@@ -620,6 +798,36 @@ fn branch_status(english: bool, state: BranchState, reason: Option<&str>) -> &'s
         }
         (false, _, Some("BRANCH_REFERENCE_VALUE_UNAVAILABLE")) => {
             "参照先で指定の数値を利用できません。"
+        }
+        (true, _, Some("BRANCH_ATTACHMENT_CONDITION_UNCONFIRMED")) => {
+            "The attached document did not establish the filter for this item."
+        }
+        (false, _, Some("BRANCH_ATTACHMENT_CONDITION_UNCONFIRMED")) => {
+            "添付資料で絞り込み条件を確定できませんでした。"
+        }
+        (true, _, Some("BRANCH_ATTACHMENT_VALUE_UNAVAILABLE")) => {
+            "The filtered rows did not provide a total."
+        }
+        (false, _, Some("BRANCH_ATTACHMENT_VALUE_UNAVAILABLE")) => {
+            "絞り込んだ行から合計値を得られませんでした。"
+        }
+        (true, _, Some("WEB_RESEARCH_INSUFFICIENT_SOURCES")) => {
+            "Fewer than two article bodies could be verified for this topic."
+        }
+        (false, _, Some("WEB_RESEARCH_INSUFFICIENT_SOURCES")) => {
+            "この話題を確認できた記事本文が2件に達しませんでした。"
+        }
+        (true, _, Some("WEB_RESEARCH_INSUFFICIENT_PUBLISHERS")) => {
+            "The available article bodies did not establish a comparison across publishers."
+        }
+        (false, _, Some("WEB_RESEARCH_INSUFFICIENT_PUBLISHERS")) => {
+            "取得できた記事本文から、別々の発信元での比較を確認できませんでした。"
+        }
+        (true, _, Some("NEWS_FILE_DELIVERY_UNAVAILABLE")) => {
+            "News can be shown in chat. Remove the file destination to retrieve it."
+        }
+        (false, _, Some("NEWS_FILE_DELIVERY_UNAVAILABLE")) => {
+            "ニュースはチャット表示に対応しています。取得するには保存先の指定を外してください。"
         }
         (true, _, Some(ports::READ_PERMISSION_REQUIRED)) => {
             "This source hostname is not authorized."
@@ -755,6 +963,9 @@ pub(crate) fn explain_previous(
     let mut branches = Vec::with_capacity(items.len());
     let mut visible = Vec::new();
     let parent_english = supports_english_output_locale(&request.locale);
+    let attached = !request.attachments.is_empty();
+    let deadline = Instant::now() + Duration::from_millis(request.budget.deadline_ms);
+    let mut attached_quantities = BTreeMap::new();
     for (index, ((item, node), bytes)) in items
         .iter()
         .zip(&expected_nodes)
@@ -783,6 +994,87 @@ pub(crate) fn explain_previous(
             || canonical(&saved)? != *bytes
         {
             return Err(invalid());
+        }
+        if attached
+            && let Some(action) = AnalysisAction::bind(&item.intent)
+            && let Some(value) = &saved.value
+        {
+            let actual = action.verify_retained(
+                &request.attachments,
+                parent_english,
+                deadline,
+                request.budget.max_evidence_bytes / 2,
+                &value.bytes,
+            )?;
+            if actual.units != value.units
+                || value.guarantee != Guarantee::Derived
+                || actual.exact_value.is_some() != (saved.state == BranchState::Confirmed)
+            {
+                return Err(invalid());
+            }
+            attached_quantities.insert(saved.node_id, actual.exact_value);
+        }
+        if news_items_enabled(parent)
+            && let Some(action) = NewsAction::bind(&item.intent)
+        {
+            if let Some(reference) = saved.evidence_ref {
+                let actual =
+                    composition_source::replay_news(store, parent, item, &action, reference)?;
+                if let Some(value) = &saved.value {
+                    let guarantee = if actual.confirmed {
+                        Guarantee::SourceReport
+                    } else {
+                        Guarantee::Unknown
+                    };
+                    let reason = if actual.complete {
+                        None
+                    } else if actual.confirmed {
+                        Some("NEWS_PARTIALLY_CONFIRMED")
+                    } else {
+                        Some("NEWS_ARTICLES_UNAVAILABLE")
+                    };
+                    if actual.report_bytes != value.bytes
+                        || value.units != actual.units
+                        || value.guarantee != guarantee
+                        || saved.reason_code != reason
+                        || (saved.state == BranchState::Confirmed) != actual.complete
+                    {
+                        return Err(invalid());
+                    }
+                } else if saved.reason_code != Some("BRANCH_EVIDENCE_BUDGET") {
+                    return Err(invalid());
+                }
+            } else if saved.value.is_some() {
+                return Err(invalid());
+            }
+        }
+        if research_items_enabled(parent)
+            && let Some(action) = ResearchAction::for_item(parent, item)
+        {
+            if let Some(reference) = saved.evidence_ref {
+                let actual =
+                    research_goal::replay_composed(store, parent, item, action, reference)?;
+                if let Some(value) = &saved.value {
+                    let guarantee = if actual.has_citations {
+                        Guarantee::SourceReport
+                    } else {
+                        Guarantee::Unknown
+                    };
+                    let reason = (!actual.complete).then_some(action.incomplete_reason());
+                    if value.bytes != canonical(&actual.comparison)?
+                        || value.units != actual.units
+                        || value.guarantee != guarantee
+                        || saved.reason_code != reason
+                        || (saved.state == BranchState::Confirmed) != actual.complete
+                    {
+                        return Err(invalid());
+                    }
+                } else if saved.reason_code != Some("BRANCH_EVIDENCE_BUDGET") {
+                    return Err(invalid());
+                }
+            } else if saved.value.is_some() {
+                return Err(invalid());
+            }
         }
         visible.extend(display_units(&saved, index + 1, parent_english));
         branches.push(saved);
@@ -855,74 +1147,85 @@ pub(crate) fn explain_previous(
             continue;
         }
         let value = branch.value.as_ref().ok_or_else(invalid)?;
-        match item.intent.as_ref() {
-            Intent::Calculate { expression } => {
-                let calculation = language::calculate(expression)?;
-                if canonical(&calculation)? != value.bytes {
+        if let Some(action) = language::CalculationAction::bind(&item.intent) {
+            let kept = action.decode_observation(&value.bytes)?;
+            let mut quantities = BTreeMap::new();
+            for used in kept.consumed() {
+                let key = action.reference_source(&used.step_id).ok_or_else(invalid)?;
+                let predecessor = branches
+                    .iter()
+                    .position(|saved| saved.node_id == key)
+                    .ok_or_else(invalid)?;
+                let field = used.step_id.strip_prefix(key).ok_or_else(invalid)?;
+                let field = field.strip_prefix('-').unwrap_or(field);
+                if branches[predecessor].state != BranchState::Confirmed
+                    || observed.get(key) != Some(&used.artifact_sha256)
+                    || !proves_consumed_value(
+                        &items[predecessor].intent,
+                        &branches[predecessor],
+                        attached_quantities.get(key).and_then(Option::as_deref),
+                        field,
+                        &used.exact_value,
+                    )?
+                {
                     return Err(invalid());
                 }
-                append_calculation_explanation(&calculation, english, &mut units);
+                if !quantities.contains_key(&used.step_id) {
+                    let number = predecessor + 1;
+                    let amount = &used.exact_value;
+                    units.push(if english {
+                        format!("Uses {amount} from request {number}.")
+                    } else {
+                        format!("依頼 {number} の値 {amount} を使いました。")
+                    });
+                    quantities.insert(
+                        used.step_id.clone(),
+                        language::SequenceValue {
+                            exact_value: amount.clone(),
+                            artifact_sha256: used.artifact_sha256.clone(),
+                        },
+                    );
+                }
             }
-            Intent::CalculateFromRequestItems {
-                expression,
-                requires,
-            } => {
-                let kept: language::ResolvedSequenceCalculation =
-                    serde_json::from_slice(&value.bytes)?;
-                let mut quantities = BTreeMap::new();
-                for used in &kept.consumed {
-                    let key = requires
-                        .iter()
-                        .find(|id| {
-                            used.step_id == **id
-                                || used
-                                    .step_id
-                                    .strip_prefix(id.as_str())
-                                    .is_some_and(|suffix| suffix.starts_with('-'))
-                        })
-                        .ok_or_else(invalid)?;
-                    let predecessor = branches
-                        .iter()
-                        .position(|saved| saved.node_id == key)
-                        .ok_or_else(invalid)?;
-                    let field = used
-                        .step_id
-                        .strip_prefix(key.as_str())
-                        .ok_or_else(invalid)?;
-                    let field = field.strip_prefix('-').unwrap_or(field);
-                    if branches[predecessor].state != BranchState::Confirmed
-                        || observed.get(key) != Some(&used.artifact_sha256)
-                        || !proves_consumed_value(
-                            &items[predecessor].intent,
-                            &branches[predecessor],
-                            field,
-                            &used.exact_value,
-                        )?
-                    {
-                        return Err(invalid());
-                    }
-                    if !quantities.contains_key(&used.step_id) {
-                        let number = predecessor + 1;
-                        let amount = &used.exact_value;
-                        units.push(if english {
-                            format!("Uses {amount} from request {number}.")
-                        } else {
-                            format!("依頼 {number} の値 {amount} を使いました。")
-                        });
-                        quantities.insert(
-                            used.step_id.clone(),
-                            language::SequenceValue {
-                                exact_value: amount.clone(),
-                                artifact_sha256: used.artifact_sha256.clone(),
-                            },
-                        );
-                    }
-                }
-                let actual = language::calculate_sequence_expression(expression, &quantities)?;
-                if actual != kept || canonical(&actual)? != value.bytes {
-                    return Err(invalid());
-                }
-                append_calculation_explanation(&kept.calculation, english, &mut units);
+            let prerequisites = consumed
+                .get(branch.node_id)
+                .and_then(Option::as_ref)
+                .ok_or_else(invalid)?;
+            let actual = action.observe(&quantities, prerequisites)?;
+            if actual.proof_bytes()? != value.bytes {
+                return Err(invalid());
+            }
+            append_calculation_explanation(actual.calculation(), english, &mut units);
+            continue;
+        }
+        if let Some(action) = math::ProbabilityAction::bind(&item.intent) {
+            let actual = action.verify_retained(&value.bytes)?;
+            if value.units.as_slice() != std::slice::from_ref(&actual.unit) {
+                return Err(invalid());
+            }
+            units.extend(actual.explain(english));
+            continue;
+        }
+        match item.intent.as_ref() {
+            Intent::AnalyzeAttachments { .. } if attached => {
+                units.extend(value.units.iter().cloned());
+            }
+            Intent::CompareWebResearch { .. } if research_items_enabled(parent) => {
+                units.push(if english {
+                    "This comparison uses the article bodies saved with the previous request."
+                        .into()
+                } else {
+                    "前の依頼で保存した記事本文を使って照合しました。".into()
+                });
+                units.extend(value.units.iter().cloned());
+            }
+            Intent::AskCurrentNews { .. } if news_items_enabled(parent) => {
+                units.push(if english {
+                    "Publication time comes from the publisher. This explanation uses the saved articles.".into()
+                } else {
+                    "掲載日時は配信元の表示です。今回は保存した記事を参照しました。".into()
+                });
+                units.extend(value.units.iter().cloned());
             }
             Intent::SelectRequestJsonNumber { source, pointer } => {
                 let predecessor = branches
@@ -981,6 +1284,7 @@ pub(crate) fn explain_previous(
 fn proves_consumed_value(
     intent: &Intent,
     observation: &Observation<'_>,
+    attached_quantity: Option<&str>,
     field: &str,
     expected: &str,
 ) -> Result<bool> {
@@ -988,15 +1292,18 @@ fn proves_consumed_value(
         return Ok(false);
     };
     let bytes = &value.bytes;
-    Ok(match intent {
-        Intent::Calculate { .. } if field.is_empty() => {
-            serde_json::from_slice::<Calculation>(bytes)?.exact_value == expected
+    if field.is_empty() {
+        if let Some(action) = language::CalculationAction::bind(intent) {
+            return Ok(action.decode_observation(bytes)?.calculation().exact_value == expected);
         }
-        Intent::CalculateFromRequestItems { .. } if field.is_empty() => {
-            serde_json::from_slice::<language::ResolvedSequenceCalculation>(bytes)?
-                .calculation
-                .exact_value
-                == expected
+        if let Some(action) = math::ProbabilityAction::bind(intent) {
+            let produced = action.verify_retained(bytes)?;
+            return Ok(produced.quantity.as_deref() == Some(expected));
+        }
+    }
+    Ok(match intent {
+        Intent::AnalyzeAttachments { .. } if field.is_empty() => {
+            attached_quantity == Some(expected)
         }
         Intent::SelectRequestJsonNumber { .. } if field.is_empty() => {
             serde_json::from_slice::<serde_json::Value>(bytes)?
@@ -1080,11 +1387,20 @@ pub(crate) fn verify_delivery(
     if identity(request)? != result.id
         || result.branch_outcomes.len() != items.len()
         || result.calculation.is_some()
-        || !result.evidence.is_empty()
         || plan.locale != request.locale
     {
         return Err(invalid());
     }
+    let mut read_usage = if research_items_enabled(bundle) {
+        let reserved = items.len() + 3 + usize::from(request.output_path.is_some())
+            - live_read_count(bundle, items);
+        let starts = (request.budget.max_actions as usize)
+            .checked_sub(reserved)
+            .ok_or_else(invalid)?;
+        Some((starts, request.budget.max_evidence_bytes / 2))
+    } else {
+        None
+    };
     let mut graph = Scheduler::new(nodes(items).collect(), request.budget.max_actions)?;
     let mut observed = Outcome::new();
     evaluate_items(
@@ -1092,20 +1408,53 @@ pub(crate) fn verify_delivery(
         bundle,
         items,
         &mut graph,
-        || false,
-        |index, uri| {
+        (!request.attachments.is_empty())
+            .then(|| Instant::now() + Duration::from_millis(request.budget.deadline_ms)),
+        |index, source| {
             let branch = &result.branch_outcomes[index];
             let bytes =
                 store.get_bytes(&request.actor_id, &request.case_id, &branch.artifact_ref)?;
             let retained: RetainedObservation = serde_json::from_slice(&bytes)?;
             let reference = retained.evidence_ref.ok_or_else(invalid)?;
-            let packet = retained_source_packet(store, bundle, uri, &reference).map_err(
-                |error| match error {
-                    Error::Contract { code, .. } if code == "COMPOUND_SOURCE_MISMATCH" => invalid(),
-                    error => error,
-                },
-            )?;
-            Ok((reference, packet))
+            let observed_source = match source {
+                SourceRequest::Url(uri) => retained_source_packet(store, bundle, uri, &reference)
+                    .map(|packet| SourceObservation::Url(reference, Box::new(packet))),
+                SourceRequest::News { item, action } => {
+                    composition_source::replay_news(store, bundle, item, &action, &reference)
+                        .map(SourceObservation::News)
+                }
+                SourceRequest::Research { item, action } => {
+                    research_goal::replay_composed(store, bundle, item, action, &reference)
+                        .map(SourceObservation::Research)
+                }
+            }
+            .map_err(|error| match error {
+                Error::Contract { code, .. }
+                    if matches!(
+                        code.as_str(),
+                        "COMPOUND_SOURCE_MISMATCH"
+                            | "COMPOUND_NEWS_PROOF_INVALID"
+                            | "WEB_RESEARCH_MISMATCH"
+                    ) =>
+                {
+                    invalid()
+                }
+                error => error,
+            })?;
+            if let Some((starts_remaining, bytes_remaining)) = &mut read_usage {
+                let (starts, bytes) = match &observed_source {
+                    SourceObservation::Url(_, packet) => {
+                        (packet.redirect_chain.len(), packet.raw_body.len())
+                    }
+                    SourceObservation::News(news) => (news.read_starts, news.raw_bytes),
+                    SourceObservation::Research(research) => {
+                        (research.read_starts, research.raw_bytes)
+                    }
+                };
+                *starts_remaining = starts_remaining.checked_sub(starts).ok_or_else(invalid)?;
+                *bytes_remaining = bytes_remaining.checked_sub(bytes).ok_or_else(invalid)?;
+            }
+            Ok(observed_source)
         },
         |index, bytes| {
             let reference = &result.branch_outcomes[index].artifact_ref;
@@ -1122,6 +1471,7 @@ pub(crate) fn verify_delivery(
         .map(|branch| branch.artifact_ref.clone())
         .collect();
     if !observed.complete()
+        || observed.retry_evidence != result.evidence
         || observed.branches != result.branch_outcomes
         || result.dependencies != dependencies
         || plan.dependencies.len() != dependencies.len() + 1
@@ -1151,19 +1501,25 @@ pub(crate) fn verify_retry_source(
             "Saved Retry-After does not match an authored fetch item and its observation.",
         )
     };
-    let Intent::IndependentRequests { items } = &bundle.meaning.intent else {
-        return Err(invalid());
-    };
+    let items = delivery_items(bundle)?;
     if identity(&bundle.request)? != result.id
         || !result.evidence.contains(packet)
         || packet.mode != "LIVE"
-        || packet.packet_kind != "FETCH_FAILURE"
-        || packet.provider_id != "https-direct-url-v1"
+        || !matches!(packet.packet_kind.as_str(), "FETCH_FAILURE" | "SEARCH_LIST")
         || packet.failure.is_none()
         || packet.retry_after.is_none()
         || packet.raw_sha256 != digest(&packet.raw_body)
-        || packet.id != ports::fetch_packet_identity(packet)?
+        || (packet.packet_kind == "FETCH_FAILURE"
+            && packet.id != ports::fetch_packet_identity(packet)?)
     {
+        return Err(invalid());
+    }
+    if (ports::is_news_packet(packet) || research_items_enabled(bundle))
+        && verify_scoped_retry(store, bundle, result, items, packet)?
+    {
+        return Ok(());
+    }
+    if packet.provider_id != "https-direct-url-v1" || packet.packet_kind != "FETCH_FAILURE" {
         return Err(invalid());
     }
     let request = &bundle.request;
@@ -1195,6 +1551,61 @@ pub(crate) fn verify_retry_source(
     }
     Err(invalid())
 }
+
+fn verify_scoped_retry(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    items: &[IndependentRequest],
+    packet: &EvidencePacket,
+) -> Result<bool> {
+    let request = &bundle.request;
+    for (index, item) in items.iter().enumerate() {
+        let news = (news_items_enabled(bundle) && ports::is_news_packet(packet))
+            .then(|| NewsAction::bind(&item.intent))
+            .flatten();
+        let research = (research_items_enabled(bundle) && !ports::is_news_packet(packet))
+            .then(|| ResearchAction::for_item(bundle, item))
+            .flatten();
+        if news.is_none() && research.is_none() {
+            continue;
+        }
+        let Some(branch) = result.branch_outcomes.get(index) else {
+            continue;
+        };
+        let id = node_id(index);
+        if branch.node_id != id || !result.dependencies.contains(&branch.artifact_ref) {
+            continue;
+        }
+        let bytes = store.get_bytes(&request.actor_id, &request.case_id, &branch.artifact_ref)?;
+        let observed: RetainedObservation = serde_json::from_slice(&bytes)?;
+        if observed.node_id == id
+            && observed.input_fingerprint == bundle.fingerprint
+            && observed.source_range == (item.source.start, item.source.end)
+            && let Some(reference) = observed.evidence_ref
+        {
+            let is_retained = if let Some(action) = news {
+                composition_source::replay_news(store, bundle, item, &action, &reference)?
+                    .retry_evidence
+                    .contains(packet)
+            } else if let Some(action) = research {
+                research_goal::replay_composed(store, bundle, item, action, &reference)?
+                    .evidence
+                    .contains(packet)
+            } else {
+                false
+            };
+            if is_retained {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+#[cfg(test)]
+#[path = "composition/news_tests.rs"]
+mod news_tests;
 
 #[cfg(test)]
 mod tests {

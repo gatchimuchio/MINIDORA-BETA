@@ -3,7 +3,7 @@
 use crate::{
     attached_document::lookup_field,
     document::{CsvChartData, CsvChartFileSource, CsvInput, csv_chart_data_from_files},
-    input::verify_attached_analysis_input,
+    input::{uses_english_attached_analysis, verify_attached_analysis_input},
     language::{decimal_quantity_parts, rational_text},
     xlsx::{self, CellValue, Row},
 };
@@ -26,6 +26,71 @@ pub(crate) struct AnalysisOutcome {
     pub condition_bytes: Vec<u8>,
     pub table_bytes: Vec<u8>,
     pub units: Vec<String>,
+    pub condition_confirmed: bool,
+    pub exact_value: Option<String>,
+}
+
+impl AnalysisOutcome {
+    pub(crate) fn proof_bytes(&self) -> Result<Vec<u8>> {
+        let condition = std::str::from_utf8(&self.condition_bytes).map_err(|_| invalid_table())?;
+        let table = std::str::from_utf8(&self.table_bytes).map_err(|_| invalid_table())?;
+        canonical(&(condition, table))
+    }
+}
+
+pub(crate) struct AnalysisAction<'a> {
+    label: &'a str,
+    filter_column: &'a str,
+    value_column: &'a str,
+    table_media: AttachmentTableMedia,
+    sheet: Option<&'a str>,
+}
+
+impl<'a> AnalysisAction<'a> {
+    pub(crate) fn bind(intent: &'a Intent) -> Option<Self> {
+        let Intent::AnalyzeAttachments {
+            label,
+            filter_column,
+            value_column,
+            table_media,
+            sheet,
+        } = intent
+        else {
+            return None;
+        };
+        Some(Self {
+            label: &label.text,
+            filter_column: &filter_column.text,
+            value_column: &value_column.text,
+            table_media: *table_media,
+            sheet: sheet.as_ref().map(|span| span.text.as_str()),
+        })
+    }
+
+    pub(crate) fn observe(
+        &self,
+        attachments: &[RequestAttachment],
+        english: bool,
+        deadline: Instant,
+        max_evidence_bytes: usize,
+    ) -> Result<AnalysisOutcome> {
+        observe(self, attachments, english, deadline, max_evidence_bytes)
+    }
+
+    pub(crate) fn verify_retained(
+        &self,
+        attachments: &[RequestAttachment],
+        english: bool,
+        deadline: Instant,
+        max_evidence_bytes: usize,
+        proof: &[u8],
+    ) -> Result<AnalysisOutcome> {
+        let observed = self.observe(attachments, english, deadline, max_evidence_bytes)?;
+        if observed.proof_bytes()? != proof {
+            return Err(invalid_table());
+        }
+        Ok(observed)
+    }
 }
 
 #[derive(Serialize)]
@@ -90,25 +155,38 @@ pub(crate) fn produce(bundle: &InputBundle, started: Instant) -> Result<Analysis
     let deadline = started
         .checked_add(Duration::from_millis(bundle.request.budget.deadline_ms))
         .ok_or_else(|| failure("RESOURCE_LIMIT", "集計の期限を確定できません。"))?;
+    let action = AnalysisAction::bind(&bundle.meaning.intent).ok_or_else(|| {
+        failure(
+            "ATTACHED_ANALYSIS_INPUT_MISMATCH",
+            "添付資料の集計条件を元の発話と照合できません。",
+        )
+    })?;
+    action.observe(
+        &bundle.request.attachments,
+        uses_english_attached_analysis(bundle),
+        deadline,
+        bundle.request.budget.max_evidence_bytes,
+    )
+}
+
+fn observe(
+    action: &AnalysisAction<'_>,
+    attachments: &[RequestAttachment],
+    english: bool,
+    deadline: Instant,
+    max_evidence_bytes: usize,
+) -> Result<AnalysisOutcome> {
     deadline_check(deadline)?;
-    let Intent::AnalyzeAttachments {
+    let &AnalysisAction {
         label,
         filter_column,
         value_column,
         table_media,
         sheet,
-    } = &bundle.meaning.intent
-    else {
-        return Err(failure(
-            "ATTACHED_ANALYSIS_INPUT_MISMATCH",
-            "添付資料の集計条件を元の発話と照合できません。",
-        ));
-    };
-    let (tables, documents): (Vec<_>, Vec<_>) =
-        bundle.request.attachments.iter().partition(|file| {
-            RequestAttachment::is_csv_name(&file.name)
-                || RequestAttachment::is_xlsx_name(&file.name)
-        });
+    } = action;
+    let (tables, documents): (Vec<_>, Vec<_>) = attachments.iter().partition(|file| {
+        RequestAttachment::is_csv_name(&file.name) || RequestAttachment::is_xlsx_name(&file.name)
+    });
     if tables.is_empty() {
         let (code, message) = match table_media {
             AttachmentTableMedia::Csv => (
@@ -132,7 +210,7 @@ pub(crate) fn produce(bundle: &InputBundle, started: Instant) -> Result<Analysis
         .count();
     let xlsx_count = tables.len() - csv_count;
     if matches!(
-        (*table_media, csv_count, xlsx_count),
+        (table_media, csv_count, xlsx_count),
         (AttachmentTableMedia::Csv, _, 1..) | (AttachmentTableMedia::Xlsx, 1.., _)
     ) {
         return Err(failure(
@@ -146,31 +224,26 @@ pub(crate) fn produce(bundle: &InputBundle, started: Instant) -> Result<Analysis
             "指定したシートを含むExcel（XLSX）を添付してください。",
         ));
     }
-    if filter_column.text == value_column.text {
+    if filter_column == value_column {
         return Err(failure(
             "ATTACHED_ANALYSIS_COLUMNS",
             "絞り込みの列と合計する数値の列を別々に指定してください。",
         ));
     }
-    let condition = lookup_field(&documents, &label.text, deadline)?;
+    let condition = lookup_field(&documents, label, deadline)?;
     let condition_bytes = canonical(&condition)?;
     let filter = condition
         .value
         .as_deref()
-        .map(|value| (filter_column.text.as_str(), value));
+        .map(|value| (filter_column, value));
     let tables = tables
         .into_iter()
         .map(|file| {
             if RequestAttachment::is_csv_name(&file.name) {
                 Ok(TableInput::Csv(file))
             } else {
-                workbook_projection(
-                    file,
-                    sheet.as_ref().map(|span| span.text.as_str()),
-                    [&filter_column.text, &value_column.text],
-                    deadline,
-                )
-                .map(TableInput::Workbook)
+                workbook_projection(file, sheet, [filter_column, value_column], deadline)
+                    .map(TableInput::Workbook)
             }
         })
         .collect::<Result<Vec<_>>>()?;
@@ -179,23 +252,22 @@ pub(crate) fn produce(bundle: &InputBundle, started: Instant) -> Result<Analysis
         .map(TableInput::math_input)
         .collect::<Vec<_>>();
     deadline_check(deadline)?;
-    let mut result =
-        match csv_chart_data_from_files(&csv, &filter_column.text, &value_column.text, filter) {
-            Ok(data) => sum_groups(data, deadline)?,
-            Err(Error::Contract { code, .. })
-                if matches!(code.as_str(), "CSV_CHART_NO_ROWS" | "CSV_CHART_NO_VALUES") =>
-            {
-                empty_selection(&csv, &value_column.text, filter, &code, deadline)?
-            }
-            Err(error) => return Err(error),
-        };
+    let mut result = match csv_chart_data_from_files(&csv, filter_column, value_column, filter) {
+        Ok(data) => sum_groups(data, deadline)?,
+        Err(Error::Contract { code, .. })
+            if matches!(code.as_str(), "CSV_CHART_NO_ROWS" | "CSV_CHART_NO_VALUES") =>
+        {
+            empty_selection(&csv, value_column, filter, &code, deadline)?
+        }
+        Err(error) => return Err(error),
+    };
     let source_sha256 = source_provenance(&tables, &mut result, deadline)?;
     let table = AnalysisTable {
         kind: "minidora.attached-analysis.table.v1",
         condition_sha256: digest(&condition_bytes),
         source_sha256,
-        filter_column: &filter_column.text,
-        value_column: &value_column.text,
+        filter_column,
+        value_column,
         filter_value: condition.value.as_deref(),
         scope: if filter.is_some() {
             "DOCUMENT_FILTERED"
@@ -205,12 +277,57 @@ pub(crate) fn produce(bundle: &InputBundle, started: Instant) -> Result<Analysis
         result,
     };
     let table_bytes = canonical(&table)?;
+    let condition_confirmed = table.filter_value.is_some();
+    let exact_value = table
+        .result
+        .sum
+        .as_deref()
+        .filter(|_| condition_confirmed)
+        .map(|sum| match &table.result.unit {
+            Some(unit) => format!("{sum} {unit}"),
+            None => sum.into(),
+        });
+    let units = if english {
+        english_units(
+            condition.english_units(!documents.is_empty()),
+            &table,
+            csv_count,
+            xlsx_count,
+        )
+    } else {
+        japanese_units(condition.units, &table, csv_count, xlsx_count)
+    };
+    let evidence_bytes = units.iter().fold(
+        condition_bytes.len().saturating_add(table_bytes.len()),
+        |bytes, unit| bytes.saturating_add(unit.len()).saturating_add(1),
+    );
+    if evidence_bytes > max_evidence_bytes {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "添付資料と表を照合した記録が根拠の上限を超えました。",
+        ));
+    }
+    deadline_check(deadline)?;
+    Ok(AnalysisOutcome {
+        condition_bytes,
+        table_bytes,
+        units,
+        condition_confirmed,
+        exact_value,
+    })
+}
+
+fn japanese_units(
+    mut units: Vec<String>,
+    table: &AnalysisTable<'_>,
+    csv_count: usize,
+    xlsx_count: usize,
+) -> Vec<String> {
     let result = &table.result;
-    let mut units = condition.units;
-    units.push(match filter {
-        Some((column, value)) => format!(
+    units.push(match table.filter_value {
+        Some(value) => format!(
             "資料の条件を使い、「{}」が「{}」と完全に一致する行に絞りました。",
-            display(column),
+            display(table.filter_column),
             display(value)
         ),
         None if xlsx_count == 0 => {
@@ -227,7 +344,7 @@ pub(crate) fn produce(bundle: &InputBundle, started: Instant) -> Result<Analysis
     } else {
         units.push(format!(
             "添付表 {}件（CSV {csv_count}件、Excel {xlsx_count}件）。{row_counts}",
-            tables.len()
+            csv_count + xlsx_count
         ));
         for workbook in &result.workbooks {
             units.push(format!(
@@ -249,7 +366,7 @@ pub(crate) fn produce(bundle: &InputBundle, started: Instant) -> Result<Analysis
             };
             format!(
                 "「{}」の合計は {amount}（数値{}件）です。",
-                display(&value_column.text),
+                display(table.value_column),
                 result.number_count
             )
         }
@@ -264,22 +381,60 @@ pub(crate) fn produce(bundle: &InputBundle, started: Instant) -> Result<Analysis
         }
         None => "対象行の指定列はすべて空欄で、合計できる値はありません。".into(),
     });
-    let evidence_bytes = units.iter().fold(
-        condition_bytes.len().saturating_add(table_bytes.len()),
-        |bytes, unit| bytes.saturating_add(unit.len()).saturating_add(1),
-    );
-    if evidence_bytes > bundle.request.budget.max_evidence_bytes {
-        return Err(failure(
-            "RESOURCE_LIMIT",
-            "添付資料と表を照合した記録が根拠の上限を超えました。",
+    units
+}
+
+fn english_units(
+    condition_units: Vec<String>,
+    table: &AnalysisTable<'_>,
+    csv_count: usize,
+    xlsx_count: usize,
+) -> Vec<String> {
+    let mut units = condition_units
+        .iter()
+        .map(|unit| display(unit))
+        .collect::<Vec<_>>();
+    let result = &table.result;
+    units.push(match table.filter_value {
+        Some(value) => format!(
+            "The calculation uses rows where \"{}\" exactly matches \"{}\".",
+            display(table.filter_column),
+            display(value),
+        ),
+        None => "The independent calculation uses all rows of the attached tables.".into(),
+    });
+    units.push(format!(
+        "Attached tables include {csv_count} CSV and {xlsx_count} Excel files. Selected {} of {} rows, with {} numeric values and {} blanks.",
+        result.selected_rows, result.total_rows, result.number_count, result.missing_rows,
+    ));
+    for workbook in &result.workbooks {
+        units.push(format!(
+            "\"{}\", worksheet \"{}\", SHA-256 {}.",
+            display(&workbook.name),
+            display(&workbook.sheet),
+            workbook.sha256
         ));
     }
-    deadline_check(deadline)?;
-    Ok(AnalysisOutcome {
-        condition_bytes,
-        table_bytes,
-        units,
-    })
+    if xlsx_count > 0 {
+        units.push("The Excel calculation uses stored cell values.".into());
+    }
+    units.push(match &result.sum {
+        Some(sum) => {
+            let unit = result
+                .unit
+                .as_deref()
+                .map_or_else(String::new, |unit| format!(" {}", display(unit)));
+            format!(
+                "The sum of \"{}\" is {sum}{unit} across {} numeric values.",
+                display(table.value_column),
+                result.number_count
+            )
+        }
+        None if result.status == "NO_MATCH" => "No rows matched the condition.".into(),
+        None if result.status == "NO_ROWS" => "The attached tables contain no data rows.".into(),
+        None => "The selected rows have no numeric values in the requested column.".into(),
+    });
+    units
 }
 
 enum TableInput<'a> {
@@ -766,6 +921,61 @@ fn display(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use minidora_domain::SourceSpan;
+
+    #[test]
+    fn shared_analysis_retains_one_proof_and_only_releases_a_confirmed_sum() {
+        let span = |text: &str| SourceSpan {
+            start: 0,
+            end: text.len(),
+            text: text.into(),
+        };
+        let intent = Intent::AnalyzeAttachments {
+            label: span("Scope"),
+            filter_column: span("Region"),
+            value_column: span("Amount"),
+            table_media: AttachmentTableMedia::Csv,
+            sheet: None,
+        };
+        let action = AnalysisAction::bind(&intent).unwrap();
+        let attachments = [
+            RequestAttachment {
+                name: "rows.csv".into(),
+                text: "Region,Amount\nWest,1.25 kg\nEast,4 kg\nWest,4 kg\n".into(),
+                binary_base64: None,
+            },
+            RequestAttachment {
+                name: "rule.txt".into(),
+                text: "Scope: West\n".into(),
+                binary_base64: None,
+            },
+        ];
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let japanese = action
+            .observe(&attachments, false, deadline, 32_000)
+            .unwrap();
+        assert!(japanese.condition_confirmed);
+        assert_eq!(japanese.exact_value.as_deref(), Some("21/4 kg"));
+        let retained = japanese.proof_bytes().unwrap();
+        let english = action
+            .verify_retained(&attachments, true, deadline, 32_000, &retained)
+            .unwrap();
+        assert_eq!(japanese.condition_bytes, english.condition_bytes);
+        assert_eq!(japanese.table_bytes, english.table_bytes);
+        assert!(english.units.iter().any(|line| line.contains("21/4 kg")));
+        assert!(english.units.iter().any(|line| line.contains("byte range")));
+        assert!(
+            action
+                .verify_retained(&attachments[..1], true, deadline, 32_000, &retained)
+                .is_err()
+        );
+        let unfiltered = action
+            .observe(&attachments[..1], false, deadline, 32_000)
+            .unwrap();
+        assert!(!unfiltered.condition_confirmed);
+        assert!(unfiltered.exact_value.is_none());
+        assert!(unfiltered.units.iter().any(|line| line.contains("37/4 kg")));
+    }
 
     #[test]
     fn workbook_and_csv_keep_raw_source_evidence_and_share_exact_scientific_sum() {

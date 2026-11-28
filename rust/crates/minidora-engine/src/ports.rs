@@ -24,6 +24,8 @@ pub(crate) const READ_PERMISSION_REQUIRED: &str = "READ_PERMISSION_REQUIRED";
 pub(crate) const READ_PERMISSION_REQUIRED_MESSAGE: &str =
     "The exact destination hostname is not in the authorized read scope";
 const NEWS_READ_PROVIDER: &str = "https-news-read-v1";
+pub(crate) const RESEARCH_XML_PACKET_KIND: &str = "RESEARCH_ARTICLE_XML";
+pub(crate) const RESEARCH_XML_PARSER_VERSION: &str = "strict-utf8-research-article-xml-v1";
 
 /// Transfer format for configured news sources. Interpretation is separate
 /// from transport and receiving a document does not authorize its links.
@@ -55,6 +57,21 @@ impl NewsWebFormat {
             Self::ListingXml => "strict-utf8-news-listing-xml-v1",
             Self::ListingHtml => "strict-utf8-news-listing-html-v1",
             Self::ArticleHtml => "strict-utf8-news-article-html-v1",
+        }
+    }
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum WebReadFormat {
+    News(NewsWebFormat),
+    ResearchXml,
+}
+
+impl WebReadFormat {
+    fn accept(self) -> &'static str {
+        match self {
+            Self::News(format) => format.mime(),
+            Self::ResearchXml => "application/xml, text/xml",
         }
     }
 }
@@ -122,14 +139,11 @@ fn env_present(names: &[&str]) -> bool {
         .any(|name| std::env::var_os(name).is_some_and(|v| !v.is_empty()))
 }
 
-fn uses_inherited_proxy(host: &str) -> bool {
-    if !env_present(&["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]) {
-        return false;
-    }
+fn inherited_proxy_bypasses(host: &str) -> bool {
     let bypass = std::env::var("NO_PROXY")
         .or_else(|_| std::env::var("no_proxy"))
         .unwrap_or_default();
-    !proxy_bypass_matches(host, &bypass)
+    proxy_bypass_matches(host, &bypass)
 }
 
 fn proxy_bypass_matches(host: &str, bypass: &str) -> bool {
@@ -221,38 +235,53 @@ fn bounded_resolve(host: &str, remaining: Duration) -> Result<Vec<SocketAddr>> {
         .map_err(Into::into)
 }
 
-fn client(url: &Url, budget: &RetrievalBudget) -> Result<Client> {
-    let remaining = budget.time_remaining()?;
-    let host = url.host_str().expect("approved domain");
-    let mut builder = Client::builder()
-        .redirect(Policy::none())
-        .retry(reqwest::retry::never())
-        .user_agent("MINIDORA-Rust/0.7 evidence-observer");
-    // A configured HTTPS proxy owns target DNS resolution and must enforce its
-    // destination policy. Never bypass inherited proxy/NO_PROXY or CA trust.
-    // For direct connections, validate every answer and pin inspected IPs to
-    // prevent a second DNS lookup from changing the destination.
-    if !uses_inherited_proxy(host) {
-        let mut addresses = bounded_resolve(host, remaining)?;
-        addresses.sort();
-        addresses.dedup();
-        if addresses.is_empty()
-            || addresses
-                .iter()
-                .any(|address| !public_address(address.ip()))
+fn vetted_dns_addresses(mut addresses: Vec<SocketAddr>) -> Result<Vec<SocketAddr>> {
+    let public_ipv4: BTreeSet<_> = addresses
+        .iter()
+        .filter(|address| address.is_ipv4() && public_address(address.ip()))
+        .copied()
+        .collect();
+    for &address in &addresses {
+        if public_address(address.ip()) {
+            continue;
+        }
+        let SocketAddr::V6(alias) = address else {
+            return Err(private_dns_refusal());
+        };
+        let [prefix, translation, third, fourth, fifth, sixth, high, low] = alias.ip().segments();
+        let embedded = std::net::Ipv4Addr::from((u32::from(high) << 16) | u32::from(low));
+        let original = SocketAddr::new(embedded.into(), alias.port());
+        // RFC 6052's well-known address can be a duplicate of a public A
+        // answer. Use only that independently returned A answer on the wire.
+        if [prefix, translation, third, fourth, fifth, sixth] != [0x64, 0xff9b, 0, 0, 0, 0]
+            || alias.scope_id() != 0
+            || alias.flowinfo() != 0
+            || !public_ipv4.contains(&original)
         {
             return Err(private_dns_refusal());
         }
-        builder = builder.resolve_to_addrs(host, &addresses);
     }
+    addresses.retain(|address| public_address(address.ip()));
+    addresses.sort_unstable();
+    addresses.dedup();
+    if addresses.is_empty() {
+        return Err(private_dns_refusal());
+    }
+    Ok(addresses)
+}
+
+fn client(url: &Url, budget: &mut RetrievalBudget) -> Result<Client> {
     let remaining = budget.time_remaining()?;
-    builder = builder.timeout(remaining).connect_timeout(remaining);
-    builder.build().map_err(|_| {
-        failure(
-            "HTTP_CLIENT_UNAVAILABLE",
-            "A verified HTTPS client could not be initialized",
-        )
-    })
+    let host = url.host_str().expect("approved domain");
+    let proxy_configured = env_present(&["HTTPS_PROXY", "https_proxy", "ALL_PROXY", "all_proxy"]);
+    // Leave proxy routing to the existing stack. A bypass rule can be
+    // interpreted differently by the HTTP client, so it does not allow reuse.
+    let addresses = if proxy_configured && !inherited_proxy_bypasses(host) {
+        None
+    } else {
+        Some(vetted_dns_addresses(bounded_resolve(host, remaining)?)?)
+    };
+    budget.client_for_route(host, addresses, !proxy_configured)
 }
 
 fn unix_ms_now() -> Result<u64> {
@@ -356,25 +385,36 @@ fn decode_body(content_type: &str, bytes: &[u8]) -> Result<String> {
 fn decode_body_with_format(
     content_type: &str,
     bytes: &[u8],
-    news: Option<NewsWebFormat>,
+    format: Option<WebReadFormat>,
 ) -> Result<String> {
     let mut parts = content_type.split(';');
     let mime = parts.next().unwrap_or("").trim().to_ascii_lowercase();
-    if let Some(format) = news {
-        if mime != format.mime() {
+    match format {
+        Some(WebReadFormat::News(news)) if mime != news.mime() => {
             return Err(failure(
                 "UNSUPPORTED_EVIDENCE_FORMAT",
                 "The news response media type does not match the configured format",
             ));
         }
-    } else if !matches!(
-        mime.as_str(),
-        "text/plain" | "text/markdown" | "text/x-wiki" | "application/json"
-    ) {
-        return Err(failure(
-            "UNSUPPORTED_EVIDENCE_FORMAT",
-            "Only UTF-8 plain text, Markdown, raw wikitext and JSON are supported",
-        ));
+        Some(WebReadFormat::ResearchXml)
+            if !matches!(mime.as_str(), "application/xml" | "text/xml") =>
+        {
+            return Err(failure(
+                "UNSUPPORTED_EVIDENCE_FORMAT",
+                "The research article response must be XML",
+            ));
+        }
+        None if !matches!(
+            mime.as_str(),
+            "text/plain" | "text/markdown" | "text/x-wiki" | "application/json"
+        ) =>
+        {
+            return Err(failure(
+                "UNSUPPORTED_EVIDENCE_FORMAT",
+                "Only UTF-8 plain text, Markdown, raw wikitext and JSON are supported",
+            ));
+        }
+        _ => {}
     }
     let mut charset = None;
     for part in parts {
@@ -575,6 +615,14 @@ pub(crate) struct RetrievalBudget {
     retry_not_before: BTreeMap<String, RetryGate>,
     observed_routes: BTreeSet<String>,
     compact_failure_uri_limit: Option<usize>,
+    // At most one idle client runtime is kept between reads in this Goal.
+    direct_client: Option<PinnedClient>,
+}
+
+struct PinnedClient {
+    host: String,
+    addresses: Vec<SocketAddr>,
+    client: Client,
 }
 
 struct RetryGate {
@@ -594,7 +642,48 @@ impl RetrievalBudget {
             retry_not_before: BTreeMap::new(),
             observed_routes: BTreeSet::new(),
             compact_failure_uri_limit: None,
+            direct_client: None,
         })
+    }
+
+    fn client_for_route(
+        &mut self,
+        host: &str,
+        addresses: Option<Vec<SocketAddr>>,
+        reuse: bool,
+    ) -> Result<Client> {
+        let remaining = self.time_remaining()?;
+        if reuse
+            && let Some(addresses) = &addresses
+            && let Some(pinned) = &self.direct_client
+            && pinned.host == host
+            && &pinned.addresses == addresses
+        {
+            return Ok(pinned.client.clone());
+        }
+        let mut builder = Client::builder()
+            .redirect(Policy::none())
+            .retry(reqwest::retry::never())
+            .user_agent("MINIDORA-Rust/0.7 evidence-observer")
+            .timeout(remaining)
+            .connect_timeout(remaining);
+        if let Some(addresses) = &addresses {
+            builder = builder.resolve_to_addrs(host, addresses);
+        }
+        let client = builder.build().map_err(|_| {
+            failure(
+                "HTTP_CLIENT_UNAVAILABLE",
+                "A verified HTTPS client could not be initialized",
+            )
+        })?;
+        if reuse && let Some(addresses) = addresses {
+            self.direct_client = Some(PinnedClient {
+                host: host.to_owned(),
+                addresses,
+                client: client.clone(),
+            });
+        }
+        Ok(client)
     }
 
     pub(crate) fn bound_failure_metadata(&mut self, max_uri_bytes: usize) {
@@ -616,6 +705,22 @@ impl RetrievalBudget {
         if let Some(read_deadline) = self.deadline.checked_sub(duration) {
             self.deadline = read_deadline;
         }
+    }
+
+    pub(crate) fn with_evidence_limit<T>(
+        &mut self,
+        limit: usize,
+        action: impl FnOnce(&mut Self) -> T,
+    ) -> (T, usize) {
+        let available = self.remaining_bytes;
+        let scoped = available.min(limit);
+        self.remaining_bytes = scoped;
+        let previous_metadata_bound = self.compact_failure_uri_limit.take();
+        let result = action(self);
+        self.compact_failure_uri_limit = previous_metadata_bound;
+        let consumed = scoped - self.remaining_bytes;
+        self.remaining_bytes = available - consumed;
+        (result, consumed)
     }
 
     pub(crate) fn time_remaining(&self) -> Result<Duration> {
@@ -762,6 +867,32 @@ pub(crate) fn fetch_with_budget(
     fetch_with_format(raw_url, None, permissions, budget, check_admission)
 }
 
+#[cfg(test)]
+std::thread_local! {
+    static NEWS_TEST_PACKETS: std::cell::RefCell<Option<std::collections::VecDeque<EvidencePacket>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+pub(crate) fn with_test_news_packets<T>(packets: Vec<EvidencePacket>, f: impl FnOnce() -> T) -> T {
+    struct Reset;
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            NEWS_TEST_PACKETS.with_borrow_mut(|slot| *slot = None);
+        }
+    }
+    NEWS_TEST_PACKETS.with_borrow_mut(|slot| {
+        assert!(slot.is_none(), "news fixtures cannot be nested");
+        *slot = Some(packets.into());
+    });
+    let _reset = Reset;
+    let output = f();
+    NEWS_TEST_PACKETS.with_borrow(|slot| {
+        assert!(slot.as_ref().unwrap().is_empty(), "unused news responses");
+    });
+    output
+}
+
 pub(crate) fn fetch_news_with_budget(
     raw_url: &str,
     format: NewsWebFormat,
@@ -769,12 +900,55 @@ pub(crate) fn fetch_news_with_budget(
     budget: &mut RetrievalBudget,
     check_admission: &dyn Fn() -> Result<()>,
 ) -> Result<ReadObservation<EvidencePacket>> {
-    fetch_with_format(raw_url, Some(format), permissions, budget, check_admission)
+    #[cfg(test)]
+    if let Some(packet) = NEWS_TEST_PACKETS.with_borrow_mut(|slot| {
+        slot.as_mut().map(|packets| {
+            packets
+                .pop_front()
+                .expect("unexpected news transport start")
+        })
+    }) {
+        let url = approved_url(raw_url, permissions)?;
+        check_admission()?;
+        budget.reserve_start(url.host_str().expect("approved domain"))?;
+        assert_eq!(packet.request_uri, raw_url);
+        assert_eq!(packet.parser_version, format.parser_version());
+        budget.remaining_bytes = budget
+            .remaining_bytes
+            .checked_sub(packet.raw_body.len())
+            .expect("the fixture must fit the original evidence budget");
+        return Ok(ReadObservation {
+            observation: packet,
+            redirect_wait: None,
+        });
+    }
+    fetch_with_format(
+        raw_url,
+        Some(WebReadFormat::News(format)),
+        permissions,
+        budget,
+        check_admission,
+    )
+}
+
+pub(crate) fn fetch_research_xml_with_budget(
+    raw_url: &str,
+    permissions: &Permissions,
+    budget: &mut RetrievalBudget,
+    check_admission: &dyn Fn() -> Result<()>,
+) -> Result<ReadObservation<EvidencePacket>> {
+    fetch_with_format(
+        raw_url,
+        Some(WebReadFormat::ResearchXml),
+        permissions,
+        budget,
+        check_admission,
+    )
 }
 
 fn fetch_with_format(
     raw_url: &str,
-    news: Option<NewsWebFormat>,
+    format: Option<WebReadFormat>,
     permissions: &Permissions,
     budget: &mut RetrievalBudget,
     check_admission: &dyn Fn() -> Result<()>,
@@ -782,19 +956,27 @@ fn fetch_with_format(
     let mut redirect_wait = None;
     let mut observation = fetch_packet(
         raw_url,
-        news,
+        format,
         permissions,
         budget,
         check_admission,
         &mut redirect_wait,
     )?;
-    if let Some(format) = news {
-        observation.provider_id = NEWS_READ_PROVIDER.into();
-        observation.parser_version = format.parser_version().into();
-        if observation.failure.is_none() {
-            observation.packet_kind = format.packet_kind().into();
+    match format {
+        Some(WebReadFormat::News(news)) => {
+            observation.provider_id = NEWS_READ_PROVIDER.into();
+            observation.parser_version = news.parser_version().into();
+            if observation.failure.is_none() {
+                observation.packet_kind = news.packet_kind().into();
+            }
+            observation.id = fetch_packet_identity(&observation)?;
         }
-        observation.id = fetch_packet_identity(&observation)?;
+        Some(WebReadFormat::ResearchXml) if observation.failure.is_none() => {
+            observation.packet_kind = RESEARCH_XML_PACKET_KIND.into();
+            observation.parser_version = RESEARCH_XML_PARSER_VERSION.into();
+            observation.id = fetch_packet_identity(&observation)?;
+        }
+        _ => {}
     }
     Ok(ReadObservation {
         observation,
@@ -804,7 +986,7 @@ fn fetch_with_format(
 
 fn fetch_packet(
     raw_url: &str,
-    news: Option<NewsWebFormat>,
+    format: Option<WebReadFormat>,
     permissions: &Permissions,
     budget: &mut RetrievalBudget,
     check_admission: &dyn Fn() -> Result<()>,
@@ -901,9 +1083,9 @@ fn fetch_packet(
             .timeout(remaining)
             .header(
                 "Accept",
-                news.map_or(
+                format.map_or(
                     "text/plain, text/markdown, application/json",
-                    NewsWebFormat::mime,
+                    WebReadFormat::accept,
                 ),
             )
             .header("Accept-Encoding", "identity")
@@ -928,6 +1110,17 @@ fn fetch_packet(
         };
         let status = response.status().as_u16();
         if matches!(status, 301 | 302 | 303 | 307 | 308) {
+            if format == Some(WebReadFormat::ResearchXml) {
+                return packet(
+                    &redirects,
+                    raw_url,
+                    url.as_str(),
+                    status,
+                    vec![],
+                    None,
+                    Some("RESEARCH_XML_REDIRECT_DENIED"),
+                );
+            }
             if redirects.len() >= MAX_HTTP_STARTS_PER_SOURCE {
                 return packet(
                     &redirects,
@@ -1017,7 +1210,7 @@ fn fetch_packet(
         };
         // News and composed reads retain failure status and any Retry-After.
         // Their evidence budget does not cover an unrelated error page.
-        if (news.is_some() || budget.compact_failure_uri_limit.is_some()) && status != 200 {
+        if (format.is_some() || budget.compact_failure_uri_limit.is_some()) && status != 200 {
             let code = if status == 429 {
                 "HTTP_RATE_LIMITED"
             } else {
@@ -1095,7 +1288,7 @@ fn fetch_packet(
         if !encoding.eq_ignore_ascii_case("identity") {
             return finish(raw, None, Some("UNSUPPORTED_CONTENT_ENCODING"));
         }
-        let decoded = match news {
+        let decoded = match format {
             Some(format) => decode_body_with_format(&content_type, &raw, Some(format)),
             None => decode_body(&content_type, &raw),
         };
@@ -1140,15 +1333,47 @@ pub(crate) fn validate_successful_packet(
     packet: &EvidencePacket,
     permissions: &Permissions,
 ) -> Result<()> {
+    validate_text_packet(
+        packet,
+        permissions,
+        "FETCHED_BODY",
+        "strict-utf8-identity-v1",
+    )
+}
+
+pub(crate) fn validate_research_xml_packet(
+    packet: &EvidencePacket,
+    permissions: &Permissions,
+) -> Result<()> {
+    if packet.request_uri != packet.final_uri || packet.redirect_chain.len() != 1 {
+        return Err(failure(
+            "RECOVERY_EVIDENCE_MISMATCH",
+            "The research XML body differs from its exact requested route",
+        ));
+    }
+    validate_text_packet(
+        packet,
+        permissions,
+        RESEARCH_XML_PACKET_KIND,
+        RESEARCH_XML_PARSER_VERSION,
+    )
+}
+
+fn validate_text_packet(
+    packet: &EvidencePacket,
+    permissions: &Permissions,
+    packet_kind: &str,
+    parser_version: &str,
+) -> Result<()> {
     validate_observed_route(packet, permissions)?;
     let extracted_text = std::str::from_utf8(&packet.raw_body)
         .map_err(|_| failure("RECOVERY_EVIDENCE_MISMATCH", "Observed body is not UTF-8"))?;
     if packet.mode != "LIVE"
-        || packet.packet_kind != "FETCHED_BODY"
+        || packet.packet_kind != packet_kind
         || packet.failure.is_some()
         || packet.retry_after.is_some()
         || packet.http_status != 200
-        || packet.parser_version != "strict-utf8-identity-v1"
+        || packet.parser_version != parser_version
         || packet.provider_id != "https-direct-url-v1"
         || packet.raw_sha256 != digest(&packet.raw_body)
         || packet.extracted_text.as_deref() != Some(extracted_text)
@@ -3701,6 +3926,30 @@ pub fn json_pointer_statistics(document: &str, pointer: &str) -> Result<JsonStat
 mod tests {
     use super::*;
     #[test]
+    fn dns64_duplicate_requires_the_same_independently_resolved_public_address() {
+        let public: SocketAddr = "93.184.215.14:443".parse().unwrap();
+        let alias: SocketAddr = "[64:ff9b::5db8:d70e]:443".parse().unwrap();
+        let other: SocketAddr = "[64:ff9b::5db8:d710]:443".parse().unwrap();
+        let private: SocketAddr = "10.10.0.1:443".parse().unwrap();
+        let private_alias: SocketAddr = "[64:ff9b::a0a:1]:443".parse().unwrap();
+        assert_eq!(
+            vetted_dns_addresses(vec![alias, public, public]).unwrap(),
+            [public]
+        );
+        for refused in [
+            vec![alias],
+            vec![public, other],
+            vec![public, alias, private],
+            vec![public, private_alias, private],
+        ] {
+            assert!(matches!(
+                vetted_dns_addresses(refused),
+                Err(minidora_domain::Error::Contract { code, .. }) if code == "PRIVATE_READ_TARGET"
+            ));
+        }
+    }
+
+    #[test]
     fn refused_private_dns_retains_only_a_previous_http_response() {
         let request = "https://source.example/start";
         assert!(matches!(
@@ -3894,6 +4143,26 @@ mod tests {
             .unwrap(),
             "'''見出し'''\n本文。"
         );
+    }
+    #[test]
+    fn xml_media_type_is_accepted_only_by_the_typed_research_transport() {
+        let text = "<article><body><p>Observed UTF-8 — original bytes.</p></body></article>";
+        let format = Some(WebReadFormat::ResearchXml);
+        assert_eq!(
+            decode_body_with_format("application/xml;charset=utf-8", text.as_bytes(), format)
+                .unwrap(),
+            text
+        );
+        assert_eq!(
+            decode_body_with_format("text/xml", text.as_bytes(), format).unwrap(),
+            text
+        );
+        assert!(decode_body("application/xml", text.as_bytes()).is_err());
+        assert!(decode_body_with_format("text/html", text.as_bytes(), format).is_err());
+        assert!(
+            decode_body_with_format("text/xml; charset=cp932", text.as_bytes(), format).is_err()
+        );
+        assert!(decode_body_with_format("text/xml", b"\xff", format).is_err());
     }
     #[test]
     fn direct_private_and_transition_addresses_are_rejected() {

@@ -176,6 +176,7 @@ fn reconcile_case(store: &Store, actor: &str, case: &str) -> Result<ResultRecord
                         | Intent::Search { .. }
                         | Intent::SearchWithFallback { .. }
                         | Intent::AskWeb { .. }
+                        | Intent::AskCurrentNews { .. }
                         | Intent::CompareWebResearch { .. }
                         | Intent::SummarizeBranchSource { .. }
                         | Intent::ReplaceBranchSource { .. }
@@ -4884,6 +4885,106 @@ fn verify_registered_input(store: &Store, bundle: &InputBundle, code: &str) -> R
     Ok(())
 }
 
+const CURRENT_NEWS_MISMATCH: &str = "RECOVERY_CURRENT_NEWS_MISMATCH";
+
+struct CurrentNewsNodes {
+    publisher: crate::news_source::NewsPublisher,
+    listing_ref: String,
+    review_ref: String,
+}
+
+fn verify_current_news_delivery(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    plan: &ContentPlan,
+) -> Result<Vec<CurrentNewsNodes>> {
+    use crate::{
+        composition_source::{ordinary_news_candidate_limit, replay_news_scope},
+        news::{NewsAction, admitted_publishers},
+    };
+
+    let invalid = || {
+        failure(
+            CURRENT_NEWS_MISMATCH,
+            "The saved news articles do not match the original request and adopted report.",
+        )
+    };
+    verify_registered_input(store, bundle, CURRENT_NEWS_MISMATCH)?;
+    let request = &bundle.request;
+    let action = NewsAction::bind(&bundle.meaning.intent).ok_or_else(invalid)?;
+    if !crate::input::verified_current_news_input(bundle)?
+        || result.guarantee != Guarantee::SourceReport
+        || plan.guarantee != result.guarantee
+        || result.calculation.is_some()
+        || !result.branch_outcomes.is_empty()
+    {
+        return Err(invalid());
+    }
+    let publishers = admitted_publishers(&request.permissions);
+    // Each admitted publisher has a listing and review node. The adopted
+    // report, content, render and file confirmation use the other four.
+    let required_actions = publishers.len() * 2 + 4;
+    let candidate_limit = ordinary_news_candidate_limit(
+        request.budget.max_actions,
+        required_actions,
+        publishers.len(),
+    )
+    .ok_or_else(invalid)?;
+    let transcript_ref = result.dependencies.last().ok_or_else(invalid)?;
+    let replay = replay_news_scope(
+        store,
+        bundle,
+        (0, request.text.len()),
+        &action,
+        transcript_ref,
+        candidate_limit,
+    )?;
+    if !replay.confirmed
+        || !replay.complete
+        || replay.retry_evidence != result.evidence
+        || replay.reviews.len() != publishers.len()
+        || plan.required_units != replay.units
+        || plan.text != replay.units.join("\n")
+        || result.text != plan.text
+    {
+        return Err(invalid());
+    }
+
+    let (actor, case) = (&request.actor_id, &request.case_id);
+    let mut dependencies = Vec::new();
+    let mut nodes = Vec::with_capacity(publishers.len());
+    for (publisher, review) in publishers.into_iter().zip(&replay.reviews) {
+        let listing_ref = review.listing_ref.as_ref().ok_or_else(invalid)?;
+        let citation = review.citation.as_ref().ok_or_else(invalid)?;
+        if review.source != publisher
+            || citation.source != publisher
+            || review.attempted_articles.last() != Some(&citation.body_ref)
+        {
+            return Err(invalid());
+        }
+        let review_ref = verified_artifact(store, actor, case, review)?;
+        dependencies.push(listing_ref.clone());
+        dependencies.extend(review.attempted_articles.iter().cloned());
+        dependencies.push(review_ref.clone());
+        nodes.push(CurrentNewsNodes {
+            publisher,
+            listing_ref: listing_ref.clone(),
+            review_ref,
+        });
+    }
+    let report_ref = digest(&replay.report_bytes);
+    if store.get_bytes(actor, case, &report_ref)? != replay.report_bytes {
+        return Err(invalid());
+    }
+    dependencies.push(report_ref);
+    dependencies.push(transcript_ref.clone());
+    if result.dependencies != dependencies {
+        return Err(invalid());
+    }
+    Ok(nodes)
+}
+
 pub(crate) fn verify_text_summary_candidate(
     store: &Store,
     bundle: &InputBundle,
@@ -5433,6 +5534,15 @@ fn inspect(
             "元のWeb資料の比較依頼を保存条件と照合できません。",
         ));
     }
+    let requires_current_news = matches!(goal.intent, Intent::AskCurrentNews { .. });
+    if requires_current_news
+        != (goal.required_predicates.first().map(String::as_str) == Some(crate::news::PREDICATE))
+    {
+        return Err(failure(
+            CURRENT_NEWS_MISMATCH,
+            "The original news request and its file completion predicate differ.",
+        ));
+    }
     if requires_compound
         != (goal.required_predicates.first().map(String::as_str)
             == Some(crate::composition::PREDICATE))
@@ -5491,17 +5601,11 @@ fn inspect(
         ));
     }
     const WORK_PLAN_MISMATCH: &str = "RECOVERY_WORK_PLAN_MISMATCH";
-    let expected_work_plan_parser = crate::work_plan_input::parser_version(&goal.intent);
-    let requires_work_plan = expected_work_plan_parser.is_some();
-    let work_plan_parser_matches = match expected_work_plan_parser {
-        Some(expected) => actual_parser == expected,
-        None => !matches!(
-            actual_parser,
-            crate::work_plan_input::PARSER_VERSION
-                | crate::work_plan_input::REVISION_PARSER_VERSION
-        ),
-    };
-    if !work_plan_parser_matches
+    let requires_work_plan = matches!(
+        goal.intent,
+        Intent::PlanWork { .. } | Intent::ReviseWorkPlan { .. }
+    );
+    if !crate::work_plan_input::version_matches(actual_parser, &goal.intent)
         || (requires_work_plan && bundle.meaning.intent != goal.intent)
         || requires_work_plan
             != (goal.required_predicates.first().map(String::as_str)
@@ -5850,6 +5954,7 @@ fn inspect(
             || requires_image
             || requires_branch_text
             || requires_research
+            || requires_current_news
             || requires_compound
             || requires_previous_stop
             || requires_generated_why
@@ -6388,7 +6493,17 @@ fn inspect(
     } else {
         plan.locale == request.locale
             && (crate::core::supports_japanese_output_locale(&plan.locale)
-                || (requires_compound && crate::core::supports_english_output_locale(&plan.locale)))
+                || (requires_compound && crate::core::supports_english_output_locale(&plan.locale))
+                || (requires_attached_analysis
+                    && crate::input::uses_english_attached_analysis(bundle))
+                || (requires_current_news && crate::input::uses_english_current_news(bundle))
+                || (requires_research
+                    && matches!(
+                        bundle.meaning.parser_version.as_str(),
+                        crate::input::WEB_RESEARCH_V2_PARSER_VERSION
+                            | crate::input::WEB_RESEARCH_DIVERSE_PARSER_VERSION
+                    )
+                    && crate::core::supports_english_output_locale(&plan.locale)))
     };
     if plan.id != identity(&unsigned_plan)?
         || plan.text != result.text
@@ -6461,6 +6576,11 @@ fn inspect(
         )?)
     } else {
         None
+    };
+    let current_news_nodes = if requires_current_news {
+        verify_current_news_delivery(store, bundle, result, plan)?
+    } else {
+        Vec::new()
     };
     if requires_compound {
         verify_registered_input(store, bundle, COMPOUND_MISMATCH)?;
@@ -6631,7 +6751,7 @@ fn inspect(
             .as_ref()
             .and_then(|id| state.prior_results.get(id))
             .map(|previous| {
-                crate::core::registered_math_report_explanation(store, actor, case, previous)
+                crate::core::registered_math_report_explanation(store, actor, case, previous, false)
             })
             .transpose()?
             .flatten()
@@ -7892,6 +8012,10 @@ fn inspect(
         .unwrap_or_default();
     sources.extend(compound_nodes.iter().map(|node| node.id.clone()));
     expected_nodes.extend(compound_nodes.iter().cloned());
+    for source in &current_news_nodes {
+        expected_nodes.extend(source.publisher.nodes());
+        sources.push(source.publisher.review_node().into());
+    }
     if let Some(report) = &statistics_report {
         use crate::core::{STATISTICS_EXPLANATION_NODE, STATISTICS_VALUES_NODE};
 
@@ -8029,7 +8153,7 @@ fn inspect(
         if research.calculation.is_some() {
             sources.push(CALC_NODE.into());
         }
-    } else if !result.evidence.is_empty() {
+    } else if !requires_current_news && !requires_compound && !result.evidence.is_empty() {
         return Err(failure(
             "RECOVERY_EVIDENCE_MISMATCH",
             "undeclared evidence cannot satisfy this original graph",
@@ -8294,6 +8418,17 @@ fn inspect(
     }
     let mut graph = Scheduler::new(nodes, goal.budget.max_actions)?;
     let mut source_refs = BTreeMap::new();
+    for source in current_news_nodes {
+        let listing_node = source.publisher.listing_node();
+        let review_node = source.publisher.review_node();
+        graph.observe(listing_node, &source.listing_ref, &BTreeMap::new())?;
+        graph.observe(
+            review_node,
+            &source.review_ref,
+            &BTreeMap::from([(listing_node.into(), source.listing_ref)]),
+        )?;
+        source_refs.insert(review_node.into(), source.review_ref);
+    }
     for (node, outcome) in compound_nodes.iter().zip(&result.branch_outcomes) {
         if outcome.node_id != node.id {
             return Err(failure(COMPOUND_MISMATCH, "The saved item order differs."));
@@ -8447,7 +8582,7 @@ fn inspect(
             graph.observe(CALC_NODE, &reference, &BTreeMap::new())?;
             source_refs.insert(CALC_NODE.into(), reference);
         }
-    } else {
+    } else if !requires_current_news && !requires_compound {
         let mut source_requires = BTreeMap::new();
         if let Some((_, reference)) = direct_continuation {
             graph.observe(PREVIOUS_DIRECT_RETRIEVAL_NODE, &reference, &BTreeMap::new())?;
@@ -13228,6 +13363,125 @@ mod tests {
     }
 
     #[test]
+    fn compound_attached_analysis_reconciles_from_retained_item_evidence() {
+        use crate::{attachment_analysis::AnalysisAction, core::OutputCheckpoint};
+
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        engine.expire_output_at = Some(OutputCheckpoint::Commit);
+        let mut request = RequestEnvelope::new(
+            "case",
+            "compound-attached-analysis-file",
+            "alice",
+            "- 添付資料の「集計対象」で添付CSVの「区分」を絞り、「金額」を合計して\n- 依頼1の結果に7を足して",
+        );
+        request.attachments = vec![
+            RequestAttachment {
+                name: "条件.txt".into(),
+                text: "集計対象: 西\n".into(),
+                binary_base64: None,
+            },
+            RequestAttachment {
+                name: "実績.csv".into(),
+                text: "区分,金額\n西,13.25\n東,400\n西,7.5\n".into(),
+                binary_base64: None,
+            },
+        ];
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let stopped = engine.execute("alice", request.clone()).unwrap();
+        assert_eq!(stopped.lifecycle, Lifecycle::Suspend, "{stopped:?}");
+        assert!(stopped.reason.as_deref().unwrap().starts_with("DEADLINE:"));
+        assert!(stopped.text.contains("合計は 83/4"), "{stopped:?}");
+        assert!(stopped.text.ends_with(" = 111/4"), "{stopped:?}");
+        let [analysis, calculation] = stopped.branch_outcomes.as_slice() else {
+            panic!("expected two retained item outcomes");
+        };
+        assert_eq!(analysis.state, BranchState::Confirmed);
+        assert_eq!(calculation.state, BranchState::Confirmed);
+        assert_eq!(
+            stopped.dependencies,
+            [
+                analysis.artifact_ref.as_str(),
+                calculation.artifact_ref.as_str()
+            ]
+        );
+        let [receipt] = stopped.receipts.as_slice() else {
+            panic!("expected one confirmed receipt");
+        };
+        assert_eq!(receipt.phase, EffectPhase::Confirmed);
+        let actions = engine.store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].action_id, receipt.action_id);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, stopped.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        drop(engine);
+
+        let mut reopened = Engine::open(&fixture.state).unwrap();
+        let state = reopened.latest("alice", "case").unwrap().unwrap();
+        assert_eq!(state.result.as_ref(), Some(&stopped));
+        let bundle = state.bundle.as_ref().unwrap();
+        assert_eq!(
+            bundle.meaning.parser_version,
+            crate::composition::ATTACHED_PARSER_VERSION
+        );
+        assert_eq!(bundle.request.attachments, request.attachments);
+        let Intent::IndependentRequests { items } = &bundle.meaning.intent else {
+            panic!("expected the original compound request");
+        };
+        let read_item_value = |branch: &BranchOutcome| {
+            let bytes = reopened
+                .store
+                .get_bytes("alice", "case", &branch.artifact_ref)
+                .unwrap();
+            assert_eq!(digest(&bytes), branch.artifact_ref);
+            let observation: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(observation["node_id"], branch.node_id.as_str());
+            serde_json::from_value::<Vec<u8>>(observation["value"]["bytes"].clone()).unwrap()
+        };
+        let observed = AnalysisAction::bind(&items[0].intent)
+            .unwrap()
+            .verify_retained(
+                &bundle.request.attachments,
+                false,
+                Instant::now() + Duration::from_millis(request.budget.deadline_ms),
+                request.budget.max_evidence_bytes / 2,
+                &read_item_value(analysis),
+            )
+            .unwrap();
+        assert!(observed.condition_confirmed);
+        assert_eq!(observed.exact_value.as_deref(), Some("83/4"));
+        let table: serde_json::Value = serde_json::from_slice(&observed.table_bytes).unwrap();
+        assert_eq!(table["condition_sha256"], digest(&observed.condition_bytes));
+        assert_eq!(table["sum"], "83/4");
+        let resolved: language::ResolvedSequenceCalculation =
+            serde_json::from_slice(&read_item_value(calculation)).unwrap();
+        assert_eq!(resolved.calculation.exact_value, "111/4");
+        let [reference] = resolved.consumed.as_slice() else {
+            panic!("expected the preceding item as sole operand");
+        };
+        assert_eq!(reference.exact_value, "83/4");
+        assert_eq!(reference.artifact_sha256, analysis.artifact_ref);
+
+        let recovered = reopened.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.branch_outcomes, stopped.branch_outcomes);
+        assert_eq!(recovered.receipts, stopped.receipts);
+        assert_eq!(recovered.execution_graph_ref, stopped.execution_graph_ref);
+        assert_eq!(reopened.store.actions("alice", "case").unwrap(), actions);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+    }
+
+    #[test]
     fn calculation_sequence_reconciles_observed_steps_without_rewriting_file() {
         let fixture = empty_fixture();
         let mut engine = Engine::open(&fixture.state).unwrap();
@@ -13673,6 +13927,64 @@ mod tests {
         );
         assert_eq!(fs::read(&target).unwrap(), recovered.text.as_bytes());
         assert_eq!(fs::metadata(&target).unwrap().modified().unwrap(), modified);
+    }
+
+    #[test]
+    fn english_attached_analysis_reconciles_its_original_file() {
+        use crate::core::OutputCheckpoint;
+
+        let fixture = empty_fixture();
+        let mut engine = Engine::open(&fixture.state).unwrap();
+        engine.expire_output_at = Some(OutputCheckpoint::Commit);
+        let mut request = RequestEnvelope::new(
+            "case",
+            "english-attached-analysis",
+            "alice",
+            "添付資料の「集計対象」で添付CSVの「区分」を絞り、「金額」を合計して",
+        );
+        request.locale = "en-US".into();
+        request.attachments = vec![
+            RequestAttachment {
+                name: "region.txt".into(),
+                text: "集計対象: 西\n".into(),
+                binary_base64: None,
+            },
+            RequestAttachment {
+                name: "sales.csv".into(),
+                text: "区分,金額\n西,13.25\n東,400\n西,7.5\n".into(),
+                binary_base64: None,
+            },
+        ];
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+        let stopped = engine.execute("alice", request).unwrap();
+        assert_eq!(stopped.lifecycle, Lifecycle::Suspend, "{stopped:?}");
+        assert!(stopped.reason.as_deref().unwrap().starts_with("DEADLINE:"));
+        assert_eq!(stopped.content_plan.as_ref().unwrap().locale, "en-US");
+        assert!(stopped.text.contains("83/4"), "{stopped:?}");
+        assert_eq!(stopped.dependencies.len(), 2);
+        let bytes = fs::read(&fixture.target).unwrap();
+        assert_eq!(bytes, stopped.text.as_bytes());
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let actions = engine.store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        drop(engine);
+
+        let mut reopened = Engine::open(&fixture.state).unwrap();
+        let recovered = reopened.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.dependencies, stopped.dependencies);
+        assert_eq!(recovered.receipts, stopped.receipts);
+        assert_eq!(reopened.store.actions("alice", "case").unwrap(), actions);
+        assert_eq!(fs::read(&fixture.target).unwrap(), bytes);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
     }
 
     #[test]

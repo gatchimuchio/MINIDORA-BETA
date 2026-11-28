@@ -12,6 +12,10 @@ pub const PARSER_VERSION: &str = "declarative-ja-en-v89-sealed-relation-boundary
 const LOCAL_CONVERSATION_PARSER_VERSION: &str = "declarative-ja-v155-local-conversation";
 pub(crate) const WEB_QUESTION_PARSER_VERSION: &str = "declarative-ja-v156-web-question";
 const WEB_RESEARCH_PARSER_VERSION: &str = "declarative-ja-v238-compare-web-research";
+pub(crate) const WEB_RESEARCH_V2_PARSER_VERSION: &str =
+    "declarative-ja-en-v1-authored-web-research";
+pub(crate) const WEB_RESEARCH_DIVERSE_PARSER_VERSION: &str =
+    "declarative-ja-en-v1-distinct-publishers-web-research";
 const STATISTICS_GOAL_PARSER_VERSION: &str = "declarative-ja-v218-statistics-goal";
 pub(crate) const LOCAL_FIRST_TOPIC_PARSER_VERSION: &str = "declarative-ja-v216-local-first-topic";
 pub(crate) const AUTONOMOUS_TOPIC_WEB_PARSER_VERSION: &str =
@@ -54,6 +58,8 @@ pub(crate) const DOCUMENT_REVIEW_PARSER_VERSION: &str =
 pub(crate) const PURPOSE_DOCUMENT_PARSER_VERSION: &str = "declarative-ja-v239-purpose-document";
 const BRANCH_TEXT_PARSER_VERSION: &str = "declarative-ja-v240-branch-source-text";
 const ATTACHED_ANALYSIS_PARSER_VERSION: &str = "declarative-ja-v233-attached-analysis";
+pub(crate) const ATTACHED_ANALYSIS_EN_PARSER_VERSION: &str =
+    "declarative-ja-en-v1-attached-document-table-analysis";
 const ATTACHED_TABLE_PARSER_VERSION: &str = "declarative-ja-v234-attached-table";
 const SPEECH_PARSER_VERSION: &str = "declarative-ja-v235-speak-adopted-answer";
 const IMAGE_PARSER_VERSION: &str = "declarative-ja-v237-image-draw-fill";
@@ -982,9 +988,7 @@ pub(crate) fn verified_work_plan_input(bundle: &InputBundle) -> Result<bool> {
     let request = &bundle.request;
     let meaning = &bundle.meaning;
     let text = &request.text;
-    let Some(version) = crate::work_plan_input::parser_version(&meaning.intent) else {
-        return Ok(false);
-    };
+    let version = meaning.parser_version.as_str();
     let has_context = bundle.context_sha256 != identity(&None::<&ResultRecord>)?;
     let scope_matches = match &meaning.intent {
         Intent::PlanWork { .. } => {
@@ -1004,7 +1008,7 @@ pub(crate) fn verified_work_plan_input(bundle: &InputBundle) -> Result<bool> {
         _ => false,
     };
     if !scope_matches
-        || meaning.parser_version != version
+        || !crate::work_plan_input::version_matches(version, &meaning.intent)
         || meaning.source_kind != "USER_REQUEST"
         || !meaning.unresolved.is_empty()
         || !matches!(request.locale.as_str(), "ja" | "ja-JP")
@@ -1019,7 +1023,9 @@ pub(crate) fn verified_work_plan_input(bundle: &InputBundle) -> Result<bool> {
         return Ok(false);
     }
     Ok(crate::work_plan_input::parse(text)?.is_some_and(|parsed| {
-        parsed.intent == meaning.intent && parsed.roles == meaning.source_roles
+        parsed.version == version
+            && parsed.intent == meaning.intent
+            && parsed.roles == meaning.source_roles
     }))
 }
 
@@ -1051,6 +1057,7 @@ pub(crate) fn memory_settings_intent(text: &str) -> Option<Intent> {
 }
 
 pub(crate) const NEWS_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v222-news-explanation";
+const NEWS_EXPLANATION_EN_PARSER_VERSION: &str = "declarative-ja-en-v1-news-explanation";
 pub(crate) const PREVIOUS_STOP_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v236-previous-stop-explanation";
 pub(crate) const COMPOUND_EXPLANATION_PARSER_VERSION: &str = "compound-explanation-ja-en-v1";
@@ -1077,6 +1084,10 @@ fn asks_with_question_mark(text: &str) -> bool {
 }
 
 pub(crate) fn asks_to_clarify_news_status(text: &str) -> bool {
+    asks_to_clarify_news_status_ja(text) || asks_to_clarify_news_status_en(text)
+}
+
+fn asks_to_clarify_news_status_ja(text: &str) -> bool {
     let text = text.trim();
     asks_with_question_mark(text)
         || asks_contextual_clarification(text)
@@ -1084,6 +1095,23 @@ pub(crate) fn asks_to_clarify_news_status(text: &str) -> bool {
             text.trim_end_matches(['？', '?', '。', '.']),
             "どういうこと" | "どういうことですか" | "なぜ" | "なんで" | "もう少し説明して"
         )
+}
+
+fn asks_to_clarify_news_status_en(text: &str) -> bool {
+    matches!(
+        terminal_trim(text)
+            .replace('’', "'")
+            .to_ascii_lowercase()
+            .as_str(),
+        "what do you mean"
+            | "why"
+            | "why couldn't you check the news"
+            | "why couldn't you get the news"
+            | "why didn't you show the news"
+            | "what permission do you need"
+            | "explain that"
+            | "explain the previous result"
+    )
 }
 
 fn compound_explanation_selector(text: &str) -> Option<regex::Match<'_>> {
@@ -1203,13 +1231,38 @@ pub(crate) fn seal_current_news_explanation(
     seal_user_input(
         request,
         Some(previous),
-        NEWS_EXPLANATION_PARSER_VERSION,
+        if matches!(request.locale.as_str(), "en" | "en-US")
+            || asks_to_clarify_news_status_en(&request.text)
+        {
+            NEWS_EXPLANATION_EN_PARSER_VERSION
+        } else {
+            NEWS_EXPLANATION_PARSER_VERSION
+        },
         Intent::ExplainCurrentNews {
             origin: origin.into(),
         },
         BTreeMap::new(),
         Vec::new(),
     )
+}
+
+pub(crate) fn uses_english_current_news(bundle: &InputBundle) -> bool {
+    if !matches!(bundle.request.locale.as_str(), "en" | "en-US") {
+        return false;
+    }
+    let meaning = &bundle.meaning;
+    match &meaning.intent {
+        Intent::AskCurrentNews { .. } => matches!(
+            meaning.parser_version.as_str(),
+            crate::news_input::PARSER_VERSION
+                | crate::news_input::NATURAL_PARSER_VERSION
+                | crate::news_input::ENGLISH_PARSER_VERSION
+        ),
+        Intent::ExplainCurrentNews { .. } => {
+            meaning.parser_version == NEWS_EXPLANATION_EN_PARSER_VERSION
+        }
+        _ => false,
+    }
 }
 
 pub(crate) fn verified_current_news_input(bundle: &InputBundle) -> Result<bool> {
@@ -1232,17 +1285,21 @@ pub(crate) fn verified_current_news_input(bundle: &InputBundle) -> Result<bool> 
                     == Some(&meaning.source_roles)
         }
         Intent::ExplainCurrentNews { .. } => {
-            meaning.parser_version == NEWS_EXPLANATION_PARSER_VERSION
+            let authored_question = match meaning.parser_version.as_str() {
+                NEWS_EXPLANATION_PARSER_VERSION => asks_to_clarify_news_status_ja(text),
+                NEWS_EXPLANATION_EN_PARSER_VERSION => asks_to_clarify_news_status(text),
+                _ => false,
+            };
+            authored_question
                 && meaning.source_roles.is_empty()
                 && meaning.context_result_ref.is_some()
-                && asks_to_clarify_news_status(text)
         }
         _ => return Ok(false),
     };
     Ok(matches_input
         && meaning.source_kind == "USER_REQUEST"
         && meaning.unresolved.is_empty()
-        && matches!(request.locale.as_str(), "ja" | "ja-JP")
+        && (matches!(request.locale.as_str(), "ja" | "ja-JP") || uses_english_current_news(bundle))
         && text.len() <= request.budget.max_input_bytes
         && matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
         && bundle.raw_sha256 == digest(text.as_bytes())
@@ -1356,6 +1413,33 @@ pub(crate) fn seal_with_source_context(
     source_context: Option<SourceContext>,
 ) -> Result<InputBundle> {
     validate_user_seal_request(request, previous)?;
+    let bilingual_locale = matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US");
+    if let Some(bundle) = diverse_research_independent_input(request)? {
+        return Ok(bundle);
+    }
+    if let Some(bundle) = research_independent_input(request)? {
+        return Ok(bundle);
+    }
+    if let Some(bundle) = news_independent_input(request)? {
+        return Ok(bundle);
+    }
+    if let Some(bundle) = attached_independent_input(request)? {
+        return Ok(bundle);
+    }
+    if bilingual_locale
+        && request.purpose.is_none()
+        && let Some(intent) = english_attached_analysis_intent(&request.text)?
+    {
+        let roles = attached_analysis_roles(&intent).ok_or_else(attached_analysis_input_error)?;
+        return seal_user_input(
+            request,
+            previous,
+            ATTACHED_ANALYSIS_EN_PARSER_VERSION,
+            intent,
+            roles,
+            Vec::new(),
+        );
+    }
     if crate::premise_correction_input::has_correction_prefix(&request.text) {
         let text = request.text.trim();
         let after_scope = text
@@ -1535,12 +1619,10 @@ pub(crate) fn seal_with_source_context(
         } else {
             Vec::new()
         };
-        let version = crate::work_plan_input::parser_version(&parsed.intent)
-            .expect("work plan parser intent version");
         return seal_user_input(
             request,
             if revising { previous } else { None },
-            version,
+            parsed.version,
             parsed.intent,
             parsed.roles,
             unresolved,
@@ -1597,7 +1679,7 @@ pub(crate) fn seal_with_source_context(
             Vec::new(),
         );
     }
-    if matches!(request.locale.as_str(), "ja" | "ja-JP")
+    if bilingual_locale
         && let Some((version, intent)) = crate::news_input::parse_user(&request.text)
         && version != crate::news_input::PARSER_VERSION
     {
@@ -1610,6 +1692,8 @@ pub(crate) fn seal_with_source_context(
             })?;
         let unresolved = if request.attachments.is_empty() {
             Vec::new()
+        } else if matches!(request.locale.as_str(), "en" | "en-US") {
+            vec!["Remove the attachments to request public news on its own.".into()]
         } else {
             vec!["公開ニュースを調べる場合は、添付を外して依頼してください。".into()]
         };
@@ -1625,6 +1709,12 @@ pub(crate) fn seal_with_source_context(
             roles,
             unresolved,
         );
+    }
+    if let Some(bundle) = diverse_web_research_bundle(request)? {
+        return Ok(bundle);
+    }
+    if let Some(bundle) = authored_web_research_bundle(request)? {
+        return Ok(bundle);
     }
     let mut intent = if matches!(request.locale.as_str(), "ja" | "en" | "ja-JP" | "en-US") {
         if asks_for_previous_answer_source(&request.text)? {
@@ -1644,22 +1734,26 @@ pub(crate) fn seal_with_source_context(
             }
         } else {
             let mut intent = interpret(&request.text)?;
+            if matches!(intent, Intent::AskCurrentNews { .. })
+                && crate::news_input::parse_user(&request.text).is_none()
+            {
+                let reason = if matches!(request.locale.as_str(), "en" | "en-US") {
+                    "Specify today, this morning, yesterday, or the last 24 hours, and optionally one topic."
+                } else {
+                    "ニュースの日時や条件を確定できません。今日・今朝・昨日・直近24時間のいずれかと、必要なら一つの話題を指定してください。"
+                };
+                return seal_user_input(
+                    request,
+                    None,
+                    PARSER_VERSION,
+                    Intent::Unknown {
+                        reason: reason.into(),
+                    },
+                    BTreeMap::new(),
+                    vec![reason.into()],
+                );
+            }
             if matches!(request.locale.as_str(), "ja" | "ja-JP") {
-                if matches!(intent, Intent::AskCurrentNews { .. })
-                    && crate::news_input::parse_user(&request.text).is_none()
-                {
-                    let reason = "ニュースの日時や条件を確定できません。今日・今朝・昨日・直近24時間のいずれかと、必要なら一つの話題を指定してください。";
-                    return seal_user_input(
-                        request,
-                        None,
-                        PARSER_VERSION,
-                        Intent::Unknown {
-                            reason: reason.into(),
-                        },
-                        BTreeMap::new(),
-                        vec![reason.into()],
-                    );
-                }
                 if let Some(event) = crate::conversation_input::parse(&request.text)
                     && crate::conversation_input::admits_event(&intent, &request.text, &event)
                 {
@@ -2018,6 +2112,9 @@ pub(crate) fn seal_with_source_context(
         intent if is_attached_document_intent(intent) => ATTACHED_DOCUMENT_PARSER_VERSION,
         Intent::ProduceImage { .. } => IMAGE_PARSER_VERSION,
         Intent::SpeakPreviousAnswer => SPEECH_PARSER_VERSION,
+        Intent::AnalyzeAttachments { .. } if matches!(request.locale.as_str(), "en" | "en-US") => {
+            ATTACHED_ANALYSIS_EN_PARSER_VERSION
+        }
         Intent::AnalyzeAttachments { table_media, .. } => analysis_parser_version(table_media),
         Intent::FilterPreviousCsvChart { .. } => CSV_CHART_FILTER_PARSER_VERSION,
         Intent::SummarizePastedText { .. } => PASTED_TEXT_SUMMARY_PARSER_VERSION,
@@ -7432,7 +7529,33 @@ fn attached_analysis_intent(text: &str) -> Result<Option<Intent>> {
     else {
         return Ok(None);
     };
-    let offset = text.len() - trimmed.len();
+    attached_analysis_fields(text, &fields).map(Some)
+}
+
+fn english_attached_analysis_intent(text: &str) -> Result<Option<Intent>> {
+    static ANALYSIS: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r#"(?i)\Asum +"(?<value>[^"\r\n]{1,128})" +in +the +attached +"#,
+            r#"(?<media>csv|excel|xlsx|table)(?: +sheet +"(?<sheet>[^"\r\n]{1,128})")? +"#,
+            r#"where +"(?<filter>[^"\r\n]{1,128})" +matches +the +attached +document['’]s +"(?<label>[^"\r\n]{1,128})"\z"#
+        ))
+        .expect("English attached analysis grammar")
+    });
+    ANALYSIS
+        .captures(terminal_trim(text))
+        .map(|captures| attached_analysis_fields(text, &captures))
+        .transpose()
+}
+
+fn bilingual_attached_analysis_intent(text: &str) -> Result<Option<Intent>> {
+    match attached_analysis_intent(text)? {
+        Some(intent) => Ok(Some(intent)),
+        None => english_attached_analysis_intent(text),
+    }
+}
+
+fn attached_analysis_fields(text: &str, fields: &regex::Captures<'_>) -> Result<Intent> {
+    let offset = text.len() - text.trim_start().len();
     let span = |field: &str| {
         let matched = fields.name(field).expect("analysis capture");
         if matched.as_str().trim().is_empty() || matched.as_str().chars().any(char::is_control) {
@@ -7441,22 +7564,25 @@ fn attached_analysis_intent(text: &str) -> Result<Option<Intent>> {
         source_span_at(text, offset + matched.start(), offset + matched.end())
             .ok_or_else(attached_analysis_input_error)
     };
-    let table_media = match fields.name("media").expect("table capture").as_str() {
-        "CSV" | "CSVファイル" => AttachmentTableMedia::Csv,
-        "表" => AttachmentTableMedia::Mixed,
-        _ => AttachmentTableMedia::Xlsx,
+    let media = fields.name("media").expect("table capture").as_str();
+    let table_media = if media == "CSVファイル" || media.eq_ignore_ascii_case("csv") {
+        AttachmentTableMedia::Csv
+    } else if media == "表" || media.eq_ignore_ascii_case("table") {
+        AttachmentTableMedia::Mixed
+    } else {
+        AttachmentTableMedia::Xlsx
     };
     let sheet = fields.name("sheet").map(|_| span("sheet")).transpose()?;
     if table_media.is_csv() && sheet.is_some() {
         return Err(attached_analysis_input_error());
     }
-    Ok(Some(Intent::AnalyzeAttachments {
+    Ok(Intent::AnalyzeAttachments {
         label: span("label")?,
         filter_column: span("filter")?,
         value_column: span("value")?,
         table_media,
         sheet,
-    }))
+    })
 }
 
 fn attached_analysis_roles(intent: &Intent) -> Option<BTreeMap<String, Vec<SourceSpan>>> {
@@ -7502,16 +7628,42 @@ fn attached_analysis_input_error() -> Error {
     )
 }
 
+pub(crate) fn uses_english_attached_analysis(bundle: &InputBundle) -> bool {
+    bundle.meaning.parser_version == ATTACHED_ANALYSIS_EN_PARSER_VERSION
+        && matches!(bundle.request.locale.as_str(), "en" | "en-US")
+}
+
 pub(crate) fn verify_attached_analysis_input(bundle: &InputBundle) -> Result<()> {
-    validate_request_attachments(&bundle.request)?;
+    let request = &bundle.request;
     let meaning = &bundle.meaning;
-    if let Some(roles) = attached_analysis_roles(&meaning.intent)
-        && let Intent::AnalyzeAttachments { table_media, .. } = &meaning.intent
-        && meaning.parser_version == analysis_parser_version(table_media)
-        && meaning.source_kind == "USER_REQUEST"
+    validate_request_attachments(request)?;
+    let Intent::AnalyzeAttachments { table_media, .. } = &meaning.intent else {
+        return Err(attached_analysis_input_error());
+    };
+    let parsed = if meaning.parser_version == analysis_parser_version(table_media) {
+        attached_analysis_intent(&request.text)?
+    } else if meaning.parser_version == ATTACHED_ANALYSIS_EN_PARSER_VERSION
+        && matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        && matches!(meaning.spans.as_slice(), [span]
+            if span.start == 0 && span.end == request.text.len() && span.text == request.text)
+        && bundle.raw_sha256 == digest(request.text.as_bytes())
+        && bundle.semantic_signature == identity(meaning)?
+        && bundle.fingerprint
+            == identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                ATTACHED_ANALYSIS_EN_PARSER_VERSION,
+            ))?
+    {
+        bilingual_attached_analysis_intent(&request.text)?
+    } else {
+        return Err(attached_analysis_input_error());
+    };
+    if meaning.source_kind == "USER_REQUEST"
         && meaning.unresolved.is_empty()
-        && meaning.source_roles == roles
-        && attached_analysis_intent(&bundle.request.text)?.as_ref() == Some(&meaning.intent)
+        && attached_analysis_roles(&meaning.intent).as_ref() == Some(&meaning.source_roles)
+        && parsed.as_ref() == Some(&meaning.intent)
     {
         return Ok(());
     }
@@ -8330,6 +8482,7 @@ pub(crate) fn verify_previous_code_case_input(bundle: &InputBundle) -> Result<()
 struct WebResearchInput {
     topic: SourceSpan,
     expression: Option<SourceSpan>,
+    publisher_policy: Option<SourceSpan>,
 }
 
 fn web_research_input(text: &str) -> Result<Option<WebResearchInput>> {
@@ -8401,7 +8554,265 @@ fn web_research_input(text: &str) -> Result<Option<WebResearchInput>> {
             return Ok(None);
         }
     }
-    Ok(Some(WebResearchInput { topic, expression }))
+    Ok(Some(WebResearchInput {
+        topic,
+        expression,
+        publisher_policy: None,
+    }))
+}
+
+fn public_authored_web_research_topic(topic: &str) -> bool {
+    static TOPIC: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"\A[\p{Han}\p{Hiragana}\p{Katakana}\p{Latin}0-9０-９ー・\p{Zs}'’-]{1,80}\z")
+            .expect("authored web research topic grammar")
+    });
+    bounded_web_topic(topic)
+        && TOPIC.is_match(topic)
+        && topic.chars().any(char::is_alphabetic)
+        && !nonpublic_web_topic(topic)
+        && !topic.split_whitespace().any(|word| {
+            let word = word.to_ascii_lowercase();
+            [
+                "sk-",
+                "github-pat-",
+                "github_pat",
+                "ghp-",
+                "xoxb-",
+                "akia",
+                "aiza",
+                "eyj",
+            ]
+            .iter()
+            .any(|prefix| word.starts_with(prefix))
+        })
+        && !topic
+            .split(|character: char| !character.is_alphanumeric())
+            .any(|word| {
+                matches!(
+                    word.to_ascii_lowercase().as_str(),
+                    "my" | "our"
+                        | "me"
+                        | "private"
+                        | "internal"
+                        | "unpublished"
+                        | "confidential"
+                        | "password"
+                        | "passphrase"
+                        | "apikey"
+                        | "key"
+                        | "secret"
+                        | "secrets"
+                        | "token"
+                        | "tokens"
+                        | "credential"
+                        | "credentials"
+                        | "authorization"
+                        | "bearer"
+                        | "localhost"
+                        | "www"
+                        | "latest"
+                        | "today"
+                        | "yesterday"
+                )
+            })
+}
+
+fn authored_web_research_input(
+    text: &str,
+    accept_legacy: bool,
+) -> Result<Option<WebResearchInput>> {
+    static REQUESTS: LazyLock<[Regex; 2]> = LazyLock::new(|| {
+        [
+            Regex::new(concat!(
+                r"(?x)\A(?:",
+                r"(?<topic>.+?)\p{Zs}*(?:について|に関して|を)[、,，\p{Zs}]*",
+                r"(?:(?:Web|ウェブ)?(?:で)?(?:調べて|検索して)[、,，\p{Zs}]*)?",
+                r"(?:複数|少なくとも(?:二|[2２])つ|いくつか|二つ|[2２]つ)の(?:資料|出典|記事|情報源)",
+                r"(?:(?:を|で|から)(?:(?:調べて|探して|検索して)[、,，\p{Zs}]*)?(?:比較して|照合して|読み比べて|比べて)",
+                r"|の(?:共通点と(?:相違点|違い)|違い)を(?:まとめて|比べて|説明して))",
+                r"|(?:複数|いくつか|二つ|[2２]つ)の(?:資料|出典|記事|情報源)",
+                r"(?:をもとに|を使って|に基づいて|で|から)[、,，\p{Zs}]*",
+                r"(?<prefaced>.+?)\p{Zs}*(?:について|に関して|を)[、,，\p{Zs}]*",
+                r"(?:比較して|照合して|読み比べて|比べて))",
+                r"(?:ください)?\z",
+            ))
+            .expect("Japanese authored web research grammar"),
+            Regex::new(concat!(
+                r"(?ix)\A(?:please\p{Zs}+)?(?:",
+                r"(?:research|look\p{Zs}+up|investigate)\p{Zs}+(?<topic>.+?)\p{Zs}+",
+                r"(?:using|from|across|in)\p{Zs}+(?:multiple|at\p{Zs}+least\p{Zs}+two|two|2)\p{Zs}+",
+                r"(?:sources|articles|references)[,\p{Zs}]+(?:and\p{Zs}+)?",
+                r"(?:compare\p{Zs}+(?:(?:the|your)\p{Zs}+)?(?:findings|sources|articles|results|them)",
+                r"|(?:summarize|explain)\p{Zs}+(?:the\p{Zs}+)?(?:similarities\p{Zs}+and\p{Zs}+differences|differences))",
+                r"|compare\p{Zs}+(?:multiple|at\p{Zs}+least\p{Zs}+two|two|2)\p{Zs}+",
+                r"(?:sources|articles|references)\p{Zs}+(?:about|on|for)\p{Zs}+(?<prefaced>.+?))",
+                r"(?:,?\p{Zs}+please)?\z",
+            ))
+            .expect("English authored web research grammar"),
+        ]
+    });
+    if let Some(legacy) = web_research_input(text)? {
+        return Ok(
+            (accept_legacy && public_authored_web_research_topic(&legacy.topic.text))
+                .then_some(legacy),
+        );
+    }
+    if text.chars().any(char::is_control) {
+        return Ok(None);
+    }
+    let offset = text.len() - text.trim_start().len();
+    let statement = terminal_trim(text);
+    let Some(topic) = REQUESTS.iter().find_map(|request| {
+        let captures = request.captures(statement)?;
+        captures.name("topic").or_else(|| captures.name("prefaced"))
+    }) else {
+        return Ok(None);
+    };
+    let value = topic.as_str().trim();
+    if !public_authored_web_research_topic(value) {
+        return Ok(None);
+    }
+    let start = offset + topic.start() + topic.as_str().len() - topic.as_str().trim_start().len();
+    Ok(
+        source_span_at(text, start, start + value.len()).map(|topic| WebResearchInput {
+            topic,
+            expression: None,
+            publisher_policy: None,
+        }),
+    )
+}
+
+fn diverse_web_research_input(text: &str) -> Option<WebResearchInput> {
+    static JAPANESE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"(?x)\A(?<topic>.+?)\p{Zs}*(?:について|に関して|を)[、,，\p{Zs}]*",
+            r"(?<policy>(?:別々の|異なる|独立した)(?:発信元|媒体|出版社))",
+            r"の(?:資料|出典|記事|情報源)(?:を|で|から)",
+            r"(?:(?:調べて|探して|検索して)[、,，\p{Zs}]*)?",
+            r"(?:比較して|照合して|読み比べて|比べて)(?:ください)?\z",
+        ))
+        .expect("Japanese distinct publisher research grammar")
+    });
+    static ENGLISH: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"(?ix)\A(?:please\p{Zs}+)?(?:",
+            r"(?:research|investigate|look\p{Zs}+up)\p{Zs}+(?<topic>.+?)\p{Zs}+",
+            r"(?:using|across|from)\p{Zs}+(?:(?:sources|articles|reports)\p{Zs}+from\p{Zs}+)?",
+            r"(?<policy>(?:independent|different|distinct|separate)\p{Zs}+publishers)",
+            r"[,\p{Zs}]+and\p{Zs}+compare\p{Zs}+(?:the\p{Zs}+)?(?:findings|sources|articles|results|them)",
+            r"|compare\p{Zs}+(?:sources|articles|reports)\p{Zs}+from\p{Zs}+",
+            r"(?<prefaced_policy>(?:independent|different|distinct|separate)\p{Zs}+publishers)",
+            r"\p{Zs}+(?:about|on|for)\p{Zs}+(?<prefaced_topic>.+?))",
+            r"(?:,?\p{Zs}+please)?\z",
+        ))
+        .expect("English distinct publisher research grammar")
+    });
+    if text.chars().any(char::is_control) {
+        return None;
+    }
+    let statement = terminal_trim(text);
+    let captures = JAPANESE
+        .captures(statement)
+        .or_else(|| ENGLISH.captures(statement))?;
+    let topic = captures
+        .name("topic")
+        .or_else(|| captures.name("prefaced_topic"))?;
+    let policy = captures
+        .name("policy")
+        .or_else(|| captures.name("prefaced_policy"))?;
+    if !public_authored_web_research_topic(topic.as_str().trim()) {
+        return None;
+    }
+    let offset = text.len() - text.trim_start().len();
+    let span = |field: regex::Match<'_>| {
+        let value = field.as_str().trim();
+        let start =
+            offset + field.start() + field.as_str().len() - field.as_str().trim_start().len();
+        source_span_at(text, start, start + value.len())
+    };
+    Some(WebResearchInput {
+        topic: span(topic)?,
+        expression: None,
+        publisher_policy: Some(span(policy)?),
+    })
+}
+
+pub(crate) fn is_diverse_research_item(item: &IndependentRequest) -> bool {
+    matches!(item.intent.as_ref(), Intent::CompareWebResearch { topic, expression: None }
+        if diverse_web_research_input(&item.source.text).is_some_and(|source| &source.topic.text == topic))
+}
+
+impl WebResearchInput {
+    fn roles(&self) -> BTreeMap<String, Vec<SourceSpan>> {
+        let mut roles =
+            BTreeMap::from([("/CompareWebResearch/topic".into(), vec![self.topic.clone()])]);
+        if let Some(expression) = &self.expression {
+            roles.insert(
+                "/CompareWebResearch/expression".into(),
+                vec![expression.clone()],
+            );
+        }
+        if let Some(policy) = &self.publisher_policy {
+            roles.insert(
+                "/CompareWebResearch/publisher_policy".into(),
+                vec![policy.clone()],
+            );
+        }
+        roles
+    }
+
+    fn into_intent(self) -> Intent {
+        Intent::CompareWebResearch {
+            topic: self.topic.text,
+            expression: self.expression.map(|span| span.text),
+        }
+    }
+}
+
+fn standalone_web_research_scope(request: &RequestEnvelope) -> bool {
+    matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        && request.context_ref.is_none()
+        && request.attachments.is_empty()
+        && request.speech.is_none()
+        && request.purpose.is_none()
+}
+
+fn diverse_web_research_bundle(request: &RequestEnvelope) -> Result<Option<InputBundle>> {
+    if !standalone_web_research_scope(request) {
+        return Ok(None);
+    }
+    let Some(source) = diverse_web_research_input(&request.text) else {
+        return Ok(None);
+    };
+    seal_web_research_bundle(request, WEB_RESEARCH_DIVERSE_PARSER_VERSION, source).map(Some)
+}
+
+fn authored_web_research_bundle(request: &RequestEnvelope) -> Result<Option<InputBundle>> {
+    if !standalone_web_research_scope(request) {
+        return Ok(None);
+    }
+    let english = matches!(request.locale.as_str(), "en" | "en-US");
+    let Some(source) = authored_web_research_input(&request.text, english)? else {
+        return Ok(None);
+    };
+    seal_web_research_bundle(request, WEB_RESEARCH_V2_PARSER_VERSION, source).map(Some)
+}
+
+fn seal_web_research_bundle(
+    request: &RequestEnvelope,
+    version: &str,
+    source: WebResearchInput,
+) -> Result<InputBundle> {
+    validate_user_seal_request(request, None)?;
+    let roles = source.roles();
+    seal_user_input(
+        request,
+        None,
+        version,
+        source.into_intent(),
+        roles,
+        Vec::new(),
+    )
 }
 
 fn web_research_source_roles(
@@ -8432,6 +8843,20 @@ fn web_research_input_error() -> Error {
 pub(crate) fn verify_web_research_input(bundle: &InputBundle) -> Result<()> {
     let request = &bundle.request;
     let meaning = &bundle.meaning;
+    if meaning.parser_version == WEB_RESEARCH_DIVERSE_PARSER_VERSION {
+        return if diverse_web_research_bundle(request)?.as_ref() == Some(bundle) {
+            Ok(())
+        } else {
+            Err(web_research_input_error())
+        };
+    }
+    if meaning.parser_version == WEB_RESEARCH_V2_PARSER_VERSION {
+        return if authored_web_research_bundle(request)?.as_ref() == Some(bundle) {
+            Ok(())
+        } else {
+            Err(web_research_input_error())
+        };
+    }
     if let Intent::CompareWebResearch { topic, expression } = &meaning.intent
         && request.attachments.is_empty()
         && request.text.len() <= request.budget.max_input_bytes
@@ -8586,6 +9011,250 @@ fn unavailable_web_freshness() -> Intent {
 
 pub(crate) fn parse_independent_requests(text: &str) -> Result<Option<Intent>> {
     crate::composition::parse(text, interpret_single)
+}
+
+pub(crate) fn research_independent_input(request: &RequestEnvelope) -> Result<Option<InputBundle>> {
+    scoped_research_independent_input(request, false)
+}
+
+pub(crate) fn diverse_research_independent_input(
+    request: &RequestEnvelope,
+) -> Result<Option<InputBundle>> {
+    scoped_research_independent_input(request, true)
+}
+
+fn compound_research_source(text: &str, include_diverse: bool) -> Result<Option<WebResearchInput>> {
+    if include_diverse && let Some(source) = diverse_web_research_input(text) {
+        return Ok(Some(source));
+    }
+    Ok(authored_web_research_input(text, true)?.filter(|source| source.expression.is_none()))
+}
+
+fn scoped_research_independent_input(
+    request: &RequestEnvelope,
+    include_diverse: bool,
+) -> Result<Option<InputBundle>> {
+    if !matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        || request.context_ref.is_some()
+        || request.speech.is_some()
+        || request.purpose.is_some()
+    {
+        return Ok(None);
+    }
+    let parsed = crate::composition::parse(&request.text, |item| {
+        if !request.attachments.is_empty()
+            && let Some(analysis) = bilingual_attached_analysis_intent(item)?
+        {
+            return Ok(analysis);
+        }
+        if let Some((_, news)) = crate::news_input::parse_user(item) {
+            return Ok(news);
+        }
+        if let Some(research) = compound_research_source(item, include_diverse)? {
+            return Ok(research.into_intent());
+        }
+        let intent = interpret_single(item)?;
+        if matches!(
+            intent,
+            Intent::AskCurrentNews { .. } | Intent::CompareWebResearch { .. }
+        ) {
+            return Ok(Intent::Unknown {
+                reason: "Use a public topic and write each independent task as its own item."
+                    .into(),
+            });
+        }
+        Ok(intent)
+    })?;
+    let Some(intent) = parsed else {
+        return Ok(None);
+    };
+    let Intent::IndependentRequests { items } = &intent else {
+        return Ok(None);
+    };
+    let contains_research = if include_diverse {
+        items.iter().any(is_diverse_research_item)
+    } else {
+        items
+            .iter()
+            .any(|item| matches!(item.intent.as_ref(), Intent::CompareWebResearch { .. }))
+    };
+    if !contains_research
+        || (!request.attachments.is_empty()
+            && !items
+                .iter()
+                .any(|item| matches!(item.intent.as_ref(), Intent::AnalyzeAttachments { .. })))
+    {
+        return Ok(None);
+    }
+    validate_user_seal_request(request, None)?;
+    let mut roles = source_role_spans(&request.text, &intent)?;
+    for (index, item) in items.iter().enumerate() {
+        let item_roles = match item.intent.as_ref() {
+            Intent::CompareWebResearch {
+                topic,
+                expression: None,
+            } => compound_research_source(&item.source.text, include_diverse)?
+                .filter(|input| &input.topic.text == topic)
+                .ok_or_else(web_research_input_error)?
+                .roles(),
+            intent @ Intent::AskCurrentNews { .. } => {
+                let (version, _) = crate::news_input::parse_user(&item.source.text)
+                    .ok_or_else(web_research_input_error)?;
+                crate::news_input::source_roles_for(&item.source.text, intent, version)
+                    .ok_or_else(web_research_input_error)?
+            }
+            _ => continue,
+        };
+        for (role, spans) in item_roles {
+            let anchored = spans
+                .into_iter()
+                .map(|span| {
+                    source_span_at(
+                        &request.text,
+                        item.source.start + span.start,
+                        item.source.start + span.end,
+                    )
+                    .filter(|matching| matching.text == span.text)
+                    .ok_or_else(web_research_input_error)
+                })
+                .collect::<Result<Vec<_>>>()?;
+            roles.insert(
+                format!("/IndependentRequests/items/{index}{role}"),
+                anchored,
+            );
+        }
+    }
+    seal_user_input(
+        request,
+        None,
+        if include_diverse {
+            crate::composition::DIVERSE_RESEARCH_PARSER_VERSION
+        } else {
+            crate::composition::RESEARCH_PARSER_VERSION
+        },
+        intent,
+        roles,
+        Vec::new(),
+    )
+    .map(Some)
+}
+
+pub(crate) fn news_independent_input(request: &RequestEnvelope) -> Result<Option<InputBundle>> {
+    if !matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        || request.context_ref.is_some()
+        || request.speech.is_some()
+        || request.purpose.is_some()
+    {
+        return Ok(None);
+    }
+    let parsed = crate::composition::parse(&request.text, |item| {
+        if !request.attachments.is_empty()
+            && let Some(analysis) = bilingual_attached_analysis_intent(item)?
+        {
+            return Ok(analysis);
+        }
+        if let Some((_, news)) = crate::news_input::parse_user(item) {
+            return Ok(news);
+        }
+        let intent = interpret_single(item)?;
+        if matches!(intent, Intent::AskCurrentNews { .. }) {
+            return Ok(Intent::Unknown {
+                reason: "The current-news scope could not be verified.".into(),
+            });
+        }
+        Ok(intent)
+    })?;
+    let Some(intent) = parsed else {
+        return Ok(None);
+    };
+    let Intent::IndependentRequests { items } = &intent else {
+        return Ok(None);
+    };
+    if !items
+        .iter()
+        .any(|item| matches!(item.intent.as_ref(), Intent::AskCurrentNews { .. }))
+        || !request.attachments.is_empty()
+            && !items
+                .iter()
+                .any(|item| matches!(item.intent.as_ref(), Intent::AnalyzeAttachments { .. }))
+    {
+        return Ok(None);
+    }
+    validate_user_seal_request(request, None)?;
+    let mut roles = source_role_spans(&request.text, &intent)?;
+    for (index, item) in items.iter().enumerate() {
+        if !matches!(item.intent.as_ref(), Intent::AskCurrentNews { .. }) {
+            continue;
+        }
+        let invalid = || {
+            failure(
+                "NEWS_SOURCE_INVALID",
+                "ニュース項目の原文と役割を照合できません。",
+            )
+        };
+        let (version, _) = crate::news_input::parse_user(&item.source.text).ok_or_else(invalid)?;
+        let item_roles =
+            crate::news_input::source_roles_for(&item.source.text, &item.intent, version)
+                .ok_or_else(invalid)?;
+        for (role, spans) in item_roles {
+            let mut anchored = Vec::with_capacity(spans.len());
+            for span in spans {
+                let matching = source_span_at(
+                    &request.text,
+                    item.source.start + span.start,
+                    item.source.start + span.end,
+                )
+                .filter(|matching| matching.text == span.text)
+                .ok_or_else(invalid)?;
+                anchored.push(matching);
+            }
+            roles.insert(
+                format!("/IndependentRequests/items/{index}{role}"),
+                anchored,
+            );
+        }
+    }
+    seal_user_input(
+        request,
+        None,
+        crate::composition::NEWS_PARSER_VERSION,
+        intent,
+        roles,
+        Vec::new(),
+    )
+    .map(Some)
+}
+
+pub(crate) fn attached_independent_input(request: &RequestEnvelope) -> Result<Option<InputBundle>> {
+    if !matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+        || request.attachments.is_empty()
+        || request.context_ref.is_some()
+        || request.speech.is_some()
+        || request.purpose.is_some()
+    {
+        return Ok(None);
+    }
+    let parsed = crate::composition::parse(&request.text, |item| {
+        bilingual_attached_analysis_intent(item)?.map_or_else(|| interpret_single(item), Ok)
+    })?;
+    let Some(intent @ Intent::IndependentRequests { .. }) = parsed else {
+        return Ok(None);
+    };
+    if !matches!(&intent, Intent::IndependentRequests { items }
+        if items.iter().any(|item| matches!(item.intent.as_ref(), Intent::AnalyzeAttachments { .. })))
+    {
+        return Ok(None);
+    }
+    let roles = source_role_spans(&request.text, &intent)?;
+    seal_user_input(
+        request,
+        None,
+        crate::composition::ATTACHED_PARSER_VERSION,
+        intent,
+        roles,
+        Vec::new(),
+    )
+    .map(Some)
 }
 
 fn interpret(text: &str) -> Result<Intent> {

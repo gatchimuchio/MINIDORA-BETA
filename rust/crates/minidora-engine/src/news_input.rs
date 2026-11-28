@@ -1,11 +1,13 @@
-//! Interpret bounded Japanese requests for a dated, source-backed news report.
+//! Interpret bounded requests for a dated, source-backed news report.
 
-use std::collections::BTreeMap;
+use std::{collections::BTreeMap, sync::LazyLock};
 
 use minidora_domain::{Intent, NewsPeriod, SourceSpan};
+use regex::Regex;
 
 pub(crate) const PARSER_VERSION: &str = "declarative-ja-v222-current-news";
 pub(crate) const NATURAL_PARSER_VERSION: &str = "declarative-ja-v253-natural-news";
+pub(crate) const ENGLISH_PARSER_VERSION: &str = "declarative-en-v1-current-news";
 
 struct NewsRequest<'a> {
     period: NewsPeriod,
@@ -712,6 +714,105 @@ fn natural_news(raw: &str) -> Option<NewsRequest<'_>> {
     })
 }
 
+fn english_news(raw: &str) -> Option<NewsRequest<'_>> {
+    const REQUEST: &str = r"(?i)\A(?:(?<cue>(?:please +)?(?:what(?:['’]s| +is| +are)|(?:show|tell|give) +me|(?:summarize|summarise))) +)?(?:the +)?";
+    const TOPIC: &str = r"(?: +(?:about|on) +(?<topic>[\p{L}\p{N}][\p{L}\p{N} -]{0,95}?))?";
+    const SOURCES: &str = r"(?: +with +(?:sources|citations))?\z";
+    static PERIOD_FIRST: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"{REQUEST}(?:(?<calendar>today|yesterday|this +morning)['’]s|(?<latest>latest)) +(?:news|headlines){TOPIC}{SOURCES}"
+        ))
+        .expect("English news with a leading date")
+    });
+    static PERIOD_LAST: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(&format!(
+            r"{REQUEST}(?:news|headlines)(?: +(?<calendar>(?:from +)?(?:today|yesterday|this +morning)|(?:in|over) +the +(?:last|past) +24 +hours))?{TOPIC}{SOURCES}"
+        ))
+        .expect("English news with a following date")
+    });
+    if raw.len() > 1024 || raw.chars().any(char::is_control) {
+        return None;
+    }
+    let trimmed = raw.trim();
+    let text = trimmed
+        .trim_end_matches(['。', '.', '！', '!', '？', '?'])
+        .trim_end();
+    let fields = PERIOD_FIRST
+        .captures(text)
+        .or_else(|| PERIOD_LAST.captures(text))?;
+    let time = fields
+        .name("calendar")
+        .or_else(|| fields.name("latest"))
+        .map(|found| found.as_str());
+    if time.is_none()
+        && fields.name("cue").is_none()
+        && !trimmed[text.len()..].contains(['?', '？'])
+    {
+        return None;
+    }
+    let period = time.map_or(NewsPeriod::Latest, |marker| {
+        let mut words = marker.split_ascii_whitespace();
+        match words
+            .find(|word| !word.eq_ignore_ascii_case("from"))
+            .map(str::to_ascii_lowercase)
+            .as_deref()
+        {
+            Some("today") => NewsPeriod::Today,
+            Some("yesterday") => NewsPeriod::Yesterday,
+            Some("this") => NewsPeriod::ThisMorning,
+            _ => NewsPeriod::Latest,
+        }
+    });
+    let topic = fields.name("topic").map(|found| found.as_str().trim_end());
+    if topic.is_some_and(|topic| {
+        topic.chars().count() > 48
+            || !topic.chars().any(char::is_alphabetic)
+            || unsupported_topic(topic)
+            || topic.split([' ', '-']).any(|word| {
+                matches!(
+                    word.to_ascii_lowercase().as_str(),
+                    "except"
+                        | "excluding"
+                        | "not"
+                        | "without"
+                        | "non"
+                        | "only"
+                        | "instead"
+                        | "no"
+                        | "and"
+                        | "or"
+                        | "but"
+                        | "today"
+                        | "yesterday"
+                        | "tomorrow"
+                        | "morning"
+                        | "tonight"
+                        | "latest"
+                        | "last"
+                        | "past"
+                        | "week"
+                        | "month"
+                        | "year"
+                        | "from"
+                        | "until"
+                        | "since"
+                        | "translate"
+                        | "send"
+                        | "post"
+                        | "report"
+                )
+            })
+    }) {
+        return None;
+    }
+    Some(NewsRequest {
+        period,
+        time,
+        topic,
+        request: text,
+    })
+}
+
 /// Choose the already published interpretation before broadening the grammar.
 fn preferred_legacy(text: &str) -> Option<Intent> {
     let intent = parse(text)?;
@@ -733,9 +834,13 @@ pub(crate) fn parse_user(text: &str) -> Option<(&'static str, Intent)> {
     if let Some(prior) = preferred_legacy(text) {
         return Some((PARSER_VERSION, prior));
     }
-    let request = natural_news(text)?;
+    let (version, request) = if let Some(request) = natural_news(text) {
+        (NATURAL_PARSER_VERSION, request)
+    } else {
+        (ENGLISH_PARSER_VERSION, english_news(text)?)
+    };
     Some((
-        NATURAL_PARSER_VERSION,
+        version,
         Intent::AskCurrentNews {
             topic: request.topic.map(str::to_owned),
             period: request.period,
@@ -752,6 +857,11 @@ pub(crate) fn source_roles_for(
         PARSER_VERSION => source_roles(text, intent),
         NATURAL_PARSER_VERSION if preferred_legacy(text).is_none() => {
             roles_for_request(text, intent, natural_news(text)?)
+        }
+        ENGLISH_PARSER_VERSION
+            if preferred_legacy(text).is_none() && natural_news(text).is_none() =>
+        {
+            roles_for_request(text, intent, english_news(text)?)
         }
         _ => None,
     }

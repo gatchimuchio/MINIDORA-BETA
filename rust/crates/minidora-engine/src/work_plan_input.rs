@@ -9,8 +9,12 @@ use regex::Regex;
 
 pub(crate) const PARSER_VERSION: &str = "declarative-ja-v247-work-plan";
 pub(crate) const REVISION_PARSER_VERSION: &str = "declarative-ja-v248-work-plan-revision";
+const CONSULTATION_PARSER_VERSION: &str = "declarative-ja-v1-work-plan-consultation";
+const CONSULTATION_REVISION_PARSER_VERSION: &str =
+    "declarative-ja-v1-work-plan-consultation-revision";
 
 pub(crate) struct ParsedWorkPlan {
+    pub(crate) version: &'static str,
     pub(crate) intent: Intent,
     pub(crate) roles: BTreeMap<String, Vec<SourceSpan>>,
 }
@@ -27,11 +31,20 @@ const PLAN_HEADERS: &[&str] = &[
     "計画を作って",
 ];
 
-pub(crate) fn parser_version(intent: &Intent) -> Option<&'static str> {
+pub(crate) fn version_matches(version: &str, intent: &Intent) -> bool {
     match intent {
-        Intent::PlanWork { .. } => Some(PARSER_VERSION),
-        Intent::ReviseWorkPlan { .. } => Some(REVISION_PARSER_VERSION),
-        _ => None,
+        Intent::PlanWork { .. } => matches!(version, PARSER_VERSION | CONSULTATION_PARSER_VERSION),
+        Intent::ReviseWorkPlan { .. } => matches!(
+            version,
+            REVISION_PARSER_VERSION | CONSULTATION_REVISION_PARSER_VERSION
+        ),
+        _ => !matches!(
+            version,
+            PARSER_VERSION
+                | CONSULTATION_PARSER_VERSION
+                | REVISION_PARSER_VERSION
+                | CONSULTATION_REVISION_PARSER_VERSION
+        ),
     }
 }
 
@@ -39,6 +52,7 @@ struct Grammar {
     task: Regex,
     deadline: Regex,
     personnel: Regex,
+    remaining: Regex,
     duration_edit: Regex,
     deadline_edit: Regex,
     personnel_edit: Regex,
@@ -66,6 +80,9 @@ static GRAMMAR: LazyLock<Grammar> = LazyLock::new(|| {
                 r"|(?P<workers>{numeral}人)[ \t　]*で(?:作業する|進めたい|作業したい)?(?P<rest>.*))\z"
             ),
             numeral = numeral
+        )),
+        remaining: make(format!(
+            r"\A(?:もう[ 　]*)?(?:あと|残り|使える時間は)[ 　]*(?P<limit>{minutes})(?:しかない|しかありません|しかなくなった|に減った|です|になった|以内)?\z"
         )),
         duration_edit: make(format!(
             r"\A(?P<task>.+?)(?:の所要時間(?:だけ|を)|の時間(?:だけ|を)|を)[ \t　]*(?P<duration>{minutes})(?:に変えて|に変更して|にして)(?:ください)?\z"
@@ -479,34 +496,48 @@ fn revision(raw: &str, text: &str) -> Option<ParsedWorkPlan> {
     };
     role(&mut roles, key, original_span(raw, evidence));
     Some(ParsedWorkPlan {
+        version: REVISION_PARSER_VERSION,
         intent: Intent::ReviseWorkPlan { change },
         roles,
     })
 }
 
 fn initial(raw: &str, text: &str) -> Option<ParsedWorkPlan> {
-    let mut clauses = text
-        .split([
-            '。', '、', ',', '，', '；', ';', '！', '!', '？', '?', '\n', '\r',
-        ])
-        .map(str::trim)
-        .filter(|clause| !clause.is_empty());
+    let mut clauses = plan_clauses(text);
     let goal = purpose(raw, clauses.next()?)?;
     let mut parts = Parts::default();
-    if let Some(goal) = &goal {
-        role(&mut parts.roles, "/PlanWork/purpose", goal.clone());
-    }
     for clause in clauses {
         parts.constraint(raw, clause)?;
     }
+    finish_plan(raw, parts, goal, PARSER_VERSION)
+}
+
+fn plan_clauses(text: &str) -> impl DoubleEndedIterator<Item = &str> {
+    text.split([
+        '。', '、', ',', '，', '；', ';', '！', '!', '？', '?', '\n', '\r',
+    ])
+    .map(str::trim)
+    .filter(|clause| !clause.is_empty())
+}
+
+fn finish_plan(
+    raw: &str,
+    mut parts: Parts<'_>,
+    purpose: Option<SourceSpan>,
+    version: &'static str,
+) -> Option<ParsedWorkPlan> {
     if parts.tasks.is_empty() {
         return None;
     }
+    if let Some(purpose) = &purpose {
+        role(&mut parts.roles, "/PlanWork/purpose", purpose.clone());
+    }
     let dependencies = parts.dependencies(raw)?;
     Some(ParsedWorkPlan {
+        version,
         intent: Intent::PlanWork {
             request: WorkPlanRequest {
-                purpose: goal,
+                purpose,
                 tasks: parts.tasks,
                 dependencies,
                 personnel: parts.personnel?,
@@ -518,10 +549,211 @@ fn initial(raw: &str, text: &str) -> Option<ParsedWorkPlan> {
     })
 }
 
+fn consultation_question(raw: &str, clause: &str) -> bool {
+    (clause == "間に合う" && raw.trim_end().ends_with(['？', '?']))
+        || matches!(
+            clause,
+            "何から手をつければいい"
+                | "何から手をつければいいですか"
+                | "何から始めればいい"
+                | "何から始めればいいですか"
+                | "どの順番で進めればいい"
+                | "どの順番で進めればいいですか"
+                | "どう進めればいい"
+                | "どう進めればいいですか"
+                | "間に合いますか"
+        )
+}
+
+fn consultation_constraint<'a>(parts: &mut Parts<'a>, raw: &str, clause: &'a str) -> Option<()> {
+    let mut remaining = clause;
+    let mut personnel = None;
+    if let Some(rest) = GRAMMAR
+        .personnel
+        .captures(clause)
+        .and_then(|group| group.name("rest"))
+    {
+        personnel = Some(clause[..rest.start()].trim_end());
+        remaining = rest.as_str().trim_start();
+    }
+    if let Some(time) = GRAMMAR
+        .remaining
+        .captures(remaining)
+        .and_then(|group| group.name("limit"))
+    {
+        let time = time.as_str();
+        if let Some(personnel) = personnel {
+            parts.constraint(raw, personnel)?;
+        }
+        set_once(&mut parts.deadline, minutes(time)?)?;
+        role(
+            &mut parts.roles,
+            "/PlanWork/deadline_minutes",
+            original_span(raw, time),
+        );
+        return Some(());
+    }
+
+    let sequence = clause
+        .split_once("が終わったら")
+        .map(|(before, after)| (before, after.trim()))
+        .or_else(|| {
+            let (after, before) = clause.split_once('は')?;
+            let before = ["が終わってから", "をしてから", "してから"]
+                .into_iter()
+                .find_map(|ending| {
+                    let before = before.strip_suffix("です").unwrap_or(before).trim_end();
+                    before.strip_suffix(ending)
+                })?;
+            Some((before, after))
+        });
+    if let Some((before, after)) = sequence {
+        let after = [
+            "をします",
+            "をする",
+            "を行います",
+            "を始めます",
+            "に進みます",
+        ]
+        .into_iter()
+        .find_map(|ending| after.strip_suffix(ending))
+        .unwrap_or(after);
+        parts.references.push((before, after));
+        return Some(());
+    }
+
+    let clause = ["かかりそうです", "かかりそう", "かかりますね"]
+        .into_iter()
+        .find_map(|ending| clause.strip_suffix(ending))
+        .map_or(clause, str::trim_end);
+    parts.constraint(raw, clause)
+}
+
+fn consultation(raw: &str, text: &str) -> Option<ParsedWorkPlan> {
+    let mut clauses = plan_clauses(text);
+    let last = clauses.next_back()?;
+    let (command, tail_constraint) = if consultation_question(raw, last) {
+        (last, None)
+    } else {
+        let last = last.strip_suffix("ください").unwrap_or(last).trim_end();
+        let (command, prefix) = PLAN_HEADERS.iter().find_map(|command| {
+            last.strip_suffix(command)
+                .map(|prefix| (*command, prefix.trim_end()))
+        })?;
+        let authored_command = &last[last.len() - command.len()..];
+        let tail = (!matches!(prefix, "" | "この条件で" | "これで")).then_some(prefix);
+        (authored_command, tail)
+    };
+    let mut parts = Parts::default();
+    let mut goal = None;
+    for (index, clause) in clauses.chain(tail_constraint).enumerate() {
+        if index == 0
+            && let Some(purpose) = clause.strip_suffix("です")
+            && ["準備", "相談", "作業"]
+                .iter()
+                .any(|suffix| purpose.ends_with(suffix))
+            && !purpose.contains(['は', 'が', 'を'])
+            && ![
+                "必要", "禁止", "以内", "締切", "制限", "人数", "時間", "並行", "同時",
+            ]
+            .iter()
+            .any(|condition| purpose.contains(condition))
+            && !purpose
+                .chars()
+                .any(|ch| ch.is_ascii_digit() || ('０'..='９').contains(&ch))
+        {
+            goal = Some(label(raw, purpose)?);
+            continue;
+        }
+        consultation_constraint(&mut parts, raw, clause)?;
+    }
+    role(
+        &mut parts.roles,
+        "/PlanWork/request",
+        original_span(raw, command),
+    );
+    finish_plan(raw, parts, goal, CONSULTATION_PARSER_VERSION)
+}
+
+fn consultation_revision(raw: &str, text: &str) -> Option<ParsedWorkPlan> {
+    let mut clauses = plan_clauses(text);
+    let first = clauses.next()?;
+    let anchor = ["前回の", "直前の", "先ほどの", "さっきの", "前の", "その"]
+        .into_iter()
+        .find_map(|prefix| first.strip_prefix(prefix))
+        .is_some_and(|name| matches!(name, "作業計画" | "計画" | "段取り" | "予定"));
+    let clause = if anchor { clauses.next()? } else { first };
+    let question = clauses.next();
+    if clauses.next().is_some()
+        || question.is_some_and(|question| !consultation_question(raw, question))
+        || (!anchor && question.is_none())
+    {
+        return None;
+    }
+
+    let mut parts = Parts::default();
+    consultation_constraint(&mut parts, raw, clause)?;
+    let (change, mut roles) = if let Some(limit) = parts.deadline
+        && parts.personnel.is_none()
+        && parts.tasks.is_empty()
+    {
+        let evidence = parts.roles.remove("/PlanWork/deadline_minutes")?;
+        (
+            WorkPlanChange::Deadline {
+                deadline_minutes: limit,
+            },
+            BTreeMap::from([("/ReviseWorkPlan/deadline_minutes".into(), evidence)]),
+        )
+    } else if anchor
+        && let [task] = parts.tasks.as_slice()
+        && !parts.roles.contains_key("/PlanWork/tasks/0/workers")
+    {
+        let evidence = parts.roles.remove("/PlanWork/tasks/0/duration_minutes")?;
+        (
+            WorkPlanChange::TaskDuration {
+                task: task.name.clone(),
+                duration_minutes: task.duration_minutes,
+            },
+            BTreeMap::from([
+                ("/ReviseWorkPlan/duration_minutes".into(), evidence),
+                ("/ReviseWorkPlan/task".into(), vec![task.name.clone()]),
+            ]),
+        )
+    } else {
+        return None;
+    };
+    if anchor {
+        role(
+            &mut roles,
+            "/ReviseWorkPlan/anchor",
+            original_span(raw, first),
+        );
+    }
+    if let Some(question) = question {
+        role(
+            &mut roles,
+            "/ReviseWorkPlan/request",
+            original_span(raw, question),
+        );
+    }
+    Some(ParsedWorkPlan {
+        version: CONSULTATION_REVISION_PARSER_VERSION,
+        intent: Intent::ReviseWorkPlan { change },
+        roles,
+    })
+}
+
 pub(crate) fn parse(raw: &str) -> Result<Option<ParsedWorkPlan>> {
     let text = terminal_trim(raw);
-    if text.len() > 8192 || (!text.contains("計画") && !text.contains("段取り")) {
+    if text.len() > 8192 {
         return Ok(None);
     }
-    Ok(revision(raw, text).or_else(|| initial(raw, text)))
+    let structured = if text.contains("計画") || text.contains("段取り") {
+        revision(raw, text).or_else(|| initial(raw, text))
+    } else {
+        None
+    };
+    Ok(structured
+        .or_else(|| consultation_revision(raw, text))
+        .or_else(|| consultation(raw, text)))
 }

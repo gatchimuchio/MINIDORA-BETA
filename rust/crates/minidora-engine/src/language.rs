@@ -1,6 +1,6 @@
 //! Exact arithmetic and an inherited non-neural character sequence model.
 //! Model probabilities rank surface candidates; they never establish facts.
-use minidora_domain::{Calculation, Guarantee, Result, failure, identity};
+use minidora_domain::{Calculation, Guarantee, Intent, Result, canonical, failure, identity};
 use num_bigint::BigInt;
 use num_rational::BigRational;
 use num_traits::{One, Signed, Zero};
@@ -219,6 +219,156 @@ pub struct ResolvedSequenceCalculation {
     pub evaluated_expression: String,
     pub calculation: Calculation,
     pub consumed: Vec<CalculationReferenceUse>,
+}
+
+pub(crate) struct CalculationAction<'a> {
+    expression: &'a str,
+    requires: Option<&'a [String]>,
+}
+
+impl<'a> CalculationAction<'a> {
+    pub(crate) fn bind(intent: &'a Intent) -> Option<Self> {
+        let (expression, requires) = match intent {
+            Intent::Calculate { expression } => (expression.as_str(), None),
+            Intent::CalculateFromRequestItems {
+                expression,
+                requires,
+            } => (expression.as_str(), Some(requires.as_slice())),
+            _ => return None,
+        };
+        Some(Self {
+            expression,
+            requires,
+        })
+    }
+
+    pub(crate) fn with_references(expression: &'a str, requires: &'a [String]) -> Self {
+        Self {
+            expression,
+            requires: Some(requires),
+        }
+    }
+
+    pub(crate) fn is_literal(&self) -> bool {
+        self.requires.is_none()
+    }
+
+    pub(crate) fn requires(&self) -> &'a [String] {
+        self.requires.unwrap_or_default()
+    }
+
+    pub(crate) fn reference_source(&self, reference: &str) -> Option<&'a str> {
+        self.requires()
+            .iter()
+            .find(|node| node.as_str() == reference)
+            .or_else(|| {
+                self.requires().iter().find(|node| {
+                    reference
+                        .strip_prefix(node.as_str())
+                        .is_some_and(|suffix| suffix.starts_with('-'))
+                })
+            })
+            .map(String::as_str)
+    }
+
+    pub(crate) fn observe_literal(&self) -> Result<Calculation> {
+        if !self.is_literal() {
+            return Err(calculation_reference_mismatch());
+        }
+        calculate(self.expression)
+    }
+
+    pub(crate) fn observe(
+        &self,
+        values: &BTreeMap<String, SequenceValue>,
+        consumed: &BTreeMap<String, String>,
+    ) -> Result<CalculationObservation> {
+        if self.is_literal() {
+            if !consumed.is_empty() {
+                return Err(calculation_reference_mismatch());
+            }
+            return Ok(CalculationObservation::Literal(self.observe_literal()?));
+        }
+
+        let resolved = calculate_sequence_expression(self.expression, values)?;
+        let declared: BTreeSet<_> = self.requires().iter().collect();
+        if declared.len() != self.requires().len() || !consumed.keys().eq(declared) {
+            return Err(calculation_reference_mismatch());
+        }
+        let mut used = BTreeSet::new();
+        for reference in &resolved.consumed {
+            let node = self
+                .reference_source(&reference.step_id)
+                .ok_or_else(calculation_reference_mismatch)?;
+            if consumed.get(node) != Some(&reference.artifact_sha256) {
+                return Err(calculation_reference_mismatch());
+            }
+            used.insert(node);
+        }
+        if used.len() != consumed.len() {
+            return Err(calculation_reference_mismatch());
+        }
+        Ok(CalculationObservation::Referenced(resolved))
+    }
+
+    /// Check the legacy proof representation before replaying it with verified
+    /// operand values and observed prerequisite hashes.
+    pub(crate) fn decode_observation(&self, bytes: &[u8]) -> Result<CalculationObservation> {
+        let observation = if self.is_literal() {
+            CalculationObservation::Literal(serde_json::from_slice(bytes)?)
+        } else {
+            CalculationObservation::Referenced(serde_json::from_slice(bytes)?)
+        };
+        let expression_matches = match &observation {
+            CalculationObservation::Literal(value) => value.expression == self.expression,
+            CalculationObservation::Referenced(value) => {
+                value.calculation.expression == value.evaluated_expression
+            }
+        };
+        if !expression_matches || observation.proof_bytes()? != bytes {
+            return Err(failure(
+                "CALCULATION_PROOF_MISMATCH",
+                "Saved calculation proof differs from its canonical form or expression.",
+            ));
+        }
+        Ok(observation)
+    }
+}
+
+fn calculation_reference_mismatch() -> minidora_domain::Error {
+    failure(
+        "BRANCH_REFERENCE_MISMATCH",
+        "Consumed values do not match the observed prerequisite artifacts.",
+    )
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum CalculationObservation {
+    Literal(Calculation),
+    Referenced(ResolvedSequenceCalculation),
+}
+
+impl CalculationObservation {
+    pub(crate) fn calculation(&self) -> &Calculation {
+        match self {
+            Self::Literal(value) => value,
+            Self::Referenced(value) => &value.calculation,
+        }
+    }
+
+    pub(crate) fn consumed(&self) -> &[CalculationReferenceUse] {
+        match self {
+            Self::Literal(_) => &[],
+            Self::Referenced(value) => &value.consumed,
+        }
+    }
+
+    pub(crate) fn proof_bytes(&self) -> Result<Vec<u8>> {
+        match self {
+            Self::Literal(value) => canonical(value),
+            Self::Referenced(value) => canonical(value),
+        }
+    }
 }
 
 fn sequence_value_literal(value: &str) -> Result<(String, bool)> {

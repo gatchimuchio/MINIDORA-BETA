@@ -1,11 +1,13 @@
 //! Core-owned evidence selection for limited, dated public news requests.
 use crate::{
+    core::read_case_changed,
     news_source::{NewsArticle, NewsCandidate, NewsPublisher},
     ports::{self, NewsWebFormat},
     scheduler::{GoalNode, GoalNodeKind},
 };
 use minidora_domain::{
-    EvidencePacket, Guarantee, NewsPeriod, Permissions, Result, ResultRecord, failure,
+    Error, EvidencePacket, Guarantee, Intent, NewsPeriod, Permissions, Result, ResultRecord,
+    failure,
 };
 use serde::Serialize;
 use std::{
@@ -74,11 +76,179 @@ pub(crate) fn admitted_publishers(permissions: &Permissions) -> Vec<NewsPublishe
         .collect()
 }
 
+pub(crate) struct NewsAction<'a> {
+    pub(crate) topic: Option<&'a str>,
+    pub(crate) period: NewsPeriod,
+}
+
+/// One bounded fetch and the scoped artifact published for its response.
+pub(crate) struct NewsFetch {
+    pub(crate) packet: EvidencePacket,
+    pub(crate) reference: String,
+    pub(crate) redirect_wait: Option<String>,
+}
+
+impl<'a> NewsAction<'a> {
+    pub(crate) fn bind(intent: &'a Intent) -> Option<Self> {
+        let Intent::AskCurrentNews { topic, period } = intent else {
+            return None;
+        };
+        Some(Self {
+            topic: topic.as_deref(),
+            period: *period,
+        })
+    }
+
+    pub(crate) fn report<'b>(
+        &'b self,
+        window: &'b NewsWindow,
+        reviews: &'b [NewsReview],
+    ) -> NewsReport<'b> {
+        NewsReport {
+            kind: "minidora.core.current-news.v1",
+            window,
+            topic: self.topic,
+            reviews,
+        }
+    }
+
+    pub(crate) fn review_publisher(
+        &self,
+        publisher: NewsPublisher,
+        parent_permissions: &Permissions,
+        window: &NewsWindow,
+        candidate_limit: usize,
+        fetch: &mut dyn FnMut(&str, NewsWebFormat, &Permissions) -> Result<NewsFetch>,
+    ) -> Result<NewsReview> {
+        // Narrow the admitted Goal permission to this publisher before asking
+        // the transport to start. The same checks also apply to replay.
+        ports::approved_url(publisher.listing_url(), parent_permissions)?;
+        let candidate_limit = candidate_limit.min(MAX_CANDIDATES_PER_PUBLISHER);
+        let mut review = NewsReview::new(publisher);
+        let permissions = publisher.read_permissions();
+        let listing = (|| {
+            let listed = fetch(
+                publisher.listing_url(),
+                publisher.listing_format(),
+                &permissions,
+            )?;
+            let packet = listed.packet;
+            review.listing_ref = Some(listed.reference);
+            if let Some(wait) = listed.redirect_wait {
+                return Err(failure(ports::RETRY_DEFERRED, wait));
+            }
+            if let Some(code) = &packet.failure {
+                return Err(failure(code, "公開記事一覧を取得できませんでした。"));
+            }
+            ports::validate_news_packet(&packet, publisher.listing_format(), &permissions)?;
+            if packet.request_uri != publisher.listing_url()
+                || packet.final_uri != publisher.listing_url()
+            {
+                return Err(failure(
+                    "NEWS_LISTING_ROUTE",
+                    "公開記事一覧の取得元を確認できません。",
+                ));
+            }
+            publisher.listing(packet.extracted_text.as_deref().unwrap_or_default())
+        })();
+        match listing {
+            Err(error) if read_case_changed(&error) => return Err(error),
+            Err(Error::Contract { code, .. }) => review.unavailable(code),
+            Err(error) => return Err(error),
+            Ok(mut candidates) => {
+                window.prioritize_candidates(publisher, &mut candidates, self.topic);
+                for candidate in candidates.into_iter().take(candidate_limit) {
+                    let article = (|| {
+                        if !publisher.valid_article_uri(&candidate.uri) {
+                            return Err(failure(
+                                "NEWS_ARTICLE_ROUTE",
+                                "記事候補の接続先を確認できません。",
+                            ));
+                        }
+                        let fetched =
+                            fetch(&candidate.uri, NewsWebFormat::ArticleHtml, &permissions)?;
+                        let packet = fetched.packet;
+                        let body_ref = fetched.reference;
+                        review.attempted_articles.push(body_ref.clone());
+                        if let Some(wait) = fetched.redirect_wait {
+                            return Err(failure(ports::RETRY_DEFERRED, wait));
+                        }
+                        if let Some(code) = &packet.failure {
+                            return Err(failure(code, "記事の本文を取得できませんでした。"));
+                        }
+                        ports::validate_news_packet(
+                            &packet,
+                            NewsWebFormat::ArticleHtml,
+                            &permissions,
+                        )?;
+                        if packet.request_uri != candidate.uri || packet.final_uri != candidate.uri
+                        {
+                            return Err(failure(
+                                "NEWS_ARTICLE_ROUTE",
+                                "一覧で見つけた記事と取得した記事を照合できません。",
+                            ));
+                        }
+                        let article = publisher.article(
+                            &packet.final_uri,
+                            packet.extracted_text.as_deref().unwrap_or_default(),
+                            self.topic,
+                        )?;
+                        let published_at_unix_ms = window.admits(&article, &packet)?;
+                        if !matches_topic(&article, self.topic) {
+                            return Err(failure(
+                                "NEWS_TOPIC_UNCONFIRMED",
+                                "指定された話題を記事本文と照合できません。",
+                            ));
+                        }
+                        Ok(NewsCitation {
+                            source: publisher,
+                            body_ref,
+                            uri: packet.final_uri,
+                            observed_at_unix_ms: packet.observed_at_unix_ms,
+                            published_at_unix_ms,
+                            candidate,
+                            article,
+                        })
+                    })();
+                    match article {
+                        Ok(citation) => {
+                            review.status = "NEWS_ARTICLE_CONFIRMED";
+                            review.diagnostic = None;
+                            review.citation = Some(citation);
+                            break;
+                        }
+                        Err(error) if read_case_changed(&error) => return Err(error),
+                        Err(Error::Contract { code, .. }) => {
+                            let end_publisher = matches!(
+                                code.as_str(),
+                                ports::DEADLINE_EXCEEDED
+                                    | ports::RETRY_DEFERRED
+                                    | ports::REDIRECT_RETRY_DEFERRED
+                                    | "HTTP_RATE_LIMITED"
+                                    | "HTTP_START_BUDGET_EXHAUSTED"
+                                    | "RESOURCE_LIMIT"
+                            );
+                            review.unavailable(code);
+                            if end_publisher {
+                                break;
+                            }
+                        }
+                        Err(error) => return Err(error),
+                    }
+                }
+            }
+        }
+        Ok(review)
+    }
+}
+
 #[derive(Serialize)]
 pub(crate) struct NewsWindow {
     period: NewsPeriod,
     start_unix_ms: i64,
     end_unix_ms: i64,
+    #[serde(skip)]
+    captured_at_unix_ms: i64,
 }
 
 impl NewsWindow {
@@ -93,22 +263,43 @@ impl NewsWindow {
                     "ニュースの時間範囲を確定できません。",
                 )
             })?;
-        Ok(Self::at(period, elapsed))
+        Self::at(period, elapsed)
     }
 
-    fn at(period: NewsPeriod, end_unix_ms: i64) -> Self {
-        let midnight = (end_unix_ms + JST_OFFSET_MS).div_euclid(DAY_MS) * DAY_MS - JST_OFFSET_MS;
+    pub(crate) fn at(period: NewsPeriod, captured_at_unix_ms: i64) -> Result<Self> {
+        let jst_clock = captured_at_unix_ms.checked_add(JST_OFFSET_MS).filter(|_| {
+            // Publication times are parsed from four-digit ISO 8601 years.
+            (0..=253_402_300_799_999).contains(&captured_at_unix_ms)
+        });
+        let midnight = jst_clock
+            .ok_or_else(|| {
+                failure(
+                    "NEWS_CLOCK_UNAVAILABLE",
+                    "ニュースの時間範囲を確定できません。",
+                )
+            })?
+            .div_euclid(DAY_MS)
+            * DAY_MS
+            - JST_OFFSET_MS;
         let (start_unix_ms, end_unix_ms) = match period {
-            NewsPeriod::Today => (midnight, end_unix_ms),
-            NewsPeriod::Latest => (end_unix_ms - DAY_MS, end_unix_ms),
+            NewsPeriod::Today => (midnight, captured_at_unix_ms),
+            NewsPeriod::Latest => (captured_at_unix_ms - DAY_MS, captured_at_unix_ms),
             NewsPeriod::Yesterday => (midnight - DAY_MS, midnight - 1),
-            NewsPeriod::ThisMorning => (midnight, end_unix_ms.min(midnight + HALF_DAY_MS - 1)),
+            NewsPeriod::ThisMorning => (
+                midnight,
+                captured_at_unix_ms.min(midnight + HALF_DAY_MS - 1),
+            ),
         };
-        Self {
+        Ok(Self {
             period,
             start_unix_ms,
             end_unix_ms,
-        }
+            captured_at_unix_ms,
+        })
+    }
+
+    pub(crate) fn captured_at_unix_ms(&self) -> i64 {
+        self.captured_at_unix_ms
     }
 
     pub(crate) fn admits(&self, article: &NewsArticle, packet: &EvidencePacket) -> Result<i64> {
@@ -346,35 +537,52 @@ impl NewsReview {
         self.diagnostic = Some(reason.into());
     }
 
-    fn unavailable_text(&self) -> &'static str {
-        match self.diagnostic.as_deref() {
-            Some("NEWS_PUBLICATION_OUTSIDE_WINDOW") => {
-                "調べた記事に指定時間内と確認できる掲載がありませんでした。"
-            }
-            Some("NEWS_PUBLICATION_UNKNOWN" | "NEWS_ARTICLE_PUBLICATION_UNAVAILABLE") => {
-                "記事の掲載日時を確認できませんでした。"
-            }
-            Some("NEWS_TOPIC_UNCONFIRMED") => {
-                "調べた記事では、指定した話題との一致を確認できませんでした。"
-            }
-            Some(ports::RETRY_DEFERRED | ports::REDIRECT_RETRY_DEFERRED | "HTTP_RATE_LIMITED") => {
-                "取得先から待機を求められています。"
-            }
-            Some(ports::DEADLINE_EXCEEDED | "DEADLINE_EXCEEDED") => {
-                "時間内に記事を確認できませんでした。"
-            }
-            Some("PRIVATE_READ_TARGET") => "配信元の接続先が通信の安全条件を満たしませんでした。",
+    fn unavailable_text(&self, english: bool) -> &'static str {
+        let (ja, en) = match self.diagnostic.as_deref() {
+            Some("NEWS_PUBLICATION_OUTSIDE_WINDOW") => (
+                "調べた記事に指定時間内と確認できる掲載がありませんでした。",
+                "The articles checked contained no confirmed publication within the requested time window.",
+            ),
+            Some("NEWS_PUBLICATION_UNKNOWN" | "NEWS_ARTICLE_PUBLICATION_UNAVAILABLE") => (
+                "記事の掲載日時を確認できませんでした。",
+                "The article's publication time could not be confirmed.",
+            ),
+            Some("NEWS_TOPIC_UNCONFIRMED") => (
+                "調べた記事では、指定した話題との一致を確認できませんでした。",
+                "The articles checked did not establish a match for the requested topic.",
+            ),
+            Some(ports::RETRY_DEFERRED | ports::REDIRECT_RETRY_DEFERRED | "HTTP_RATE_LIMITED") => (
+                "取得先から待機を求められています。",
+                "The publisher has asked us to wait before retrying.",
+            ),
+            Some(ports::DEADLINE_EXCEEDED | "DEADLINE_EXCEEDED") => (
+                "時間内に記事を確認できませんでした。",
+                "The article could not be verified before the deadline.",
+            ),
+            Some("PRIVATE_READ_TARGET") => (
+                "配信元の接続先が通信の安全条件を満たしませんでした。",
+                "The publisher's address failed the connection safety checks.",
+            ),
             Some(
                 "HTTP_REQUEST_FAILED" | "HTTP_TRANSPORT_FAILURE" | "HTTP_CLIENT_OR_DNS_FAILED",
-            ) => "配信元との通信を完了できませんでした。",
-            Some(ports::READ_PERMISSION_REQUIRED) => {
-                "記事の取得経路に許可されていない接続先がありました。"
-            }
-            Some("NEWS_LISTING_UNAVAILABLE" | "NEWS_LISTING_ROUTE") => {
-                "公開記事一覧を確認できませんでした。"
-            }
-            _ => "掲載日時と本文を確認できる記事を取得できませんでした。",
-        }
+            ) => (
+                "配信元との通信を完了できませんでした。",
+                "The connection to the publisher could not be completed.",
+            ),
+            Some(ports::READ_PERMISSION_REQUIRED) => (
+                "記事の取得経路に許可されていない接続先がありました。",
+                "The route to the article required access to an unapproved host.",
+            ),
+            Some("NEWS_LISTING_UNAVAILABLE" | "NEWS_LISTING_ROUTE") => (
+                "公開記事一覧を確認できませんでした。",
+                "The publisher's public article list could not be verified.",
+            ),
+            _ => (
+                "掲載日時と本文を確認できる記事を取得できませんでした。",
+                "No article body with a verifiable publication time was retrieved.",
+            ),
+        };
+        if english { en } else { ja }
     }
 }
 
@@ -387,26 +595,49 @@ pub(crate) struct NewsReport<'a> {
 }
 
 impl NewsReport<'_> {
-    pub(crate) fn unavailable_units(&self) -> Vec<String> {
+    pub(crate) fn localized_unavailable(&self, english: bool) -> Vec<String> {
         self.reviews
             .iter()
             .filter(|review| review.citation.is_none())
-            .map(|review| format!("【{}】{}", review.source.label(), review.unavailable_text()))
+            .map(|review| {
+                let source = review.source.label();
+                let reason = review.unavailable_text(english);
+                if english {
+                    format!("{source}: {reason}")
+                } else {
+                    format!("【{source}】{reason}")
+                }
+            })
             .collect()
     }
 
-    pub(crate) fn requested_scope(&self) -> String {
-        let scope = self
-            .topic
-            .map_or_else(String::new, |topic| format!("の「{topic}」"));
-        format!("{}{scope}", self.window.label())
+    pub(crate) fn localized_requested_scope(&self, english: bool) -> String {
+        if english {
+            let period = match self.window.period {
+                NewsPeriod::Today => "today (Japan Standard Time)",
+                NewsPeriod::Latest => "the 24 hours before your request",
+                NewsPeriod::Yesterday => "yesterday (Japan Standard Time)",
+                NewsPeriod::ThisMorning => "this morning (before noon Japan Standard Time)",
+            };
+            let topic = self
+                .topic
+                .map_or_else(String::new, |topic| format!(" about “{topic}”"));
+            format!("{period}{topic}")
+        } else {
+            let topic = self
+                .topic
+                .map_or_else(String::new, |topic| format!("の「{topic}」"));
+            format!("{}{topic}", self.window.label())
+        }
     }
 
-    pub(crate) fn units(&self) -> Vec<String> {
-        let mut units = vec![format!(
-            "{}のニュースです。確認できた公開記事を紹介します。",
-            self.requested_scope()
-        )];
+    pub(crate) fn localized_units(&self, english: bool) -> Vec<String> {
+        let scope = self.localized_requested_scope(english);
+        let mut units = vec![if english {
+            format!("I confirmed these public news articles for {scope}.")
+        } else {
+            format!("{scope}のニュースです。確認できた公開記事を紹介します。")
+        }];
         let mut citations = self
             .reviews
             .iter()
@@ -414,60 +645,83 @@ impl NewsReport<'_> {
             .collect::<Vec<_>>();
         citations.sort_by_key(|citation| std::cmp::Reverse(citation.published_at_unix_ms));
         for citation in &citations {
-            units.push(format!(
-                "【{}】{}（掲載 {}）。本文の一部「{}」 出典 {}",
-                citation.source.label(),
-                citation.article.title,
-                citation.article.published,
-                citation.article.passage,
-                citation.uri,
-            ));
+            let source = citation.source.label();
+            let title = &citation.article.title;
+            let published = &citation.article.published;
+            let passage = &citation.article.passage;
+            let uri = &citation.uri;
+            units.push(if english {
+                format!("{source}: {title} (published {published}). Article excerpt: “{passage}” Source: {uri}")
+            } else {
+                format!("【{source}】{title}（掲載 {published}）。本文の一部「{passage}」 出典 {uri}")
+            });
         }
         if let [left, right] = citations.as_slice() {
-            if normalize(&left.article.title) == normalize(&right.article.title)
-                && normalize(&left.article.passage) == normalize(&right.article.passage)
-            {
-                units.push(
+            let same = normalize(&left.article.title) == normalize(&right.article.title)
+                && normalize(&left.article.passage) == normalize(&right.article.passage);
+            let comparison = match (english, same) {
+                (true, true) => {
+                    "The headlines and quoted passages match. Independent reporting remains unverified."
+                }
+                (true, false) => {
+                    "These two articles did not establish independent confirmation of the same event."
+                }
+                (false, true) => {
                     "両記事の見出しと採用箇所は一致しています。別々に取材されたかは未確認です。"
-                        .into(),
-                );
-            } else {
-                units.push(
+                }
+                (false, false) => {
                     "取得した2件からは、同じ出来事についての裏取りまでは確認できませんでした。"
-                        .into(),
-                );
-            }
+                }
+            };
+            units.push(comparison.into());
         }
-        units.extend(self.unavailable_units());
+        units.extend(self.localized_unavailable(english));
         units
     }
 }
 
-pub(crate) fn explanation_units(original: &ResultRecord) -> Vec<String> {
+pub(crate) fn localized_explanation_units(original: &ResultRecord, english: bool) -> Vec<String> {
     let reason = original
         .reason
         .as_deref()
         .and_then(|value| value.split_once(": ").map(|(code, _)| code));
-    let status = match reason {
-        Some(ports::READ_PERMISSION_REQUIRED) => {
-            "前のニュースの質問は理解できました。記事を調べるにはWeb接続先の許可が必要ですが、そのときは許可された配信元がなかったため、取得できていません。"
-        }
-        Some("NEWS_ARTICLES_UNAVAILABLE") => {
-            "記事一覧や本文を確認しようとしましたが、指定の時間や話題に合う記事を確認できなかったため、ニュースの内容は確定していません。"
-        }
-        Some("NEWS_PARTIALLY_CONFIRMED") => {
-            "前の回答に出した記事は本文と掲載日時を確認できました。確認できなかった配信元も回答に記載しています。"
-        }
-        _ if original.guarantee == Guarantee::SourceReport => {
-            "前の回答では、取得できた公開記事の本文と、配信元が掲載した日時を確認しました。出典は前の回答の各記事に付けています。"
-        }
-        _ => "前の依頼には、確認済みとして紹介できるニュースの記事がありません。",
+    let (ja, en) = match reason {
+        Some(ports::READ_PERMISSION_REQUIRED) => (
+            "前のニュースの質問は理解できました。記事を調べるにはWeb接続先の許可が必要ですが、そのときは許可された配信元がなかったため、取得できていません。",
+            "I understood the previous news request. No publisher was authorized for that request, so no articles were retrieved.",
+        ),
+        Some("NEWS_ARTICLES_UNAVAILABLE") => (
+            "記事一覧や本文を確認しようとしましたが、指定の時間や話題に合う記事を確認できなかったため、ニュースの内容は確定していません。",
+            "I could not confirm an article that matched the requested time and topic when checking publisher listings and article bodies.",
+        ),
+        Some("NEWS_PARTIALLY_CONFIRMED") => (
+            "前の回答に出した記事は本文と掲載日時を確認できました。確認できなかった配信元も回答に記載しています。",
+            "I verified the body and publication time of the articles shown. The previous answer also identified the publishers I could not verify.",
+        ),
+        _ if original.guarantee == Guarantee::SourceReport => (
+            "前の回答では、取得できた公開記事の本文と、配信元が掲載した日時を確認しました。出典は前の回答の各記事に付けています。",
+            "The previous answer checked each retrieved article's body and the publication time stated by its publisher. It included a source for each article.",
+        ),
+        _ => (
+            "前の依頼には、確認済みとして紹介できるニュースの記事がありません。",
+            "The previous request has no verified news articles to report.",
+        ),
     };
-    let guidance = if reason == Some(ports::READ_PERMISSION_REQUIRED) {
-        "通信してよければ、使う配信元への接続を許可してから、もう一度ニュースを聞いてください。"
-    } else {
-        "掲載日時は配信元が示した日時です。取得時刻はミニドラがページを読んだ時刻で、今回の追問では再取得していません。"
+    let guidance = match (english, reason == Some(ports::READ_PERMISSION_REQUIRED)) {
+        (true, true) => {
+            "To look up the news, allow read access to your chosen publisher and ask again."
+        }
+        (true, false) => {
+            "Publication time is the time stated by the publisher. Retrieval time records when Minidora read the page. This follow-up reused the existing result."
+        }
+        (false, true) => {
+            "通信してよければ、使う配信元への接続を許可してから、もう一度ニュースを聞いてください。"
+        }
+        (false, false) => {
+            "掲載日時は配信元が示した日時です。取得時刻はミニドラがページを読んだ時刻で、今回の追問では再取得していません。"
+        }
     };
+    let status = if english { en } else { ja };
     vec![status.into(), guidance.into()]
 }
 
@@ -481,10 +735,10 @@ mod tests {
         let before = publication_time("2026-11-26T14:59:59.999Z").unwrap();
         let midnight = publication_time("2026-11-26T15:00:00Z").unwrap();
         assert_eq!(midnight, before + 1);
-        let today = NewsWindow::at(NewsPeriod::Today, now);
+        let today = NewsWindow::at(NewsPeriod::Today, now).unwrap();
         assert_eq!(today.start_unix_ms, midnight);
         assert!(before < today.start_unix_ms);
-        let latest = NewsWindow::at(NewsPeriod::Latest, now);
+        let latest = NewsWindow::at(NewsPeriod::Latest, now).unwrap();
         assert!(before > latest.start_unix_ms);
         assert_eq!(publication_time("2026-02-29T14:00:00Z"), None);
         assert_eq!(publication_time("2026-11-27T08:00:00-00:00"), None);
@@ -500,15 +754,17 @@ mod tests {
         let now = moment("2026-11-28T16:20:00+09:00");
         let midnight = moment("2026-11-28T00:00:00+09:00");
         let noon = moment("2026-11-28T12:00:00+09:00");
-        let yesterday = NewsWindow::at(NewsPeriod::Yesterday, now);
+        let yesterday = NewsWindow::at(NewsPeriod::Yesterday, now).unwrap();
         assert_eq!(yesterday.start_unix_ms, midnight - DAY_MS);
         assert_eq!(yesterday.end_unix_ms, midnight - 1);
-        let morning = NewsWindow::at(NewsPeriod::ThisMorning, now);
+        let morning = NewsWindow::at(NewsPeriod::ThisMorning, now).unwrap();
         assert_eq!(morning.start_unix_ms, midnight);
         assert_eq!(morning.end_unix_ms, noon - 1);
         let early = moment("2026-11-28T05:00:00+09:00");
         assert_eq!(
-            NewsWindow::at(NewsPeriod::ThisMorning, early).end_unix_ms,
+            NewsWindow::at(NewsPeriod::ThisMorning, early)
+                .unwrap()
+                .end_unix_ms,
             early
         );
     }
@@ -518,7 +774,7 @@ mod tests {
         use crate::news_source::NewsSourceSpan;
 
         let at = publication_time("2026-11-28T10:20:00+09:00").unwrap();
-        let window = NewsWindow::at(NewsPeriod::Yesterday, at);
+        let window = NewsWindow::at(NewsPeriod::Yesterday, at).unwrap();
         let item = |uri: &str, title: &str, date: &str| NewsCandidate {
             uri: uri.into(),
             uri_span: NewsSourceSpan {

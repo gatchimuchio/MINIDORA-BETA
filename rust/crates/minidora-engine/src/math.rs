@@ -788,6 +788,118 @@ pub fn finite_event_probability(
     })
 }
 
+pub(crate) enum ProbabilityAction<'a> {
+    Normalize(&'a [String]),
+    Event {
+        outcomes: &'a [String],
+        weights: &'a [String],
+        event_values: &'a [String],
+    },
+}
+
+pub(crate) struct ProbabilityObservation {
+    pub(crate) bytes: Vec<u8>,
+    pub(crate) unit: String,
+    pub(crate) quantity: Option<String>,
+    pub(crate) explanation_units: Vec<String>,
+}
+
+impl ProbabilityObservation {
+    pub(crate) fn explain(self, english: bool) -> Vec<String> {
+        if !english {
+            return self.explanation_units;
+        }
+        let opening = match self.quantity {
+            Some(probability) => {
+                format!("The exact probability of the selected event was {probability}.")
+            }
+            None => {
+                "The report gives the exact probabilities normalized from the supplied weights."
+                    .into()
+            }
+        };
+        vec![opening, self.unit]
+    }
+}
+
+impl ProbabilityObservation {
+    fn from_result(
+        result: &impl Serialize,
+        quantity: Option<String>,
+        explanation_units: Vec<String>,
+    ) -> Result<Self> {
+        Ok(Self {
+            bytes: canonical(result)?,
+            unit: serde_json::to_string_pretty(result)?,
+            quantity,
+            explanation_units,
+        })
+    }
+}
+
+impl<'a> ProbabilityAction<'a> {
+    pub(crate) fn bind(intent: &'a Intent) -> Option<Self> {
+        match intent {
+            Intent::NormalizeProbabilityWeights { weights } => Some(Self::Normalize(weights)),
+            Intent::FiniteEventProbability {
+                outcomes,
+                weights,
+                event_values,
+            } => Some(Self::Event {
+                outcomes,
+                weights,
+                event_values,
+            }),
+            _ => None,
+        }
+    }
+
+    pub(crate) fn fallback_code(&self) -> &'static str {
+        match self {
+            Self::Normalize(_) => "PROBABILITY_NORMALIZATION_UNSUPPORTED",
+            Self::Event { .. } => "EVENT_PROBABILITY_UNSUPPORTED",
+        }
+    }
+
+    pub(crate) fn observe(&self) -> Result<ProbabilityObservation> {
+        match self {
+            Self::Normalize(weights) => {
+                let result = normalize_probability_weights(weights)?;
+                ProbabilityObservation::from_result(
+                    &result,
+                    None,
+                    normalized_probability_explanation_units(&result),
+                )
+            }
+            Self::Event {
+                outcomes,
+                weights,
+                event_values,
+            } => {
+                let result = finite_event_probability(outcomes, weights, event_values)?;
+                let quantity = Some(result.event_probability.clone());
+                ProbabilityObservation::from_result(
+                    &result,
+                    quantity,
+                    event_probability_explanation_units(&result),
+                )
+            }
+        }
+    }
+
+    /// Check a retained result against the same typed inputs used during execution.
+    pub(crate) fn verify_retained(&self, bytes: &[u8]) -> Result<ProbabilityObservation> {
+        let observed = self.observe()?;
+        if observed.bytes != bytes {
+            return Err(failure(
+                "PROBABILITY_OBSERVATION_MISMATCH",
+                "保存した確率の計算結果を元の入力と照合できません。",
+            ));
+        }
+        Ok(observed)
+    }
+}
+
 pub(crate) fn exact_length_scale_to_meters(unit: &str) -> Option<BigRational> {
     let (numerator, denominator) = match unit {
         "km" => (1000_i64, 1_i64),
@@ -1397,6 +1509,52 @@ fn statistics_explanation_units(report: &Statistics) -> Vec<String> {
     ]
 }
 
+fn normalized_probability_explanation_units(report: &NormalizedProbabilityWeights) -> Vec<String> {
+    vec![
+        "前回の重み分布を元の入力から再計算し、保存レポートと照合しました。".into(),
+        format!(
+            "入力重み (n={}): [{}]",
+            report.count,
+            preview_strings(&report.input_weights)
+        ),
+        format!("重み合計: {}", report.total_weight),
+        format!(
+            "正規化後の確率: [{}]; 確率合計: {}",
+            preview_strings(&report.normalized_probabilities),
+            report.probability_sum
+        ),
+        format!("適用範囲: {}", report.scope),
+    ]
+}
+
+fn event_probability_explanation_units(report: &EventProbabilityResult) -> Vec<String> {
+    vec![
+        "前回の有限事象確率を元の結果・重み・事象値から再計算し、保存レポートと照合しました。"
+            .into(),
+        format!(
+            "結果 (n={}): [{}]",
+            report.count,
+            preview_strings(&report.input_outcomes)
+        ),
+        format!(
+            "重み: [{}]; 重み合計: {}",
+            preview_strings(&report.input_weights),
+            report.total_weight
+        ),
+        format!("対象事象の値: [{}]", preview_strings(&report.event_values)),
+        format!(
+            "結果ごとの事象所属: [{}]",
+            preview_bools(&report.event_membership)
+        ),
+        format!(
+            "確率の各寄与: [{}]",
+            preview_strings(&report.event_probability_contributions)
+        ),
+        format!("事象の確率: {}", report.event_probability),
+        format!("適用範囲: {}", report.scope),
+    ]
+}
+
 fn finite_probability_explanation_units(report: &FiniteProbabilityStatistics) -> Vec<String> {
     vec![
         "前回の有限分布の期待値・分散を元の結果と重みから再計算し、保存レポートと照合しました。"
@@ -1477,21 +1635,7 @@ pub(crate) fn previous_math_report_explanation(
     )? {
         let recomputed = normalize_probability_weights(&report.input_weights)?;
         verify_previous_math_report(previous, &report, &recomputed)?;
-        return Ok(Some(vec![
-            "前回の重み分布を元の入力から再計算し、保存レポートと照合しました。".into(),
-            format!(
-                "入力重み (n={}): [{}]",
-                report.count,
-                preview_strings(&report.input_weights)
-            ),
-            format!("重み合計: {}", report.total_weight),
-            format!(
-                "正規化後の確率: [{}]; 確率合計: {}",
-                preview_strings(&report.normalized_probabilities),
-                report.probability_sum
-            ),
-            format!("適用範囲: {}", report.scope),
-        ]));
+        return Ok(Some(normalized_probability_explanation_units(&report)));
     }
     if let Some(report) = parse_previous_math_report::<FiniteProbabilityStatistics>(
         previous,
@@ -1538,31 +1682,7 @@ pub(crate) fn previous_math_report_explanation(
             &report.event_values,
         )?;
         verify_previous_math_report(previous, &report, &recomputed)?;
-        return Ok(Some(vec![
-            "前回の有限事象確率を元の結果・重み・事象値から再計算し、保存レポートと照合しました。"
-                .into(),
-            format!(
-                "結果 (n={}): [{}]",
-                report.count,
-                preview_strings(&report.input_outcomes)
-            ),
-            format!(
-                "重み: [{}]; 重み合計: {}",
-                preview_strings(&report.input_weights),
-                report.total_weight
-            ),
-            format!("対象事象の値: [{}]", preview_strings(&report.event_values)),
-            format!(
-                "結果ごとの事象所属: [{}]",
-                preview_bools(&report.event_membership)
-            ),
-            format!(
-                "確率の各寄与: [{}]",
-                preview_strings(&report.event_probability_contributions)
-            ),
-            format!("事象の確率: {}", report.event_probability),
-            format!("適用範囲: {}", report.scope),
-        ]));
+        return Ok(Some(event_probability_explanation_units(&report)));
     }
     if let Some(report) = parse_previous_math_report::<PolynomialEvaluationReport>(
         previous,

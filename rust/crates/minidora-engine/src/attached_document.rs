@@ -695,6 +695,57 @@ pub(crate) struct FieldObservation {
     gaps: Vec<FieldGap>,
 }
 
+impl FieldObservation {
+    pub(crate) fn english_units(&self, has_documents: bool) -> Vec<String> {
+        let label = &self.label;
+        let header = if let Some(value) = &self.value {
+            format!("The attached documents confirm the field \"{label}\" as \"{value}\".")
+        } else if self.gap_count > 0 {
+            format!("The field \"{label}\" is unresolved. Some source locations could not be read.")
+        } else if self.matched_count > 0 {
+            format!("The attached documents give conflicting values for \"{label}\".")
+        } else if has_documents {
+            format!("No confirmed value for \"{label}\" was found in the attached documents.")
+        } else {
+            format!("There are no attached documents to confirm \"{label}\".")
+        };
+        let mut units = vec![header];
+        for found in &self.matches {
+            let position = found.page.map_or_else(
+                || format!("line {}", found.line),
+                |page| format!("PDF page {page}, extracted line {}", found.line),
+            );
+            units.push(format!(
+                "\"{}\", {position}, byte range [{}..{}), SHA-256 {}. {}",
+                found.filename,
+                found.source_start,
+                found.source_end,
+                found.source_sha256,
+                found.quote
+            ));
+        }
+        for gap in &self.gaps {
+            let page = gap
+                .page
+                .map_or_else(String::new, |page| format!(", page {page}"));
+            let line = gap
+                .line
+                .map_or_else(String::new, |line| format!(", line {line}"));
+            units.push(format!(
+                "\"{}\"{page}{line} could not be checked ({}).",
+                gap.filename, gap.code
+            ));
+        }
+        if self.matched_count > self.matches.len() || self.gap_count > self.gaps.len() {
+            units.push(format!(
+                "The report retains the count of {} readable matches and {} unchecked locations.",
+                self.matched_count, self.gap_count
+            ));
+        }
+        units
+    }
+}
+
 #[derive(Serialize)]
 struct FieldMatch {
     filename: String,

@@ -404,6 +404,7 @@ fn find_passage(
         unquoted_only,
         false,
         false,
+        false,
         matches_topic,
         &mut |passage| {
             selected = Some(passage);
@@ -422,6 +423,7 @@ fn find_elevation_passage(article: &str, topic: &str) -> Option<(Passage, bool)>
     let _ = visit_passages(
         article,
         true,
+        false,
         false,
         false,
         &|sentence| {
@@ -474,6 +476,7 @@ fn find_topic_passage<'a>(
         false,
         false,
         false,
+        false,
         &|sentence| sentence.contains(topic) || sentence.contains(title),
         &mut |passage| {
             if passage.text.contains(topic) {
@@ -488,23 +491,34 @@ fn find_topic_passage<'a>(
 }
 
 pub(crate) fn readable_passages(article: &str, limit: usize) -> Vec<Passage> {
-    readable_passages_with_markup(article, "", limit, true, false)
+    readable_passages_with_markup(article, limit, true, false, false, |_| true)
 }
 
 pub(crate) fn readable_passages_with_nested_footnotes(article: &str, limit: usize) -> Vec<Passage> {
-    readable_passages_with_markup(article, "", limit, true, true)
+    readable_passages_with_markup(article, limit, true, true, false, |_| true)
 }
 
 pub(crate) fn readable_research_passages(article: &str, topic: &str, limit: usize) -> Vec<Passage> {
-    readable_passages_with_markup(article, topic, limit, false, true)
+    readable_passages_with_markup(article, limit, false, true, false, |sentence| {
+        sentence.contains(topic)
+    })
+}
+
+pub(crate) fn readable_research_passages_matching(
+    article: &str,
+    limit: usize,
+    matches_topic: impl Fn(&str) -> bool,
+) -> Vec<Passage> {
+    readable_passages_with_markup(article, limit, false, true, true, matches_topic)
 }
 
 fn readable_passages_with_markup(
     article: &str,
-    topic: &str,
     limit: usize,
     summary_lead_only: bool,
     nested_footnotes: bool,
+    english_prose: bool,
+    matches_topic: impl Fn(&str) -> bool,
 ) -> Vec<Passage> {
     let mut passages = Vec::new();
     let limit = limit.min(MAX_SUMMARY_PASSAGES);
@@ -516,7 +530,8 @@ fn readable_passages_with_markup(
         true,
         summary_lead_only,
         nested_footnotes,
-        &|sentence| sentence.contains(topic),
+        english_prose,
+        &matches_topic,
         &mut |passage| {
             if !passage.text.contains(['\n', '\r', '\u{2028}', '\u{2029}']) {
                 passages.push(passage);
@@ -532,6 +547,7 @@ fn visit_passages(
     unquoted_only: bool,
     summary_lead_only: bool,
     nested_footnotes: bool,
+    english_prose: bool,
     matches_topic: &impl Fn(&str) -> bool,
     stop: &mut impl FnMut(Passage) -> bool,
 ) -> Option<()> {
@@ -567,6 +583,7 @@ fn visit_passages(
                 &|sentence| is_prose && matches_topic(sentence),
                 unquoted_only.then_some(&mut quotes),
                 nested_footnotes,
+                english_prose,
                 stop,
             ) == Some(true)
         {
@@ -652,6 +669,7 @@ fn line_passage(
     matches_topic: &impl Fn(&str) -> bool,
     mut quotes: Option<&mut QuotationContext>,
     nested_footnotes: bool,
+    english_prose: bool,
     stop: &mut impl FnMut(Passage) -> bool,
 ) -> Option<bool> {
     let mut at = 0;
@@ -698,7 +716,10 @@ fn line_passage(
         }
         text.push(next);
         at += next.len_utf8();
-        if next != '。' {
+        let english_end = english_prose
+            && matches!(next, '.' | '!' | '?')
+            && line[at..].chars().next().is_none_or(char::is_whitespace);
+        if next != '。' && !english_end {
             continue;
         }
         let visible = text.trim();
@@ -707,7 +728,9 @@ fn line_passage(
             && !visible.is_empty()
             && visible.len() <= MAX_SENTENCE_BYTES
             && matches_topic(visible)
-            && visible.chars().any(|ch| ('ぁ'..='ん').contains(&ch))
+            && visible
+                .chars()
+                .any(|ch| ('ぁ'..='ん').contains(&ch) || english_prose && ch.is_ascii_alphabetic())
             && stop(Passage {
                 source_start: article_offset + sentence_start,
                 source_end: article_offset + at,

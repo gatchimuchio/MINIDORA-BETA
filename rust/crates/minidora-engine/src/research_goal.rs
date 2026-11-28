@@ -1,6 +1,9 @@
 //! Store and replay the observations of a bounded multi-source research goal.
 use crate::{
-    input::verify_web_research_input,
+    input::{
+        self, WEB_RESEARCH_DIVERSE_PARSER_VERSION, WEB_RESEARCH_V2_PARSER_VERSION,
+        verify_web_research_input,
+    },
     language, ports,
     scheduler::{GoalNode, GoalNodeKind},
     search::{self, SearchCandidate, SearchObservation, SearchProvider},
@@ -9,8 +12,8 @@ use crate::{
 };
 use minidora_domain::{
     BranchOutcome, BranchState, Calculation, ContentPlan, Error, EvidencePacket, Guarantee,
-    InputBundle, Intent, Permissions, RequestEnvelope, Result, ResultRecord, canonical, digest,
-    failure,
+    IndependentRequest, InputBundle, Intent, Permissions, RequestEnvelope, Result, ResultRecord,
+    canonical, digest, failure,
 };
 use serde::{Deserialize, Serialize};
 use std::time::Duration;
@@ -20,6 +23,7 @@ pub(crate) const READ_NODE: &str = "research-observations";
 pub(crate) const REPORT_NODE: &str = "research-comparison";
 pub(crate) const CALC_NODE: &str = "research-independent-calculation";
 const MAX_OUTPUT_RESERVE: usize = 16 * 1024;
+const PRIMARY_DIVERSE_BODIES: usize = 1;
 
 pub(crate) fn nodes(independent_calculation: bool) -> Vec<GoalNode> {
     let mut nodes = vec![
@@ -50,6 +54,138 @@ struct Observation {
     listing: Option<String>,
     bodies: Vec<String>,
     stop: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    scope: Option<ResearchScope>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    additional_publisher: Option<ProviderObservation>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ProviderObservation {
+    listing: Option<String>,
+    bodies: Vec<String>,
+    stop: Option<String>,
+}
+
+impl Observation {
+    fn stop(&self) -> Option<&str> {
+        self.stop
+            .as_deref()
+            .or_else(|| self.additional_publisher.as_ref()?.stop.as_deref())
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, PartialEq, Eq, Serialize)]
+#[serde(deny_unknown_fields)]
+struct ResearchScope {
+    input_fingerprint: String,
+    source_range: (usize, usize),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct ResearchAction<'a> {
+    topic: &'a str,
+    expression: Option<&'a str>,
+    current: bool,
+    diverse: bool,
+}
+
+impl<'a> ResearchAction<'a> {
+    fn bind(intent: &'a Intent, current: bool) -> Option<Self> {
+        let Intent::CompareWebResearch { topic, expression } = intent else {
+            return None;
+        };
+        Some(Self {
+            topic,
+            expression: expression.as_deref(),
+            current,
+            diverse: false,
+        })
+    }
+
+    fn for_bundle(bundle: &'a InputBundle) -> Result<Self> {
+        let version = bundle.meaning.parser_version.as_str();
+        let diverse = version == WEB_RESEARCH_DIVERSE_PARSER_VERSION;
+        let mut action = Self::bind(
+            &bundle.meaning.intent,
+            diverse || version == WEB_RESEARCH_V2_PARSER_VERSION,
+        )
+        .ok_or_else(mismatch)?;
+        action.diverse = diverse;
+        Ok(action)
+    }
+
+    pub(crate) fn for_item(bundle: &InputBundle, item: &'a IndependentRequest) -> Option<Self> {
+        let version = bundle.meaning.parser_version.as_str();
+        if !matches!(
+            version,
+            crate::composition::RESEARCH_PARSER_VERSION
+                | crate::composition::DIVERSE_RESEARCH_PARSER_VERSION
+        ) {
+            return None;
+        }
+        let mut action = Self::bind(&item.intent, true)?;
+        action.diverse = version == crate::composition::DIVERSE_RESEARCH_PARSER_VERSION
+            && input::is_diverse_research_item(item);
+        Some(action)
+    }
+
+    fn primary_limit(self) -> usize {
+        if self.diverse {
+            PRIMARY_DIVERSE_BODIES
+        } else {
+            web_research::MAX_RESEARCH_SOURCES
+        }
+    }
+
+    pub(crate) fn incomplete_reason(self) -> &'static str {
+        if self.diverse {
+            "WEB_RESEARCH_INSUFFICIENT_PUBLISHERS"
+        } else {
+            "WEB_RESEARCH_INSUFFICIENT_SOURCES"
+        }
+    }
+
+    fn secondary_limit(self) -> usize {
+        web_research::MAX_RESEARCH_SOURCES - self.primary_limit()
+    }
+
+    fn provider(self) -> SearchProvider {
+        let japanese = self
+            .topic
+            .chars()
+            .any(|c| matches!(c, 'ぁ'..='ヿ' | '㐀'..='鿿'));
+        if self.current && !japanese {
+            SearchProvider::WikipediaEnglish
+        } else {
+            SearchProvider::Wikipedia
+        }
+    }
+
+    pub(crate) fn is_admitted(self, permissions: &Permissions) -> bool {
+        permissions.read_hosts.contains(self.provider().host())
+            || (self.diverse
+                && permissions
+                    .read_hosts
+                    .contains(SearchProvider::EuropePmcOpenAccess.host()))
+    }
+
+    fn scoped_permissions(
+        self,
+        provider: SearchProvider,
+        permissions: &Permissions,
+    ) -> Option<Permissions> {
+        self.current.then(|| Permissions {
+            read_hosts: permissions
+                .read_hosts
+                .get(provider.host())
+                .cloned()
+                .into_iter()
+                .collect(),
+            ..Permissions::default()
+        })
+    }
 }
 
 pub(crate) struct Outcome {
@@ -60,6 +196,9 @@ pub(crate) struct Outcome {
     pub evidence: Vec<EvidencePacket>,
     pub complete: bool,
     pub branches: Vec<BranchOutcome>,
+    pub has_citations: bool,
+    pub read_starts: usize,
+    pub raw_bytes: usize,
 }
 
 impl Outcome {
@@ -82,6 +221,7 @@ fn mismatch() -> Error {
 fn candidates<'a>(
     listing: &'a SearchObservation,
     permissions: &Permissions,
+    limit: usize,
 ) -> Vec<&'a SearchCandidate> {
     listing
         .candidates
@@ -91,11 +231,11 @@ fn candidates<'a>(
                 .and_then(|uri| ports::approved_url(&uri, permissions))
                 .is_ok()
         })
-        .take(web_research::MAX_RESEARCH_SOURCES)
+        .take(limit)
         .collect()
 }
 
-fn observe_failure(error: Error, observation: &mut Observation) -> Result<()> {
+fn observe_failure(error: Error, observation: &mut ProviderObservation) -> Result<()> {
     match error {
         Error::Contract { ref code, .. } if !crate::core::read_case_changed(&error) => {
             observation.stop = Some(code.clone());
@@ -144,8 +284,12 @@ fn branch_outcomes(
     }
     let (state, reason_code, artifact_ref) = if comparison_complete {
         (BranchState::Confirmed, None, comparison_ref)
-    } else if let Some(reason) = &observation.stop {
-        (BranchState::Blocked, Some(reason.clone()), observation_ref)
+    } else if let Some(reason) = observation.stop() {
+        (
+            BranchState::Blocked,
+            Some(reason.to_owned()),
+            observation_ref,
+        )
     } else {
         (
             BranchState::Blocked,
@@ -165,42 +309,99 @@ fn branch_outcomes(
 fn read(
     store: &Store,
     request: &RequestEnvelope,
-    topic: &str,
-    budget: Result<ports::RetrievalBudget>,
+    action: ResearchAction<'_>,
+    budget: Result<&mut ports::RetrievalBudget>,
     admit: &dyn Fn() -> Result<()>,
 ) -> Result<Observation> {
-    let mut observation = Observation {
-        listing: None,
-        bodies: Vec::new(),
-        stop: None,
+    let mut missing_budget = ProviderObservation::default();
+    let mut budget = match budget {
+        Ok(budget) => Some(budget),
+        Err(error) => {
+            observe_failure(error, &mut missing_budget)?;
+            None
+        }
     };
+    let provider = action.provider();
+    let primary = read_provider(
+        store,
+        request,
+        action,
+        provider,
+        action.primary_limit(),
+        budget.as_deref_mut(),
+        missing_budget.stop.as_deref(),
+        admit,
+        None,
+    )?;
+    let additional_publisher = if action.diverse {
+        let verified_primary = recover_provider(
+            store,
+            request,
+            action,
+            provider,
+            action.primary_limit(),
+            primary.listing.as_deref(),
+            &primary.bodies,
+            primary.stop.as_deref(),
+        )?;
+        let comparison_source = verified_primary
+            .packets
+            .first()
+            .map(|(candidate, body)| (candidate, body));
+        Some(read_provider(
+            store,
+            request,
+            action,
+            SearchProvider::EuropePmcOpenAccess,
+            action.secondary_limit(),
+            budget,
+            missing_budget.stop.as_deref(),
+            admit,
+            comparison_source,
+        )?)
+    } else {
+        None
+    };
+    Ok(Observation {
+        listing: primary.listing,
+        bodies: primary.bodies,
+        stop: primary.stop,
+        scope: None,
+        additional_publisher,
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
+fn read_provider(
+    store: &Store,
+    request: &RequestEnvelope,
+    action: ResearchAction<'_>,
+    provider: SearchProvider,
+    limit: usize,
+    budget: Option<&mut ports::RetrievalBudget>,
+    unavailable: Option<&str>,
+    admit: &dyn Fn() -> Result<()>,
+    comparison_source: Option<(&SearchCandidate, &EvidencePacket)>,
+) -> Result<ProviderObservation> {
+    let mut observation = ProviderObservation::default();
     let actor = &request.actor_id;
     let case = &request.case_id;
-    let permissions = &request.permissions;
-    if !permissions
-        .read_hosts
-        .contains(SearchProvider::Wikipedia.host())
-    {
+    let scoped = action.scoped_permissions(provider, &request.permissions);
+    let permissions = scoped.as_ref().unwrap_or(&request.permissions);
+    if !permissions.read_hosts.contains(provider.host()) {
         observation.stop = Some(ports::READ_PERMISSION_REQUIRED.into());
         return Ok(observation);
     }
-    let mut budget = match budget {
-        Ok(value) => value,
-        Err(error) => {
-            observe_failure(error, &mut observation)?;
-            return Ok(observation);
-        }
+    let Some(budget) = budget else {
+        observation.stop = unavailable.map(str::to_owned);
+        return Ok(observation);
     };
-    budget.reserve_output(
-        Duration::from_millis((request.budget.deadline_ms / 4).min(5000)),
-        (request.budget.max_evidence_bytes / 4).min(MAX_OUTPUT_RESERVE),
-    );
     let listing = match search::search_with_budget(
-        SearchProvider::Wikipedia,
-        topic,
+        provider,
+        action.topic,
         permissions,
         &request.budget,
-        &mut budget,
+        budget,
         admit,
     ) {
         Ok(value) => value,
@@ -220,13 +421,13 @@ fn read(
         observation.stop = Some(code.clone());
         return Ok(observation);
     }
-    let candidates = candidates(&listing, permissions);
+    let candidates = candidates(&listing, permissions, limit);
     if candidates.is_empty() {
         observation.stop = Some("SEARCH_CANDIDATE_UNAVAILABLE".into());
         return Ok(observation);
     }
     for candidate in candidates {
-        match search::fetch_candidate_with_budget(candidate, permissions, &mut budget, admit) {
+        match search::fetch_candidate_with_budget(candidate, permissions, budget, admit) {
             Ok(read) => {
                 let packet = read.observation;
                 observation
@@ -238,6 +439,17 @@ fn read(
                 }
                 if let Some(reason) = terminal_body_failure(&packet) {
                     observation.stop = Some(reason.into());
+                    break;
+                }
+                if let Some(primary) = comparison_source
+                    && packet.failure.is_none()
+                    && web_research::compare_diverse(
+                        action.topic,
+                        &[primary, (candidate, &packet)],
+                        &request.permissions,
+                    )?
+                    .complete()
+                {
                     break;
                 }
             }
@@ -281,34 +493,202 @@ fn valid_chain(packet: &EvidencePacket) -> bool {
             .all(|(i, uri)| !chain[..i].contains(uri))
 }
 
+struct Materialized {
+    report_bytes: Vec<u8>,
+    units: Vec<String>,
+    retry_evidence: Vec<EvidencePacket>,
+    comparison_complete: bool,
+    has_citations: bool,
+    read_starts: usize,
+    raw_bytes: usize,
+}
+
+fn standalone_starts(bundle: &InputBundle, action: ResearchAction<'_>) -> Result<usize> {
+    let reserved = nodes(action.expression.is_some()).len() - 1
+        + 3 // Compute, content and render.
+        + usize::from(bundle.request.output_path.is_some());
+    (bundle.request.budget.max_actions as usize)
+        .checked_sub(reserved)
+        .ok_or_else(mismatch)
+}
+
 fn materialize(
     store: &Store,
     bundle: &InputBundle,
+    action: ResearchAction<'_>,
     observation: &Observation,
     calculation: &Option<LocalCalculation>,
-) -> Result<(Vec<u8>, Vec<String>, Vec<EvidencePacket>, bool)> {
+    available_starts: usize,
+) -> Result<Materialized> {
     let request = &bundle.request;
+    let permissions = &request.permissions;
+    if action.diverse != observation.additional_publisher.is_some() {
+        return Err(mismatch());
+    }
+    let primary = recover_provider(
+        store,
+        request,
+        action,
+        action.provider(),
+        action.primary_limit(),
+        observation.listing.as_deref(),
+        &observation.bodies,
+        observation.stop.as_deref(),
+    )?;
+    let mut retained = primary;
+    if let Some(extra) = &observation.additional_publisher {
+        let additional = recover_provider(
+            store,
+            request,
+            action,
+            SearchProvider::EuropePmcOpenAccess,
+            action.secondary_limit(),
+            extra.listing.as_deref(),
+            &extra.bodies,
+            extra.stop.as_deref(),
+        )?;
+        retained.packets.extend(additional.packets);
+        retained.retry_evidence.extend(additional.retry_evidence);
+        retained.raw_bytes = retained.raw_bytes.saturating_add(additional.raw_bytes);
+        retained.starts = retained.starts.saturating_add(additional.starts);
+    }
+    let ProviderEvidence {
+        packets,
+        retry_evidence,
+        raw_bytes,
+        starts,
+    } = retained;
+    if starts > available_starts || raw_bytes > request.budget.max_evidence_bytes {
+        return Err(mismatch());
+    }
+    let sources: Vec<_> = packets
+        .iter()
+        .map(|(candidate, packet)| (candidate, packet))
+        .collect();
+    let english = action.current && crate::core::supports_english_output_locale(&request.locale);
+    let report = if action.diverse {
+        web_research::compare_diverse(action.topic, &sources, permissions)?
+    } else if action.current {
+        web_research::compare_current(action.topic, &sources, permissions)?
+    } else {
+        web_research::compare(action.topic, &sources, permissions)?
+    };
+    let mut units = Vec::new();
+    match calculation {
+        Some(LocalCalculation::Confirmed(calculation)) => {
+            let exact = &calculation.exact_value;
+            units.push(if english {
+                format!("The separate calculation is {exact}.")
+            } else {
+                format!("別件の計算は {exact} です。")
+            });
+        }
+        Some(LocalCalculation::Unresolved(code)) => {
+            units.push(if english {
+                format!("The separate calculation did not finish ({code}).")
+            } else {
+                format!("別件の計算を確定できませんでした（{code}）。")
+            });
+        }
+        None => {}
+    }
+    units.extend(if action.current {
+        report.localized_units(english)
+    } else {
+        report.units()
+    });
+    if let Some(reason) = &observation.stop {
+        units.push(if action.current {
+            current_stop_label(reason, action.provider(), english)
+        } else {
+            stop_label(reason).into()
+        });
+    }
+    if let Some(reason) = observation
+        .additional_publisher
+        .as_ref()
+        .and_then(|value| value.stop.as_deref())
+    {
+        units.push(current_stop_label(
+            reason,
+            SearchProvider::EuropePmcOpenAccess,
+            english,
+        ));
+    }
+    let report_bytes = canonical(&report)?;
+    let proof_bytes = report_bytes
+        .len()
+        .saturating_add(canonical(observation)?.len())
+        .saturating_add(canonical(calculation)?.len());
+    if raw_bytes
+        .saturating_add(proof_bytes)
+        .saturating_add(units.join("\n").len())
+        > request.budget.max_evidence_bytes
+    {
+        if action.current {
+            return Ok(Materialized {
+                report_bytes: canonical(&(
+                    "minidora.web-research.preview-budget.v1",
+                    digest(&report_bytes),
+                ))?,
+                units: vec![current_stop_label(
+                    "RESOURCE_LIMIT",
+                    action.provider(),
+                    english,
+                )],
+                retry_evidence,
+                comparison_complete: false,
+                has_citations: false,
+                read_starts: starts,
+                raw_bytes,
+            });
+        }
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            "調査結果が出力の証拠予算を超えました。",
+        ));
+    }
+    Ok(Materialized {
+        report_bytes,
+        units,
+        retry_evidence,
+        comparison_complete: report.complete(),
+        has_citations: report.has_citations(),
+        read_starts: starts,
+        raw_bytes,
+    })
+}
+
+#[derive(Default)]
+struct ProviderEvidence {
+    packets: Vec<(SearchCandidate, EvidencePacket)>,
+    retry_evidence: Vec<EvidencePacket>,
+    raw_bytes: usize,
+    starts: usize,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn recover_provider(
+    store: &Store,
+    request: &RequestEnvelope,
+    action: ResearchAction<'_>,
+    provider: SearchProvider,
+    limit: usize,
+    listing_ref: Option<&str>,
+    body_refs: &[String],
+    stop: Option<&str>,
+) -> Result<ProviderEvidence> {
     let actor = &request.actor_id;
     let case = &request.case_id;
-    let permissions = &request.permissions;
-    let Intent::CompareWebResearch { topic, expression } = &bundle.meaning.intent else {
-        return Err(mismatch());
-    };
-    let reserved_non_read = nodes(expression.is_some()).len() - 1
-        + 3 // Compute, content and render.
-        + usize::from(request.output_path.is_some());
-    let available_starts = (request.budget.max_actions as usize)
-        .checked_sub(reserved_non_read)
-        .ok_or_else(mismatch)?;
-    let listing = observation
-        .listing
-        .as_ref()
+    let narrowed = action.scoped_permissions(provider, &request.permissions);
+    let permissions = narrowed.as_ref().unwrap_or(&request.permissions);
+    let listing = listing_ref
         .map(|reference| -> Result<SearchObservation> {
             let bytes = store.get_bytes(actor, case, reference)?;
             let listing: SearchObservation = serde_json::from_slice(&bytes)?;
             if canonical(&listing)? != bytes
-                || listing.query != *topic
-                || listing.provider != SearchProvider::Wikipedia
+                || listing.query != action.topic
+                || listing.provider != provider
                 || !valid_chain(&listing.listing)
             {
                 return Err(mismatch());
@@ -324,8 +704,8 @@ fn materialize(
     let candidates = listing
         .as_ref()
         .filter(|listing| listing.failure.is_none())
-        .map_or_else(Vec::new, |listing| candidates(listing, permissions));
-    if observation.bodies.len() > candidates.len() {
+        .map_or_else(Vec::new, |listing| candidates(listing, permissions, limit));
+    if body_refs.len() > candidates.len() {
         return Err(mismatch());
     }
     let mut packets = Vec::new();
@@ -339,7 +719,7 @@ fn materialize(
             retry_evidence.push(list.listing.clone());
         }
     }
-    for (index, (reference, candidate)) in observation.bodies.iter().zip(&candidates).enumerate() {
+    for (index, (reference, candidate)) in body_refs.iter().zip(&candidates).enumerate() {
         let bytes = store.get_bytes(actor, case, reference)?;
         let packet: EvidencePacket = serde_json::from_slice(&bytes)?;
         if packet.mode != "LIVE"
@@ -359,10 +739,10 @@ fn materialize(
         raw_bytes = raw_bytes.saturating_add(packet.raw_body.len());
         starts = starts.saturating_add(packet.redirect_chain.len());
         if let Some(reason) = terminal_body_failure(&packet) {
-            let stop_matches = observation.stop.as_deref() == Some(reason)
+            let stop_matches = stop == Some(reason)
                 || (reason == ports::REDIRECT_RETRY_DEFERRED
-                    && observation.stop.as_deref() == Some(ports::RETRY_DEFERRED));
-            if index + 1 != observation.bodies.len() || !stop_matches {
+                    && stop == Some(ports::RETRY_DEFERRED));
+            if index + 1 != body_refs.len() || !stop_matches {
                 return Err(mismatch());
             }
         }
@@ -370,90 +750,226 @@ fn materialize(
             retry_evidence.push(packet.clone());
         }
         if packet.failure.is_none() {
-            packets.push((*candidate, packet));
+            if action.diverse {
+                search::validate_research_body(candidate, &packet, permissions)?;
+            }
+            packets.push(((*candidate).clone(), packet));
         }
     }
-    if starts > available_starts || raw_bytes > request.budget.max_evidence_bytes {
-        return Err(mismatch());
+    Ok(ProviderEvidence {
+        packets,
+        retry_evidence,
+        raw_bytes,
+        starts,
+    })
+}
+
+fn current_stop_label(code: &str, provider: SearchProvider, english: bool) -> String {
+    if code == ports::READ_PERMISSION_REQUIRED {
+        let host = provider.host();
+        return if english {
+            format!("Read access to {host} has not been authorized.")
+        } else {
+            format!("{host} への閲覧が許可されていません。")
+        };
     }
-    let sources: Vec<_> = packets
-        .iter()
-        .map(|(candidate, packet)| (*candidate, packet))
-        .collect();
-    let report = web_research::compare(topic, &sources, permissions)?;
-    let mut units = Vec::new();
-    match calculation {
-        Some(LocalCalculation::Confirmed(calculation)) => {
-            units.push(format!("別件の計算は {} です。", calculation.exact_value));
-        }
-        Some(LocalCalculation::Unresolved(code)) => {
-            units.push(format!("別件の計算を確定できませんでした（{code}）。"));
-        }
-        None => {}
+    if code == "RESOURCE_LIMIT" {
+        return if english {
+            "The observed article evidence is too large to display within the request budget."
+                .into()
+        } else {
+            "取得した引用と根拠が出力予算に収まらなかったため、比較の表示を保留しました。".into()
+        };
     }
-    units.extend(report.units());
-    if let Some(reason) = &observation.stop {
-        units.push(stop_label(reason).into());
+    if !english {
+        return stop_label(code).into();
     }
-    let report_bytes = canonical(&report)?;
-    let proof_bytes = report_bytes
-        .len()
-        .saturating_add(canonical(observation)?.len())
-        .saturating_add(canonical(calculation)?.len());
-    if raw_bytes
-        .saturating_add(proof_bytes)
-        .saturating_add(units.join("\n").len())
-        > request.budget.max_evidence_bytes
-    {
-        return Err(failure(
-            "RESOURCE_LIMIT",
-            "調査結果が出力の証拠予算を超えました。",
-        ));
+    match code {
+        ports::RETRY_DEFERRED => "The provider asked us to wait before retrying.",
+        "SEARCH_CANDIDATE_UNAVAILABLE" => "The search found no candidate article to read.",
+        ports::DEADLINE_EXCEEDED => "The deadline for obtaining sources was reached.",
+        ports::HTTP_START_BUDGET_EXHAUSTED => "The request limit for reading sources was reached.",
+        "PRIVATE_READ_TARGET" => "A public destination could not be verified for this source.",
+        _ => "I could not finish reading the search results or article bodies.",
     }
-    Ok((report_bytes, units, retry_evidence, report.complete()))
+    .into()
+}
+
+pub(crate) fn output_reserve_time(deadline_ms: u64) -> Duration {
+    Duration::from_millis((deadline_ms / 4).min(5000))
 }
 
 pub(crate) fn produce(
     store: &Store,
     bundle: &InputBundle,
-    retrieval: Result<ports::RetrievalBudget>,
+    mut retrieval: Result<ports::RetrievalBudget>,
     admit: &dyn Fn() -> Result<()>,
 ) -> Result<Outcome> {
     verify_web_research_input(bundle)?;
-    let request = &bundle.request;
-    let Intent::CompareWebResearch { topic, expression } = &bundle.meaning.intent else {
-        return Err(mismatch());
+    let action = ResearchAction::for_bundle(bundle)?;
+    if let Ok(budget) = &mut retrieval {
+        let request_budget = &bundle.request.budget;
+        budget.reserve_output(
+            output_reserve_time(request_budget.deadline_ms),
+            (request_budget.max_evidence_bytes / 4).min(MAX_OUTPUT_RESERVE),
+        );
+    }
+    let calculation = local_calculation(action.expression)?;
+    let observation = match retrieval {
+        Ok(mut budget) => read(store, &bundle.request, action, Ok(&mut budget), admit)?,
+        Err(error) => read(store, &bundle.request, action, Err(error), admit)?,
     };
-    let calculation = local_calculation(expression.as_deref())?;
-    let actor = &request.actor_id;
-    let case = &request.case_id;
+    retain_outcome(
+        store,
+        bundle,
+        action,
+        observation,
+        calculation,
+        standalone_starts(bundle, action)?,
+    )
+}
+
+fn retain_outcome(
+    store: &Store,
+    bundle: &InputBundle,
+    action: ResearchAction<'_>,
+    observation: Observation,
+    calculation: Option<LocalCalculation>,
+    available_starts: usize,
+) -> Result<Outcome> {
+    let request = &bundle.request;
+    let (actor, case) = (&request.actor_id, &request.case_id);
     let calculation_ref = calculation
         .as_ref()
         .map(|calc| store.put_artifact(actor, case, calc))
         .transpose()?;
-    let observation = read(store, request, topic, retrieval, admit)?;
-    let (comparison, units, evidence, comparison_complete) =
-        materialize(store, bundle, &observation, &calculation)?;
-    let observation_ref = store.put_artifact(actor, case, &observation)?;
-    let comparison_ref = store.put_bytes(actor, case, &comparison)?;
-    let branches = branch_outcomes(
-        calculation.as_ref().zip(calculation_ref.as_deref()),
+    let materialized = materialize(
+        store,
+        bundle,
+        action,
         &observation,
+        &calculation,
+        available_starts,
+    )?;
+    let observation_ref = store.put_artifact(actor, case, &observation)?;
+    let comparison_ref = store.put_bytes(actor, case, &materialized.report_bytes)?;
+    Ok(evaluated_outcome(
+        &observation,
+        observation_ref,
+        comparison_ref,
+        calculation.as_ref(),
+        calculation_ref,
+        materialized,
+    ))
+}
+
+fn evaluated_outcome(
+    observation: &Observation,
+    observation_ref: String,
+    comparison_ref: String,
+    calculation: Option<&LocalCalculation>,
+    calculation_ref: Option<String>,
+    materialized: Materialized,
+) -> Outcome {
+    let branches = branch_outcomes(
+        calculation.zip(calculation_ref.as_deref()),
+        observation,
         &observation_ref,
-        comparison_complete,
+        materialized.comparison_complete,
         &comparison_ref,
     );
-    Ok(Outcome {
+    Outcome {
         calculation: calculation_ref,
         observation: observation_ref,
         comparison: comparison_ref,
-        units,
-        evidence,
+        units: materialized.units,
+        evidence: materialized.retry_evidence,
+        has_citations: materialized.has_citations,
+        read_starts: materialized.read_starts,
+        raw_bytes: materialized.raw_bytes,
         complete: branches
             .iter()
             .all(|branch| branch.state == BranchState::Confirmed),
         branches,
-    })
+    }
+}
+
+fn compound_scope(bundle: &InputBundle, item: &IndependentRequest) -> ResearchScope {
+    ResearchScope {
+        input_fingerprint: bundle.fingerprint.clone(),
+        source_range: (item.source.start, item.source.end),
+    }
+}
+
+pub(crate) fn observe_composed(
+    store: &Store,
+    bundle: &InputBundle,
+    item: &IndependentRequest,
+    action: ResearchAction<'_>,
+    budget: Result<&mut ports::RetrievalBudget>,
+    admit: &dyn Fn() -> Result<()>,
+) -> Result<Outcome> {
+    let mut observation = read(store, &bundle.request, action, budget, admit)?;
+    observation.scope = Some(compound_scope(bundle, item));
+    retain_outcome(
+        store,
+        bundle,
+        action,
+        observation,
+        None,
+        bundle.request.budget.max_actions as usize,
+    )
+}
+
+pub(crate) fn replay_composed(
+    store: &Store,
+    bundle: &InputBundle,
+    item: &IndependentRequest,
+    action: ResearchAction<'_>,
+    reference: &str,
+) -> Result<Outcome> {
+    let observation =
+        load_observation(store, bundle, reference, Some(compound_scope(bundle, item)))?;
+    let materialized = materialize(
+        store,
+        bundle,
+        action,
+        &observation,
+        &None,
+        bundle.request.budget.max_actions as usize,
+    )?;
+    let comparison = digest(&materialized.report_bytes);
+    if store.get_bytes(
+        &bundle.request.actor_id,
+        &bundle.request.case_id,
+        &comparison,
+    )? != materialized.report_bytes
+    {
+        return Err(mismatch());
+    }
+    Ok(evaluated_outcome(
+        &observation,
+        reference.into(),
+        comparison,
+        None,
+        None,
+        materialized,
+    ))
+}
+
+fn load_observation(
+    store: &Store,
+    bundle: &InputBundle,
+    reference: &str,
+    scope: Option<ResearchScope>,
+) -> Result<Observation> {
+    let request = &bundle.request;
+    let bytes = store.get_bytes(&request.actor_id, &request.case_id, reference)?;
+    let observation: Observation = serde_json::from_slice(&bytes)?;
+    if canonical(&observation)? != bytes || observation.scope != scope {
+        return Err(mismatch());
+    }
+    Ok(observation)
 }
 
 pub(crate) fn verify_delivery(
@@ -463,19 +979,13 @@ pub(crate) fn verify_delivery(
     plan: &ContentPlan,
 ) -> Result<Outcome> {
     verify_web_research_input(bundle)?;
-    let Intent::CompareWebResearch { expression, .. } = &bundle.meaning.intent else {
-        return Err(mismatch());
-    };
+    let action = ResearchAction::for_bundle(bundle)?;
     let (comparison, refs) = result.dependencies.split_last().ok_or_else(mismatch)?;
     let (observation, refs) = refs.split_last().ok_or_else(mismatch)?;
     let actor = &bundle.request.actor_id;
     let case = &bundle.request.case_id;
-    let calculation = local_calculation(expression.as_deref())?;
-    let bytes = store.get_bytes(actor, case, observation)?;
-    let observed: Observation = serde_json::from_slice(&bytes)?;
-    if bytes != canonical(&observed)? {
-        return Err(mismatch());
-    }
+    let calculation = local_calculation(action.expression)?;
+    let observed = load_observation(store, bundle, observation, None)?;
     let calc_ref = match (refs, calculation.as_ref()) {
         ([reference], Some(calc))
             if store.get_bytes(actor, case, reference)? == canonical(calc)? =>
@@ -485,40 +995,38 @@ pub(crate) fn verify_delivery(
         ([], None) => None,
         _ => return Err(mismatch()),
     };
-    let (expected, units, evidence, comparison_complete) =
-        materialize(store, bundle, &observed, &calculation)?;
-    let branches = branch_outcomes(
-        calculation.as_ref().zip(calc_ref.as_deref()),
+    let materialized = materialize(
+        store,
+        bundle,
+        action,
         &observed,
-        observation,
-        comparison_complete,
-        comparison,
+        &calculation,
+        standalone_starts(bundle, action)?,
+    )?;
+    if store.get_bytes(actor, case, comparison)? != materialized.report_bytes {
+        return Err(mismatch());
+    }
+    let outcome = evaluated_outcome(
+        &observed,
+        observation.clone(),
+        comparison.clone(),
+        calculation.as_ref(),
+        calc_ref,
+        materialized,
     );
-    let complete = branches
-        .iter()
-        .all(|branch| branch.state == BranchState::Confirmed);
-    if !complete
-        || (!result.branch_outcomes.is_empty() && result.branch_outcomes != branches)
+    if !outcome.complete
+        || (!result.branch_outcomes.is_empty() && result.branch_outcomes != outcome.branches)
         || result.guarantee != Guarantee::SourceReport
         || plan.guarantee != result.guarantee
         || result.calculation.is_some()
-        || result.evidence != evidence
+        || result.evidence != outcome.evidence
         || result.text != plan.text
-        || plan.required_units != units
-        || result.text != units.join("\n")
-        || store.get_bytes(actor, case, comparison)? != expected
+        || plan.required_units != outcome.units
+        || result.text != outcome.units.join("\n")
     {
         return Err(mismatch());
     }
-    Ok(Outcome {
-        observation: observation.clone(),
-        comparison: comparison.clone(),
-        calculation: calc_ref,
-        units,
-        evidence,
-        complete,
-        branches,
-    })
+    Ok(outcome)
 }
 
 pub(crate) fn verify_retry_source(
@@ -537,18 +1045,18 @@ pub(crate) fn verify_retry_source(
         .rev()
         .nth(1)
         .ok_or_else(mismatch)?;
-    let bytes = store.get_bytes(
-        &bundle.request.actor_id,
-        &bundle.request.case_id,
-        observation,
+    let observed = load_observation(store, bundle, observation, None)?;
+    let action = ResearchAction::for_bundle(bundle)?;
+    let calculation = local_calculation(action.expression)?;
+    let materialized = materialize(
+        store,
+        bundle,
+        action,
+        &observed,
+        &calculation,
+        standalone_starts(bundle, action)?,
     )?;
-    let observed: Observation = serde_json::from_slice(&bytes)?;
-    let Intent::CompareWebResearch { expression, .. } = &bundle.meaning.intent else {
-        return Err(mismatch());
-    };
-    let calculation = local_calculation(expression.as_deref())?;
-    let (_, _, evidence, _) = materialize(store, bundle, &observed, &calculation)?;
-    if canonical(&observed)? != bytes || evidence != result.evidence {
+    if materialized.retry_evidence != result.evidence {
         return Err(mismatch());
     }
     Ok(())
