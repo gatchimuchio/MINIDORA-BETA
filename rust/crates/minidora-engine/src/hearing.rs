@@ -10,7 +10,9 @@ use minidora_domain::{
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    core, document, input, language, output, search, store::Store, work_plan, work_plan_input,
+    core, document, input, language, output, search,
+    store::{Store, VerifiedCaseHistory},
+    work_plan, work_plan_input,
 };
 
 pub(crate) const REQUIRED: &str = "HEARING_REQUIRED";
@@ -467,18 +469,96 @@ pub(crate) fn prepare(
     Ok(Preparation::Question(prompt))
 }
 
+/// Classify the retained question kind before opening the selected plan's full proof.
+pub(crate) fn is_completed_work_plan_answer(
+    store: &Store,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+) -> Result<bool> {
+    let Intent::SupplyHearingAnswer {
+        question_ref,
+        answer,
+    } = &bundle.meaning.intent
+    else {
+        return Ok(false);
+    };
+    if result.lifecycle != Lifecycle::Commit {
+        return Ok(false);
+    }
+    let [.., retained_question_ref, prompt_ref] = result.dependencies.as_slice() else {
+        return Err(invalid());
+    };
+    let request = &bundle.request;
+    if retained_question_ref != question_ref
+        || bundle.meaning.context_result_ref.as_ref() != Some(question_ref)
+        || request
+            .context_ref
+            .as_ref()
+            .is_some_and(|id| id != question_ref)
+        || identity(request)? != result.id
+        || request.input_id != result.input_id
+        || request.input_version != result.input_version
+        || bundle.meaning.parser_version != input::HEARING_PARSER_VERSION
+        || bundle.meaning.source_kind != "USER_REQUEST"
+        || !bundle.meaning.unresolved.is_empty()
+        || request.text.get(answer.start..answer.end) != Some(answer.text.as_str())
+        || bundle.raw_sha256 != digest(request.text.as_bytes())
+        || bundle.semantic_signature != identity(&bundle.meaning)?
+        || bundle.fingerprint
+            != identity(&(
+                request,
+                &bundle.raw_sha256,
+                &bundle.context_sha256,
+                input::HEARING_PARSER_VERSION,
+            ))?
+    {
+        return Err(invalid());
+    }
+    let prompt_bytes = store.get_bytes(&request.actor_id, &request.case_id, prompt_ref)?;
+    let prompt: Prompt = serde_json::from_slice(&prompt_bytes)?;
+    if prompt.kind != PROMPT_KIND {
+        return Err(invalid());
+    }
+    if !matches!(prompt.task, Task::WorkPlanPersonnel { .. }) {
+        return Ok(false);
+    }
+    if result.dependencies.len() != 3
+        || result.guarantee != Guarantee::Computed
+        || result.calculation.is_some()
+        || result.actor_memory_revision.is_some()
+        || !result.evidence.is_empty()
+        || result.content_plan.is_none()
+        || result.render.is_none()
+        || !prompt.dependencies.is_empty()
+        || canonical(&prompt)? != prompt_bytes
+        || !request.attachments.is_empty()
+        || request.speech.is_some()
+        || request.purpose.is_some()
+        || !matches!(request.locale.as_str(), "ja" | "ja-JP")
+        || prompt.answer_span(&request.text).as_ref() != Some(answer)
+    {
+        return Err(invalid());
+    }
+    Ok(true)
+}
+
 fn read_question(
     store: &Store,
     actor: &str,
     case: &str,
     question: &ResultRecord,
+    history: Option<&VerifiedCaseHistory<'_>>,
 ) -> Result<AnswerContext> {
-    let revision = store
-        .load_suspended_result_revision(actor, case, question)?
-        .ok_or_else(invalid)?;
-    let (_, original) = store
-        .get_input_bundle(actor, case, &question.input_id, question.input_version)?
-        .ok_or_else(invalid)?;
+    let revision = match history {
+        Some(history) => history.suspended_result_revision(question)?,
+        None => store.load_suspended_result_revision(actor, case, question)?,
+    }
+    .ok_or_else(invalid)?;
+    let (_, original) = match history {
+        Some(history) => history.input_bundle(&question.input_id, question.input_version)?,
+        None => store.get_input_bundle(actor, case, &question.input_id, question.input_version)?,
+    }
+    .ok_or_else(invalid)?;
     let goal_ref = revision.goal_sha256.as_deref().ok_or_else(invalid)?;
     let goal: GoalContract = serde_json::from_slice(&store.get_bytes(actor, case, goal_ref)?)?;
     let work_plan = matches!(
@@ -661,7 +741,7 @@ pub(crate) fn find_answer(
         {
             return Ok(true);
         }
-        let context = read_question(store, &request.actor_id, &request.case_id, result)?;
+        let context = read_question(store, &request.actor_id, &request.case_id, result, None)?;
         if !context.admits_answer(request) || (personnel_only && !context.is_work_plan_personnel())
         {
             return Ok(true);
@@ -700,7 +780,7 @@ pub(crate) fn equivalent_question(
     let request = &bundle.request;
     let mut existing = None;
     active_questions(store, request, started, |result| {
-        let context = read_question(store, &request.actor_id, &request.case_id, result)?;
+        let context = read_question(store, &request.actor_id, &request.case_id, result, None)?;
         if context.original.meaning.intent == bundle.meaning.intent
             && context.original.request.output_path == request.output_path
             && (independent
@@ -721,6 +801,24 @@ pub(crate) fn restore_answer(
     bundle: &InputBundle,
     prior_results: &BTreeMap<String, ResultRecord>,
 ) -> Result<AnswerContext> {
+    restore_answer_from(store, bundle, prior_results, None)
+}
+
+pub(crate) fn restore_answer_in_history(
+    store: &Store,
+    history: &VerifiedCaseHistory<'_>,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+) -> Result<AnswerContext> {
+    restore_answer_from(store, bundle, prior_results, Some(history))
+}
+
+fn restore_answer_from(
+    store: &Store,
+    bundle: &InputBundle,
+    prior_results: &BTreeMap<String, ResultRecord>,
+    history: Option<&VerifiedCaseHistory<'_>>,
+) -> Result<AnswerContext> {
     let Intent::SupplyHearingAnswer {
         question_ref,
         answer,
@@ -734,6 +832,7 @@ pub(crate) fn restore_answer(
         &bundle.request.actor_id,
         &bundle.request.case_id,
         question,
+        history,
     )?;
     if !context.admits_answer(&bundle.request)
         || context.prompt.answer_span(&bundle.request.text).as_ref() != Some(answer)
@@ -800,6 +899,50 @@ impl AnswerContext {
         Ok(saved.clone())
     }
 
+    pub(crate) fn completed_work_plan(
+        &self,
+        bundle: &InputBundle,
+        deadline: Instant,
+    ) -> Result<(work_plan::WorkPlanMeaningPlan, Outcome)> {
+        let Intent::SupplyHearingAnswer {
+            question_ref,
+            answer,
+        } = &bundle.meaning.intent
+        else {
+            return Err(invalid());
+        };
+        let (Task::WorkPlanPersonnel { .. }, Intent::ClarifyWorkPlanPersonnel { draft }) =
+            (&self.prompt.task, &self.original.meaning.intent)
+        else {
+            return Err(invalid());
+        };
+        if question_ref != &self.question.id {
+            return Err(invalid());
+        }
+        let (_, personnel) = work_plan_input::personnel_answer(&bundle.request.text)
+            .filter(|(span, _)| span == answer)
+            .ok_or_else(invalid)?;
+        let budget = self.effective_budget(&bundle.request);
+        let retained_deadline = Instant::now()
+            .checked_add(Duration::from_millis(budget.deadline_ms))
+            .ok_or_else(invalid)?;
+        let plan = work_plan::WorkPlanMeaningPlan::new(
+            draft.clone().with_personnel(personnel),
+            self.original.fingerprint.clone(),
+            deadline.min(retained_deadline),
+        )?;
+        let mut outcome = plan_outcome(
+            &self.original,
+            Some((&bundle.fingerprint, answer)),
+            &plan,
+            &budget,
+        )?;
+        outcome
+            .dependencies
+            .extend([self.question.id.clone(), self.prompt_ref.clone()]);
+        Ok((plan, outcome))
+    }
+
     pub(crate) fn complete(
         &self,
         store: &Store,
@@ -817,31 +960,14 @@ impl AnswerContext {
         if question_ref != &self.question.id {
             return Err(invalid());
         }
-        if let (Task::WorkPlanPersonnel { .. }, Intent::ClarifyWorkPlanPersonnel { draft }) =
-            (&self.prompt.task, &self.original.meaning.intent)
-        {
-            let (_, personnel) = work_plan_input::personnel_answer(&bundle.request.text)
-                .filter(|(span, _)| span == answer)
-                .ok_or_else(invalid)?;
+        if self.is_work_plan_personnel() {
             let budget = self.effective_budget(&bundle.request);
             let deadline = started
                 .checked_add(Duration::from_millis(budget.deadline_ms))
                 .ok_or_else(invalid)?;
-            let plan = work_plan::WorkPlanMeaningPlan::new(
-                draft.clone().with_personnel(personnel),
-                self.original.fingerprint.clone(),
-                deadline,
-            )?;
-            let mut outcome = plan_outcome(
-                &self.original,
-                Some((&bundle.fingerprint, answer)),
-                &plan,
-                &budget,
-            )?;
-            outcome
-                .dependencies
-                .extend([self.question.id.clone(), self.prompt_ref.clone()]);
-            return Ok(outcome);
+            return self
+                .completed_work_plan(bundle, deadline)
+                .map(|(_, outcome)| outcome);
         }
         let previous = prior_results
             .get(&self.prompt.source_ref)

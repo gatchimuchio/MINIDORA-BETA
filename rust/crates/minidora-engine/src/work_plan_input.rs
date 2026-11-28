@@ -15,6 +15,8 @@ const CONSULTATION_REVISION_PARSER_VERSION: &str =
     "declarative-ja-v1-work-plan-consultation-revision";
 pub(crate) const HISTORY_REVISION_PARSER_VERSION: &str =
     "declarative-ja-v1-work-plan-history-revision";
+pub(crate) const HEARING_HISTORY_REVISION_PARSER_VERSION: &str =
+    "declarative-ja-v2-work-plan-history-revision";
 pub(crate) const PERSONNEL_HEARING_PARSER_VERSION: &str =
     "declarative-ja-v1-work-plan-personnel-hearing";
 
@@ -40,22 +42,31 @@ pub(crate) fn version_matches(version: &str, intent: &Intent) -> bool {
     match intent {
         Intent::PlanWork { .. } => matches!(version, PARSER_VERSION | CONSULTATION_PARSER_VERSION),
         Intent::ClarifyWorkPlanPersonnel { .. } => version == PERSONNEL_HEARING_PARSER_VERSION,
-        Intent::ReviseWorkPlan { .. } => matches!(
-            version,
-            REVISION_PARSER_VERSION
-                | CONSULTATION_REVISION_PARSER_VERSION
-                | HISTORY_REVISION_PARSER_VERSION
-        ),
-        _ => !matches!(
-            version,
-            PARSER_VERSION
-                | CONSULTATION_PARSER_VERSION
-                | REVISION_PARSER_VERSION
-                | CONSULTATION_REVISION_PARSER_VERSION
-                | HISTORY_REVISION_PARSER_VERSION
-                | PERSONNEL_HEARING_PARSER_VERSION
-        ),
+        Intent::ReviseWorkPlan { .. } => {
+            matches!(
+                version,
+                REVISION_PARSER_VERSION | CONSULTATION_REVISION_PARSER_VERSION
+            ) || is_historical_revision_version(version)
+        }
+        _ => {
+            !is_historical_revision_version(version)
+                && !matches!(
+                    version,
+                    PARSER_VERSION
+                        | CONSULTATION_PARSER_VERSION
+                        | REVISION_PARSER_VERSION
+                        | CONSULTATION_REVISION_PARSER_VERSION
+                        | PERSONNEL_HEARING_PARSER_VERSION
+                )
+        }
     }
+}
+
+pub(crate) fn is_historical_revision_version(version: &str) -> bool {
+    matches!(
+        version,
+        HISTORY_REVISION_PARSER_VERSION | HEARING_HISTORY_REVISION_PARSER_VERSION
+    )
 }
 
 pub(crate) fn has_historical_revision_anchor(intent: &Intent, roles: &Roles) -> bool {

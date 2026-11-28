@@ -4459,6 +4459,7 @@ struct WorkPlanSelection {
     parent: ResultRecord,
     through_revision: u64,
     examined: u32,
+    hearing_answer: bool,
 }
 
 fn recent_work_plan(
@@ -4467,8 +4468,10 @@ fn recent_work_plan(
     through_revision: u64,
     allowance: u32,
     deadline: Instant,
+    include_hearing_answer: bool,
 ) -> Result<WorkPlanSelection> {
     check_work_plan_deadline(deadline)?;
+    let mut hearing_answer = false;
     let (parent, examined) = store
         .recent_result_input_before(
             &request.actor_id,
@@ -4476,10 +4479,15 @@ fn recent_work_plan(
             through_revision,
             allowance,
             false,
-            |bundle, _| {
+            |bundle, result| {
                 check_work_plan_deadline(deadline)?;
-                // Resolve the referenced plan before looking for the requested task.
-                Ok(is_work_plan_intent(&bundle.meaning.intent))
+                // Select the plan before interpreting the requested task against it.
+                if is_work_plan_intent(&bundle.meaning.intent) {
+                    return Ok(true);
+                }
+                hearing_answer = include_hearing_answer
+                    && hearing::is_completed_work_plan_answer(store, bundle, result)?;
+                Ok(hearing_answer)
             },
         )
         .map_err(|error| match error {
@@ -4493,6 +4501,7 @@ fn recent_work_plan(
         parent: parent.ok_or_else(work_plan_context_invalid)?,
         through_revision,
         examined,
+        hearing_answer,
     })
 }
 
@@ -4504,7 +4513,8 @@ fn bound_work_plan_parent<'a>(
     selection: Option<&WorkPlanSelection>,
     deadline: Instant,
 ) -> Result<&'a ResultRecord> {
-    if bundle.meaning.parser_version != crate::work_plan_input::HISTORY_REVISION_PARSER_VERSION {
+    let parser_version = bundle.meaning.parser_version.as_str();
+    if !crate::work_plan_input::is_historical_revision_version(parser_version) {
         if selection.is_some() {
             return Err(work_plan_context_invalid());
         }
@@ -4526,6 +4536,8 @@ fn bound_work_plan_parent<'a>(
     {
         return Err(work_plan_context_invalid());
     }
+    let selected_hearing_answer =
+        parser_version == crate::work_plan_input::HEARING_HISTORY_REVISION_PARSER_VERSION;
     let reopened;
     let selected = if let Some(selection) = selection {
         selection
@@ -4536,10 +4548,14 @@ fn bound_work_plan_parent<'a>(
             predecessor.revision,
             *remaining,
             deadline,
+            selected_hearing_answer,
         )?;
         &reopened
     };
-    if selected.through_revision != predecessor.revision || &selected.parent != parent {
+    if selected.through_revision != predecessor.revision
+        || &selected.parent != parent
+        || selected.hearing_answer != selected_hearing_answer
+    {
         return Err(work_plan_context_invalid());
     }
     *remaining = remaining
@@ -4579,7 +4595,7 @@ fn resolve_work_plan(
     store.with_verified_case_history(&state.actor_id, &state.case_id, |history| {
         let mut ancestors = Vec::new();
         let mut before = state.revision;
-        let mut meaning = loop {
+        let (mut meaning, mut hearing_proof) = loop {
             check_work_plan_deadline(deadline)?;
             remaining = remaining
                 .checked_sub(1)
@@ -4597,7 +4613,8 @@ fn resolve_work_plan(
                     .input_result(&parent.input_id, parent.input_version)?
                     .as_ref()
                     != Some(&parent)
-                || !input::verified_work_plan_input(&saved_input)?
+                || (is_work_plan_intent(&saved_input.meaning.intent)
+                    && !input::verified_work_plan_input(&saved_input)?)
             {
                 return Err(work_plan_context_invalid());
             }
@@ -4610,7 +4627,23 @@ fn resolve_work_plan(
                         deadline,
                     )?;
                     ancestors.push((saved_input, parent));
-                    break original;
+                    break (original, None);
+                }
+                Intent::SupplyHearingAnswer { .. } => {
+                    // The retained question is a separate authored input to the plan.
+                    if remaining == 0 {
+                        return Err(work_plan_history_budget_exhausted());
+                    }
+                    let (original, proof) = verify_completed_hearing_work_plan(
+                        store,
+                        history,
+                        &committed,
+                        &saved_input,
+                        &parent,
+                        deadline,
+                    )?;
+                    ancestors.push((saved_input, parent));
+                    break (original, Some(proof));
                 }
                 Intent::ReviseWorkPlan { .. } => {
                     let earlier = bound_work_plan_parent(
@@ -4636,8 +4669,17 @@ fn resolve_work_plan(
                 .content_plan
                 .as_ref()
                 .ok_or_else(work_plan_context_invalid)?;
-            let (prior_compute, bytes) =
-                verify_saved_work_plan(store, saved_input, previous, content, &meaning, deadline)?;
+            let (prior_compute, bytes) = match hearing_proof.take() {
+                Some(proof) => proof,
+                None => verify_saved_work_plan(
+                    store,
+                    saved_input,
+                    previous,
+                    content,
+                    &meaning,
+                    deadline,
+                )?,
+            };
             evidence_bytes = evidence_bytes.saturating_add(bytes);
             if evidence_bytes > budget.max_evidence_bytes {
                 return Err(failure(
@@ -4677,6 +4719,69 @@ fn resolve_work_plan(
         check_work_plan_deadline(deadline)?;
         Ok(meaning)
     })
+}
+
+fn verify_completed_hearing_work_plan(
+    store: &Store,
+    history: &crate::store::VerifiedCaseHistory<'_>,
+    committed: &CaseRevision,
+    bundle: &InputBundle,
+    result: &ResultRecord,
+    deadline: Instant,
+) -> Result<(crate::work_plan::WorkPlanMeaningPlan, (String, usize))> {
+    check_work_plan_deadline(deadline)?;
+    if !hearing::is_completed_work_plan_answer(store, bundle, result)? {
+        return Err(work_plan_context_invalid());
+    }
+    let request = &bundle.request;
+    let context =
+        hearing::restore_answer_in_history(store, history, bundle, &committed.prior_results)?;
+    if !context.is_work_plan_personnel() {
+        return Err(work_plan_context_invalid());
+    }
+    let invalid = work_plan_context_invalid;
+    let goal_ref = committed.goal_sha256.as_deref().ok_or_else(invalid)?;
+    let goal_bytes = store.get_bytes(&request.actor_id, &request.case_id, goal_ref)?;
+    let goal: GoalContract = serde_json::from_slice(&goal_bytes)?;
+    if goal.input_fingerprint != result.id
+        || goal.intent != bundle.meaning.intent
+        || goal.permissions != request.permissions
+        || goal.output_path != context.output_path(request)?
+        || goal.budget != context.effective_budget(request)
+        || goal.required_predicates.first().map(String::as_str) != Some(hearing::PREDICATE)
+    {
+        return Err(invalid());
+    }
+
+    let content = result.content_plan.as_ref().ok_or_else(invalid)?;
+    let (plan, outcome) = context.completed_work_plan(bundle, deadline)?;
+    if content.locale != request.locale || !outcome.matches_result(result) {
+        return Err(invalid());
+    }
+
+    let report = outcome.report_bytes.ok_or_else(invalid)?;
+    let report_ref = digest(&report);
+    let compute = canonical(&(
+        &result.calculation,
+        &content.required_units,
+        &result.evidence,
+        &result.dependencies,
+    ))?;
+    let compute_ref = digest(&compute);
+    if result.dependencies.first() != Some(&report_ref)
+        || content.dependencies.last() != Some(&compute_ref)
+        || store.get_bytes(&request.actor_id, &request.case_id, &report_ref)? != report
+        || store.get_bytes(&request.actor_id, &request.case_id, &compute_ref)? != compute
+    {
+        return Err(invalid());
+    }
+    verify_generated_model_artifacts(store, &request.actor_id, &request.case_id, content)?;
+    check_work_plan_deadline(deadline)?;
+    let evidence_bytes = goal_bytes
+        .len()
+        .saturating_add(report.len())
+        .saturating_add(compute.len());
+    Ok((plan, (compute_ref, evidence_bytes)))
 }
 
 fn verify_saved_work_plan(
@@ -9939,32 +10044,49 @@ impl Engine {
                 &bundle.meaning.source_roles,
             )
             && let Some(before) = state.parent_revision
-            && !latest.as_ref().is_some_and(|case| {
-                case.lifecycle == Lifecycle::Commit
-                    && case
-                        .bundle
-                        .as_ref()
-                        .is_some_and(|input| is_work_plan_intent(&input.meaning.intent))
-            })
         {
-            let deadline = started
-                .checked_add(Duration::from_millis(request.budget.deadline_ms))
-                .ok_or_else(|| failure("INVALID_DEADLINE", "作業計画の照合締切が無効です。"))?;
-            match recent_work_plan(
-                &self.store,
-                &request,
-                before,
-                work_plan_history_allowance(&request),
-                deadline,
-            ) {
-                Ok(selected) => {
-                    bundle = input::seal_historical_work_plan_revision(&bundle, &selected.parent)?;
+            let selection = (|| -> Result<Option<WorkPlanSelection>> {
+                let adjacent = latest
+                    .as_ref()
+                    .filter(|case| case.lifecycle == Lifecycle::Commit)
+                    .and_then(|case| case.bundle.as_ref().zip(case.result.as_ref()));
+                if let Some((input, result)) = adjacent
+                    && (is_work_plan_intent(&input.meaning.intent)
+                        || hearing::is_completed_work_plan_answer(&self.store, input, result)?)
+                {
+                    return Ok(None);
+                }
+                let deadline = started
+                    .checked_add(Duration::from_millis(request.budget.deadline_ms))
+                    .ok_or_else(|| failure("INVALID_DEADLINE", "作業計画の照合締切が無効です。"))?;
+                recent_work_plan(
+                    &self.store,
+                    &request,
+                    before,
+                    work_plan_history_allowance(&request),
+                    deadline,
+                    true,
+                )
+                .map(Some)
+            })();
+            match selection {
+                Ok(Some(selected)) => {
+                    bundle = input::seal_historical_work_plan_revision(
+                        &bundle,
+                        &selected.parent,
+                        selected.hearing_answer,
+                    )?;
                     work_plan_selection = Some(selected);
                 }
+                Ok(None) => {}
                 Err(Error::Contract { code, message })
                     if matches!(
                         code.as_str(),
-                        "DEADLINE" | "ACTION_BUDGET_EXHAUSTED" | "WORK_PLAN_CONTEXT_INVALID"
+                        "DEADLINE"
+                            | "ACTION_BUDGET_EXHAUSTED"
+                            | "WORK_PLAN_CONTEXT_INVALID"
+                            | "HEARING_CONTEXT_INVALID"
+                            | "INTEGRITY_FAILURE"
                     ) =>
                 {
                     state.bundle = Some(bundle);

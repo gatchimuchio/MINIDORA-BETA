@@ -1065,6 +1065,7 @@ pub(crate) fn verified_translation_input(bundle: &InputBundle) -> Result<bool> {
 pub(crate) fn seal_historical_work_plan_revision(
     original: &InputBundle,
     prior: &ResultRecord,
+    selected_hearing_answer: bool,
 ) -> Result<InputBundle> {
     if original.request.context_ref.is_some()
         || !original.request.attachments.is_empty()
@@ -1080,10 +1081,15 @@ pub(crate) fn seal_historical_work_plan_revision(
             "元の依頼から、同じ会話の作業計画を指す表現を確認できません。",
         ));
     }
+    let version = if selected_hearing_answer {
+        crate::work_plan_input::HEARING_HISTORY_REVISION_PARSER_VERSION
+    } else {
+        crate::work_plan_input::HISTORY_REVISION_PARSER_VERSION
+    };
     seal_user_input(
         &original.request,
         Some(prior),
-        crate::work_plan_input::HISTORY_REVISION_PARSER_VERSION,
+        version,
         original.meaning.intent.clone(),
         original.meaning.source_roles.clone(),
         Vec::new(),
@@ -1129,16 +1135,15 @@ pub(crate) fn verified_work_plan_input(bundle: &InputBundle) -> Result<bool> {
         return Ok(false);
     }
     Ok(crate::work_plan_input::parse(text)?.is_some_and(|parsed| {
-        let version_supported =
-            if version == crate::work_plan_input::HISTORY_REVISION_PARSER_VERSION {
-                request.context_ref.is_none()
-                    && crate::work_plan_input::has_historical_revision_anchor(
-                        &parsed.intent,
-                        &parsed.roles,
-                    )
-            } else {
-                parsed.version == version
-            };
+        let version_supported = if crate::work_plan_input::is_historical_revision_version(version) {
+            request.context_ref.is_none()
+                && crate::work_plan_input::has_historical_revision_anchor(
+                    &parsed.intent,
+                    &parsed.roles,
+                )
+        } else {
+            parsed.version == version
+        };
         version_supported && parsed.intent == meaning.intent && parsed.roles == meaning.source_roles
     }))
 }
