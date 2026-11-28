@@ -3847,6 +3847,15 @@ fn original_message_plan(
     crate::writing::MessageMeaningPlan {
         source_bundle: bundle.fingerprint.clone(),
         draft: draft.clone(),
+        english_locale: (bundle.meaning.parser_version
+            == crate::writing::english_input::PARSER_VERSION)
+            .then(|| {
+                if supports_english_output_locale(&bundle.request.locale) {
+                    bundle.request.locale.clone()
+                } else {
+                    "en".into()
+                }
+            }),
         revision: None,
     }
 }
@@ -4050,7 +4059,7 @@ fn verify_saved_message(
         &replay.emission,
         &dependencies,
         &compute_ref,
-        &bundle.request.locale,
+        meaning.output_locale(&bundle.request.locale),
         plan,
     )?;
     let actor = &bundle.request.actor_id;
@@ -11542,6 +11551,12 @@ impl Engine {
             && (matches!(&goal.intent, Intent::IndependentRequests { .. })
                 || english_analysis
                 || english_statistics
+                || is_message_intent(&goal.intent)
+                    && matches!(
+                        bundle.meaning.parser_version.as_str(),
+                        crate::writing::english_input::PARSER_VERSION
+                            | crate::message_revision::ENGLISH_PARSER_VERSION
+                    )
                 || input::uses_english_conversation_event(&bundle)
                 || input::uses_english_current_news(&bundle)
                 || matches!(
@@ -11714,7 +11729,7 @@ impl Engine {
         let mut message_meaning_plan = None;
         let mut fiction_meaning_plan = None;
         let mut translation_meaning_plan = None;
-        let mut translation_output_locale = None;
+        let mut generated_output_locale: Option<String> = None;
         let mut work_plan_meaning = None;
         let mut decision_plan = None;
         let mut decision_pending = false;
@@ -17844,12 +17859,35 @@ impl Engine {
                     let plan = match resolve_message_plan(&self.store, &state, &bundle, deadline) {
                         Ok(plan) => plan,
                         Err(Error::Contract { code, message }) => {
-                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                            let explanation = if english {
+                                match code.as_str() {
+                                    "MESSAGE_CONTEXT_INVALID" => {
+                                        "A matching draft could not be verified in this conversation."
+                                    }
+                                    "MESSAGE_SOURCE_INVALID" => {
+                                        "The draft request could not be verified against the original text."
+                                    }
+                                    "MESSAGE_REVISION_CONSTRAINT" => {
+                                        "A subject cannot be added to a body-only draft or a message."
+                                    }
+                                    "ACTION_BUDGET_EXHAUSTED" => {
+                                        "The action budget did not cover verification of the draft history."
+                                    }
+                                    "DEADLINE" => {
+                                        "The deadline was reached while verifying the draft history."
+                                    }
+                                    _ => &message,
+                                }
+                            } else {
+                                &message
+                            };
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, explanation);
                         }
                         Err(error) => return Err(error),
                     };
                     let dependencies = plan.dependencies();
                     let grammar = plan.grammar(goal.budget.max_evidence_bytes)?;
+                    generated_output_locale = Some(plan.output_locale(&request.locale).into());
                     message_meaning_plan = Some(plan);
                     let predicate = if matches!(&goal.intent, Intent::ReviseMessage { .. }) {
                         MESSAGE_REVISION_PREDICATE
@@ -17892,7 +17930,7 @@ impl Engine {
                         Err(error) => return Err(error),
                     };
                     let dependencies = plan.dependencies();
-                    translation_output_locale = Some(plan.target_locale());
+                    generated_output_locale = Some(plan.target_locale().into());
                     translation_meaning_plan = Some(plan);
                     (dependencies, grammar, TRANSLATION_PREDICATE)
                 } else if matches!(
@@ -17975,10 +18013,14 @@ impl Engine {
                 result.guarantee = Guarantee::Computed;
                 result.dependencies = dependencies;
                 if let Some(plan) = &message_meaning_plan
-                    && let Err(Error::Contract { code, message }) =
-                        plan.verify_surface(&generation.report.text)
+                    && let Err(error) = plan.verify_surface(&generation.report.text)
                 {
-                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    match error {
+                        Error::Contract { code, message } => {
+                            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                        }
+                        error => return Err(error),
+                    }
                 }
                 if let Some(plan) = &fiction_meaning_plan
                     && let Err(error) = plan.verify_surface(&generation.report.text)
@@ -18417,7 +18459,9 @@ impl Engine {
         let model_observation_ref = self
             .store
             .put_artifact(actor, &request.case_id, &emission)?;
-        let output_locale = translation_output_locale.unwrap_or(request.locale.as_str());
+        let output_locale = generated_output_locale
+            .as_deref()
+            .unwrap_or(request.locale.as_str());
         let mut plan = ContentPlan {
             id: String::new(),
             text: emission.text.clone(),

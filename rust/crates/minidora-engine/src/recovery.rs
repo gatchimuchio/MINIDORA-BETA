@@ -5645,7 +5645,11 @@ fn inspect(
     }
     const DRAFT_MESSAGE_MISMATCH: &str = "RECOVERY_DRAFT_MESSAGE_MISMATCH";
     let requires_draft_message = matches!(goal.intent, Intent::DraftMessage { .. });
-    if requires_draft_message != (bundle.meaning.parser_version == crate::writing::PARSER_VERSION)
+    if requires_draft_message
+        != matches!(
+            bundle.meaning.parser_version.as_str(),
+            crate::writing::PARSER_VERSION | crate::writing::english_input::PARSER_VERSION
+        )
         || requires_draft_message
             != (goal.required_predicates.first().map(String::as_str)
                 == Some(crate::core::DRAFT_MESSAGE_PREDICATE))
@@ -5658,7 +5662,11 @@ fn inspect(
     const MESSAGE_REVISION_MISMATCH: &str = "RECOVERY_MESSAGE_REVISION_MISMATCH";
     let requires_message_revision = matches!(goal.intent, Intent::ReviseMessage { .. });
     if requires_message_revision
-        != (bundle.meaning.parser_version == crate::message_revision::PARSER_VERSION)
+        != matches!(
+            bundle.meaning.parser_version.as_str(),
+            crate::message_revision::PARSER_VERSION
+                | crate::message_revision::ENGLISH_PARSER_VERSION
+        )
         || requires_message_revision
             != (goal.required_predicates.first().map(String::as_str)
                 == Some(crate::core::MESSAGE_REVISION_PREDICATE))
@@ -6512,6 +6520,10 @@ fn inspect(
             TranslationLanguage::English.locale(),
         ]
         .contains(&plan.locale.as_str())
+    } else if requires_draft_message || requires_message_revision {
+        // Replaying the original draft and its revisions binds the exact locale.
+        crate::core::supports_japanese_output_locale(&plan.locale)
+            || crate::core::supports_english_output_locale(&plan.locale)
     } else {
         plan.locale == request.locale
             && (crate::core::supports_japanese_output_locale(&plan.locale)

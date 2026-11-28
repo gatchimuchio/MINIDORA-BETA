@@ -848,18 +848,41 @@ pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> 
 }
 
 pub(crate) fn verified_message_input(bundle: &InputBundle) -> Result<bool> {
+    use crate::{message_revision, writing};
+
     let request = &bundle.request;
     let meaning = &bundle.meaning;
     let text = &request.text;
-    let version = match &meaning.intent {
-        Intent::DraftMessage { .. } => crate::writing::PARSER_VERSION,
-        Intent::ReviseMessage { .. } => crate::message_revision::PARSER_VERSION,
-        _ => return Ok(false),
+    let version = meaning.parser_version.as_str();
+    let valid_scope = match version {
+        writing::PARSER_VERSION | message_revision::PARSER_VERSION => {
+            matches!(request.locale.as_str(), "ja" | "ja-JP")
+        }
+        writing::english_input::PARSER_VERSION => {
+            english_draft_locale_allowed(request, &meaning.source_roles)
+                && message_text_only(request)
+                && request.context_ref.is_none()
+                && meaning.context_result_ref.is_none()
+                && bundle.context_sha256 == identity(&None::<&ResultRecord>)?
+        }
+        message_revision::ENGLISH_PARSER_VERSION => {
+            matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+                && message_text_only(request)
+                && bundle.context_sha256 != identity(&None::<&ResultRecord>)?
+                && meaning
+                    .context_result_ref
+                    .as_ref()
+                    .is_some_and(|id| !id.is_empty())
+                && request
+                    .context_ref
+                    .as_ref()
+                    .is_none_or(|id| Some(id) == meaning.context_result_ref.as_ref())
+        }
+        _ => false,
     };
-    if meaning.parser_version != version
+    if !valid_scope
         || meaning.source_kind != "USER_REQUEST"
         || !meaning.unresolved.is_empty()
-        || !matches!(request.locale.as_str(), "ja" | "ja-JP")
         || text.len() > request.budget.max_input_bytes
         || !matches!(meaning.spans.as_slice(), [span] if span.start == 0 && span.end == text.len() && span.text == *text)
         || bundle.raw_sha256 != digest(text.as_bytes())
@@ -869,16 +892,94 @@ pub(crate) fn verified_message_input(bundle: &InputBundle) -> Result<bool> {
     {
         return Ok(false);
     }
-    match &meaning.intent {
-        Intent::DraftMessage { draft } => Ok(crate::writing::parse(text)?.is_some_and(|parsed| {
-            &parsed.draft == draft.as_ref() && parsed.roles == meaning.source_roles
-        })),
-        Intent::ReviseMessage { revision } => Ok(crate::message_revision::parse(text)?
-            .is_some_and(|parsed| {
-                &parsed.revision == revision && parsed.roles == meaning.source_roles
-            })),
-        _ => Ok(false),
+    Ok(match (version, &meaning.intent) {
+        (writing::PARSER_VERSION, Intent::DraftMessage { draft }) => writing::parse(text)?
+            .is_some_and(|p| &p.draft == draft.as_ref() && p.roles == meaning.source_roles),
+        (writing::english_input::PARSER_VERSION, Intent::DraftMessage { draft }) => {
+            writing::english_input::parse(text)
+                .is_some_and(|p| &p.draft == draft.as_ref() && p.roles == meaning.source_roles)
+        }
+        (message_revision::PARSER_VERSION, Intent::ReviseMessage { revision }) => {
+            message_revision::parse(text)?
+                .is_some_and(|p| &p.revision == revision && p.roles == meaning.source_roles)
+        }
+        (message_revision::ENGLISH_PARSER_VERSION, Intent::ReviseMessage { revision }) => {
+            message_revision::parse_english(text)
+                .is_some_and(|p| &p.revision == revision && p.roles == meaning.source_roles)
+        }
+        _ => false,
+    })
+}
+
+fn message_text_only(request: &RequestEnvelope) -> bool {
+    request.attachments.is_empty() && request.speech.is_none() && request.purpose.is_none()
+}
+
+fn english_draft_locale_allowed(
+    request: &RequestEnvelope,
+    roles: &BTreeMap<String, Vec<SourceSpan>>,
+) -> bool {
+    match request.locale.as_str() {
+        "en" | "en-US" => true,
+        "ja" | "ja-JP" => roles.get("/DraftMessage/constraints").is_some_and(|spans| {
+            spans
+                .iter()
+                .any(|span| span.text.eq_ignore_ascii_case("in english"))
+        }),
+        _ => false,
     }
+}
+
+fn english_message_input(
+    request: &RequestEnvelope,
+    previous: Option<&ResultRecord>,
+) -> Result<Option<InputBundle>> {
+    use crate::{message_revision, writing};
+
+    if !message_text_only(request)
+        || !matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+    {
+        return Ok(None);
+    }
+    if let Some(parsed) = message_revision::parse_english(&request.text) {
+        let unresolved = if previous.is_none_or(|prior| prior.lifecycle != Lifecycle::Commit) {
+            vec![if matches!(request.locale.as_str(), "en" | "en-US") {
+                "There is no committed draft to revise in this conversation.".into()
+            } else {
+                "変更できる下書きがこの会話にありません。".into()
+            }]
+        } else {
+            Vec::new()
+        };
+        return seal_user_input(
+            request,
+            previous,
+            message_revision::ENGLISH_PARSER_VERSION,
+            Intent::ReviseMessage {
+                revision: parsed.revision,
+            },
+            parsed.roles,
+            unresolved,
+        )
+        .map(Some);
+    }
+    if request.context_ref.is_none()
+        && let Some(parsed) = writing::english_input::parse(&request.text)
+        && english_draft_locale_allowed(request, &parsed.roles)
+    {
+        return seal_user_input(
+            request,
+            None,
+            writing::english_input::PARSER_VERSION,
+            Intent::DraftMessage {
+                draft: Box::new(parsed.draft),
+            },
+            parsed.roles,
+            Vec::new(),
+        )
+        .map(Some);
+    }
+    Ok(None)
 }
 
 pub(crate) fn verified_decision_input(bundle: &InputBundle) -> Result<bool> {
@@ -1591,6 +1692,9 @@ pub(crate) fn seal_with_source_context(
         return Ok(bundle);
     }
     if let Some(bundle) = bilingual_statistics_independent_input(request)? {
+        return Ok(bundle);
+    }
+    if let Some(bundle) = english_message_input(request, previous)? {
         return Ok(bundle);
     }
     if bilingual_statistics_text_scope(request)

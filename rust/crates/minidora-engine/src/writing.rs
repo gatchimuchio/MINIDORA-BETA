@@ -1,4 +1,6 @@
-//! Source-backed Japanese message drafting for the ordinary Core route.
+//! Source-backed message drafting for the ordinary Core route.
+
+pub(crate) mod english_input;
 use std::collections::BTreeMap;
 use std::sync::LazyLock;
 
@@ -521,6 +523,8 @@ pub(crate) struct MessageMeaningPlan {
     pub(crate) draft: MessageDraft,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub(crate) revision: Option<MessageRevisionProof>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) english_locale: Option<String>,
 }
 
 impl MessageMeaningPlan {
@@ -544,8 +548,44 @@ impl MessageMeaningPlan {
         }
     }
 
+    pub(crate) fn output_locale<'a>(&'a self, request_locale: &'a str) -> &'a str {
+        if let Some(locale) = &self.english_locale {
+            return locale;
+        }
+        if matches!(request_locale, "en" | "en-US") {
+            return "ja";
+        }
+        request_locale
+    }
+
+    fn generation_request(
+        &self,
+        fragments: Vec<MeaningGrammarFragment>,
+        budget: usize,
+    ) -> Result<MeaningGenerationRequest> {
+        Ok(MeaningGenerationRequest {
+            purpose: MeaningCompositionPurpose::ShortComposition,
+            format: MeaningCompositionFormat::Paragraph,
+            style: MeaningCompositionStyle::Neutral,
+            units: vec![MeaningGrammarUnit {
+                id: "message-draft".into(),
+                role: MeaningRole::Body,
+                evidence_ids: self.dependencies(),
+                dependencies: Vec::new(),
+                semantic_sha256: identity(&(self.artifact_kind(), self))?,
+                fragments,
+            }],
+            max_output_bytes: budget.min(MAX_EXACT_FIELD_GENERATION_BYTES),
+            max_tokens: MAX_EXACT_FIELD_GENERATION_TOKENS,
+        })
+    }
+
     pub(crate) fn grammar(&self, budget: usize) -> Result<MeaningGenerationRequest> {
         use MessagePurpose::*;
+        if self.english_locale.is_some() {
+            let (fragments, _) = self.english_fragments()?;
+            return self.generation_request(fragments, budget);
+        }
         let draft = &self.draft;
         let formal = draft.register == WritingRegister::Formal;
         let polite = draft.register != WritingRegister::Casual;
@@ -574,23 +614,7 @@ impl MessageMeaningPlan {
             value: span.text.clone(),
         };
         let newline = || ExactField { value: "\n".into() };
-        let complete = |fragments| {
-            Ok(MeaningGenerationRequest {
-                purpose: MeaningCompositionPurpose::ShortComposition,
-                format: MeaningCompositionFormat::Paragraph,
-                style: MeaningCompositionStyle::Neutral,
-                units: vec![MeaningGrammarUnit {
-                    id: "message-draft".into(),
-                    role: MeaningRole::Body,
-                    evidence_ids: self.dependencies(),
-                    dependencies: Vec::new(),
-                    semantic_sha256: identity(&(self.artifact_kind(), self))?,
-                    fragments,
-                }],
-                max_output_bytes: budget.min(MAX_EXACT_FIELD_GENERATION_BYTES),
-                max_tokens: MAX_EXACT_FIELD_GENERATION_TOKENS,
-            })
-        };
+        let complete = |fragments| self.generation_request(fragments, budget);
         if !draft.body_only {
             if draft.format == MessageFormat::Email && !draft.omit_subject {
                 fragments.push(literal("件名："));
@@ -782,6 +806,169 @@ impl MessageMeaningPlan {
         complete(fragments)
     }
 
+    fn english_fragments(&self) -> Result<(Vec<MeaningGrammarFragment>, usize)> {
+        use MessagePurpose::{DeclineInvitation, Request};
+        use WritingRegister::{Casual, Formal, Polite};
+
+        let draft = &self.draft;
+        let reason = draft.reason.as_ref().filter(|_| !draft.omit_reason);
+        let compact = self
+            .revision
+            .as_ref()
+            .is_some_and(|revision| revision.compact);
+        let preferred = match &draft.purpose {
+            Request { .. }
+                if !compact && (draft.format == MessageFormat::Email || reason.is_some()) =>
+            {
+                2
+            }
+            DeclineInvitation {
+                gratitude: Some(_), ..
+            } if !compact => 2,
+            Request { .. } | DeclineInvitation { .. } => 1,
+            _ => {
+                return Err(failure(
+                    "MESSAGE_SURFACE_CONSTRAINT",
+                    "This English draft requires a request or an invitation refusal.",
+                ));
+            }
+        };
+        let count = match draft.sentence_limit {
+            Some(SentenceLimit::Exact(count)) => usize::from(count),
+            Some(SentenceLimit::AtMost(limit)) => preferred.min(usize::from(limit)),
+            None => preferred,
+        };
+        if !(1..=3).contains(&count) {
+            return Err(failure(
+                "MESSAGE_SURFACE_CONSTRAINT",
+                "The English message body requires one to three sentences.",
+            ));
+        }
+
+        let literal = |value: &str| Literal {
+            value: value.into(),
+        };
+        let exact = |source: &SourceSpan| ExactField {
+            value: source.text.clone(),
+        };
+        let newline = || ExactField { value: "\n".into() };
+        let mut fragments = Vec::new();
+        if !draft.body_only {
+            if draft.format == MessageFormat::Email && !draft.omit_subject {
+                match &draft.purpose {
+                    Request { action } => {
+                        fragments.extend([literal("Subject: Request to "), exact(action)])
+                    }
+                    DeclineInvitation { occasion, .. } => {
+                        fragments.extend([literal("Subject: Unable to attend "), exact(occasion)]);
+                    }
+                    _ => unreachable!("the available purpose was checked above"),
+                }
+                fragments.push(newline());
+            }
+            if let Some(recipient) = &draft.recipient {
+                let greeting = if draft.register == Formal {
+                    "Dear "
+                } else {
+                    "Hi "
+                };
+                fragments.extend([literal(greeting), exact(recipient), literal(","), newline()]);
+            }
+        }
+
+        let mut emitted = 1;
+        match &draft.purpose {
+            Request { action } => {
+                let inline_reason = reason.filter(|_| count == 1);
+                if let Some(reason) = inline_reason {
+                    fragments.extend([literal("Because "), exact(reason), literal(", ")]);
+                }
+                if let Some(circumstance) = &draft.circumstance {
+                    fragments.extend([exact(circumstance), literal(", ")]);
+                }
+                let start_lowercase = inline_reason.is_some() || draft.circumstance.is_some();
+                let opening = match (compact, draft.register, start_lowercase) {
+                    (true, _, false) => "Please ",
+                    (true, _, true) => "please ",
+                    (false, Formal, false) => "Would you please ",
+                    (false, Formal, true) => "would you please ",
+                    (false, Polite, false) => "Could you ",
+                    (false, Polite, true) => "could you ",
+                    (false, Casual, false) => "Can you ",
+                    (false, Casual, true) => "can you ",
+                };
+                fragments.extend([literal(opening), exact(action)]);
+                if !compact || !action.text.ends_with('.') {
+                    fragments.push(literal(if compact { "." } else { "?" }));
+                }
+                if let Some(reason) = reason.filter(|_| count > 1) {
+                    fragments.extend([literal(" The reason is that "), exact(reason)]);
+                    if !reason.text.ends_with('.') {
+                        fragments.push(literal("."));
+                    }
+                    emitted += 1;
+                }
+            }
+            DeclineInvitation {
+                occasion,
+                gratitude,
+            } => {
+                if gratitude.is_some() {
+                    let thanks = match (draft.register, count > 1) {
+                        (Casual, true) => "Thanks for the invitation. ",
+                        (Casual, false) => "Thanks for the invitation, but ",
+                        (_, true) => "Thank you for inviting me. ",
+                        (_, false) => "Thank you for inviting me, but ",
+                    };
+                    fragments.push(literal(thanks));
+                    if count > 1 {
+                        emitted += 1;
+                    }
+                }
+                if let Some(circumstance) = &draft.circumstance {
+                    fragments.extend([exact(circumstance), literal(", ")]);
+                }
+                let opening = match (compact, draft.register) {
+                    (true, Casual | Polite) => "I can't attend ",
+                    (true, Formal) => "I cannot attend ",
+                    (false, Formal) => "I regret that I am unable to attend ",
+                    (false, Polite) => "I am unable to attend ",
+                    (false, Casual) => "I can't make it to ",
+                };
+                fragments.extend([literal(opening), exact(occasion)]);
+                if let Some(reason) = reason {
+                    fragments.extend([literal(" because "), exact(reason)]);
+                }
+                if !reason.unwrap_or(occasion).text.ends_with('.') {
+                    fragments.push(literal("."));
+                }
+            }
+            _ => unreachable!("the available purpose was checked above"),
+        }
+
+        if emitted < count {
+            let closing = match (&draft.purpose, draft.register) {
+                (Request { .. }, Formal) => " I appreciate your consideration.",
+                (Request { .. }, Polite) => " Please let me know if that works for you.",
+                (Request { .. }, Casual) => " Let me know if that works.",
+                (DeclineInvitation { .. }, Casual) => " I'm sorry to miss it.",
+                (DeclineInvitation { .. }, _) => " I'm sorry that I can't be there.",
+                _ => unreachable!("the available purpose was checked above"),
+            };
+            fragments.push(literal(closing));
+            emitted += 1;
+        }
+        if emitted < count {
+            fragments.push(literal(match &draft.purpose {
+                Request { .. } => " Please let me know if you have any questions.",
+                DeclineInvitation { .. } => " I hope it goes well.",
+                _ => unreachable!("the available purpose was checked above"),
+            }));
+            emitted += 1;
+        }
+        Ok((fragments, emitted))
+    }
+
     pub(crate) fn verify_surface(&self, text: &str) -> Result<()> {
         let body = rendered_body(text);
         if self
@@ -792,10 +979,34 @@ impl MessageMeaningPlan {
         {
             return Err(failure(
                 "MESSAGE_CAN_NOT_SHORTEN",
-                "文数・元の内容・文体を保って本文をこれ以上短くできません。",
+                if self.english_locale.is_some() {
+                    "The body cannot be shortened further while preserving its content, style, and sentence limit."
+                } else {
+                    "文数・元の内容・文体を保って本文をこれ以上短くできません。"
+                },
             ));
         }
-        let count = body.matches(['。', '？']).count();
+        let (count, subject_prefix) = if self.english_locale.is_some() {
+            let (fragments, declared_count) = self.english_fragments()?;
+            // Count the grammatical sentences, including a final abbreviation
+            // used as the terminator. Exact fields may contain other periods.
+            let expected: String = fragments
+                .iter()
+                .map(|fragment| match fragment {
+                    Literal { value } | ExactField { value } => value.as_str(),
+                    Choice { .. } => unreachable!("English message fragments are exact"),
+                })
+                .collect();
+            if text != expected {
+                return Err(failure(
+                    "MESSAGE_SURFACE_CONSTRAINT",
+                    "The draft differs from its planned content or layout.",
+                ));
+            }
+            (declared_count, "Subject: ")
+        } else {
+            (body.matches(['。', '？']).count(), "件名：")
+        };
         let limit_matches = match self.draft.sentence_limit {
             Some(SentenceLimit::Exact(limit)) => count == limit as usize,
             Some(SentenceLimit::AtMost(limit)) => count <= limit as usize,
@@ -804,11 +1015,15 @@ impl MessageMeaningPlan {
         if count == 0
             || !limit_matches
             || (self.draft.body_only && body != text)
-            || (self.draft.omit_subject && text.starts_with("件名："))
+            || (self.draft.omit_subject && text.starts_with(subject_prefix))
         {
             return Err(failure(
                 "MESSAGE_SURFACE_CONSTRAINT",
-                "下書きの文数または本文指定に合いません。",
+                if self.english_locale.is_some() {
+                    "The draft fails the requested sentence count or body layout."
+                } else {
+                    "下書きの文数または本文指定に合いません。"
+                },
             ));
         }
         Ok(())

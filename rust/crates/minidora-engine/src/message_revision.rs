@@ -1,12 +1,17 @@
-//! Whole-clause edits to a previously rendered Japanese message.
+//! Whole-clause edits to a previously rendered message.
 
 use std::collections::BTreeMap;
+use std::sync::LazyLock;
 
 use minidora_domain::{
     MessageFormat, MessageRevision, Result, SentenceLimit, SourceSpan, WritingRegister,
 };
+use regex::Regex;
+
+use crate::writing::english_input;
 
 pub(crate) const PARSER_VERSION: &str = "declarative-ja-v220-message-revision";
+pub(crate) const ENGLISH_PARSER_VERSION: &str = "declarative-en-v1-message-revision";
 
 pub(crate) struct ParsedRevision {
     pub(crate) revision: MessageRevision,
@@ -113,6 +118,24 @@ fn apply_setting<T: Copy + Eq>(setting: &mut Option<T>, incoming: T) -> bool {
     true
 }
 
+fn apply_edit(revision: &mut MessageRevision, edit: Edit) -> (&'static str, bool) {
+    match edit {
+        Edit::SentenceLimit(limit) => (
+            "sentence_limit",
+            apply_setting(&mut revision.sentence_limit, limit),
+        ),
+        Edit::OmitSubject(omit) => (
+            "omit_subject",
+            apply_setting(&mut revision.omit_subject, omit),
+        ),
+        Edit::Register(register) => ("register", apply_setting(&mut revision.register, register)),
+        Edit::Shorten => {
+            revision.shorten = true;
+            ("shorten", true)
+        }
+    }
+}
+
 fn push_role(raw: &str, roles: &mut BTreeMap<String, Vec<SourceSpan>>, role: &str, part: &str) {
     let start = part.as_ptr() as usize - raw.as_ptr() as usize;
     roles
@@ -161,23 +184,7 @@ pub(crate) fn parse(raw: &str) -> Result<Option<ParsedRevision>> {
         let Some(edit) = edit(clause) else {
             return Ok(None);
         };
-        let (role, consistent) = match edit {
-            Edit::SentenceLimit(limit) => (
-                "sentence_limit",
-                apply_setting(&mut revision.sentence_limit, limit),
-            ),
-            Edit::OmitSubject(omit) => (
-                "omit_subject",
-                apply_setting(&mut revision.omit_subject, omit),
-            ),
-            Edit::Register(register) => {
-                ("register", apply_setting(&mut revision.register, register))
-            }
-            Edit::Shorten => {
-                revision.shorten = true;
-                ("shorten", true)
-            }
-        };
+        let (role, consistent) = apply_edit(&mut revision, edit);
         if !consistent {
             return Ok(None);
         }
@@ -185,4 +192,111 @@ pub(crate) fn parse(raw: &str) -> Result<Option<ParsedRevision>> {
         push_role(raw, &mut roles, role, clause);
     }
     Ok(has_edit.then_some(ParsedRevision { revision, roles }))
+}
+
+fn edit_english(clause: &str) -> Option<Edit> {
+    static REGISTER: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"(?i)\A(?:make it\s+)?(?:(?:more|in an?|with an?)\s+(?:more\s+)?)?",
+            r"(?P<register>formal|polite|casual|friendly)(?:\s+tone)?\z"
+        ))
+        .expect("English message revision register")
+    });
+    if english_input::omit_subject(clause) {
+        return Some(Edit::OmitSubject(true));
+    }
+    let lower = clause.to_ascii_lowercase();
+    match lower.as_str() {
+        "add a subject line" | "include a subject line" | "restore the subject line" => {
+            Some(Edit::OmitSubject(false))
+        }
+        "shorter" | "more concise" | "make it shorter" | "make it more concise" | "shorten it" => {
+            Some(Edit::Shorten)
+        }
+        _ => {
+            if let Some(parts) = REGISTER.captures(clause) {
+                return english_input::register(&parts["register"]).map(Edit::Register);
+            }
+            english_input::sentence_limit(clause).map(Edit::SentenceLimit)
+        }
+    }
+}
+
+pub(crate) fn parse_english(raw: &str) -> Option<ParsedRevision> {
+    static TARGET: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"(?i)\A(?:please\s+)?(?:make|revise|rewrite|edit|shorten)\s+",
+            r"(?P<target>(?P<anchor>the\s+previous|the\s+earlier|the\s+last|(?:the\s+)?immediately\s+previous|that|this)\s+",
+            r"(?P<format>e-?mail|message|draft))(?:\s+(?P<edit>.+))?\z"
+        ))
+        .expect("English message revision target")
+    });
+    static SHORTEN_TARGET: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)\A(?:please\s+)?(?P<shorten>shorten)\s+")
+            .expect("English message revision shortening command")
+    });
+
+    let clauses = english_input::clauses(raw)?;
+    let (head, tail) = clauses.split_first()?;
+    let parts = TARGET.captures(head);
+    let mut roles = BTreeMap::new();
+    let (named, format, first_edit, shortening) = if let Some(parts) = &parts {
+        push_role(raw, &mut roles, "target", parts.name("target")?.as_str());
+        let anchor = parts.name("anchor")?.as_str();
+        let mut anchor_words = anchor.split_whitespace();
+        let named = anchor_words
+            .next()
+            .is_some_and(|word| word.eq_ignore_ascii_case("the"))
+            && anchor_words.next().is_some_and(|word| {
+                ["previous", "earlier", "last"]
+                    .iter()
+                    .any(|value| word.eq_ignore_ascii_case(value))
+            });
+        let format = match parts["format"].to_ascii_lowercase().as_str() {
+            "email" | "e-mail" => Some(MessageFormat::Email),
+            "message" => Some(MessageFormat::Message),
+            _ => None,
+        };
+        let shortening = SHORTEN_TARGET
+            .captures(head)
+            .and_then(|parts| parts.name("shorten"))
+            .map(|field| field.as_str());
+        (
+            named,
+            format,
+            parts.name("edit").map(|field| field.as_str()),
+            shortening,
+        )
+    } else {
+        let lower = head.to_ascii_lowercase();
+        if !lower.starts_with("make it ") && lower != "shorten it" {
+            return None;
+        }
+        (false, None, Some(*head), None)
+    };
+    let mut revision = MessageRevision {
+        named,
+        format,
+        sentence_limit: None,
+        omit_subject: None,
+        register: None,
+        shorten: shortening.is_some(),
+    };
+    if let Some(shorten) = shortening {
+        push_role(raw, &mut roles, "shorten", shorten);
+    }
+    let mut has_edit = revision.shorten;
+    for clause in first_edit.into_iter().chain(tail.iter().copied()) {
+        let (role, consistent) = if english_input::no_send(clause) {
+            ("constraints", true)
+        } else {
+            has_edit = true;
+            apply_edit(&mut revision, edit_english(clause)?)
+        };
+        if !consistent {
+            return None;
+        }
+        push_role(raw, &mut roles, role, clause);
+    }
+    has_edit.then_some(ParsedRevision { revision, roles })
 }
