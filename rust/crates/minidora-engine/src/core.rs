@@ -4327,10 +4327,125 @@ fn check_work_plan_deadline(deadline: Instant) -> Result<()> {
     Ok(())
 }
 
+fn work_plan_history_allowance(request: &RequestEnvelope) -> u32 {
+    request
+        .budget
+        .max_actions
+        .saturating_sub(3 + u32::from(request.output_path.is_some()))
+}
+
+fn work_plan_history_budget_exhausted() -> Error {
+    failure(
+        "ACTION_BUDGET_EXHAUSTED",
+        "作業計画を探して変更履歴を照合する行動予算が不足しています。",
+    )
+}
+
+fn is_work_plan_intent(intent: &Intent) -> bool {
+    matches!(
+        intent,
+        Intent::PlanWork { .. } | Intent::ReviseWorkPlan { .. }
+    )
+}
+
+struct WorkPlanSelection {
+    parent: ResultRecord,
+    through_revision: u64,
+    examined: u32,
+}
+
+fn recent_work_plan(
+    store: &Store,
+    request: &RequestEnvelope,
+    through_revision: u64,
+    allowance: u32,
+    deadline: Instant,
+) -> Result<WorkPlanSelection> {
+    check_work_plan_deadline(deadline)?;
+    let (parent, examined) = store
+        .recent_result_input_before(
+            &request.actor_id,
+            &request.case_id,
+            through_revision,
+            allowance,
+            false,
+            |bundle, _| {
+                check_work_plan_deadline(deadline)?;
+                // Resolve the referenced plan before looking for the requested task.
+                Ok(is_work_plan_intent(&bundle.meaning.intent))
+            },
+        )
+        .map_err(|error| match error {
+            Error::Contract { ref code, .. } if code == "ACTION_BUDGET_EXHAUSTED" => {
+                work_plan_history_budget_exhausted()
+            }
+            other => other,
+        })?;
+    check_work_plan_deadline(deadline)?;
+    Ok(WorkPlanSelection {
+        parent: parent.ok_or_else(work_plan_context_invalid)?,
+        through_revision,
+        examined,
+    })
+}
+
+fn bound_work_plan_parent<'a>(
+    store: &Store,
+    state: &'a CaseRevision,
+    bundle: &InputBundle,
+    remaining: &mut u32,
+    selection: Option<&WorkPlanSelection>,
+    deadline: Instant,
+) -> Result<&'a ResultRecord> {
+    if bundle.meaning.parser_version != crate::work_plan_input::HISTORY_REVISION_PARSER_VERSION {
+        if selection.is_some() {
+            return Err(work_plan_context_invalid());
+        }
+        return bound_generated_report_parent(store, state, bundle, work_plan_context_invalid);
+    }
+    let predecessor = store
+        .input_start_predecessor_revision(state)?
+        .ok_or_else(work_plan_context_invalid)?;
+    let parent = bundle
+        .meaning
+        .context_result_ref
+        .as_ref()
+        .and_then(|id| state.prior_results.get(id))
+        .filter(|result| result.lifecycle == Lifecycle::Commit)
+        .ok_or_else(work_plan_context_invalid)?;
+    if bundle.request.context_ref.is_some()
+        || predecessor.result.as_ref() == Some(parent)
+        || !registered_relation_context_matches(bundle, &state.prior_results, parent)?
+    {
+        return Err(work_plan_context_invalid());
+    }
+    let reopened;
+    let selected = if let Some(selection) = selection {
+        selection
+    } else {
+        reopened = recent_work_plan(
+            store,
+            &bundle.request,
+            predecessor.revision,
+            *remaining,
+            deadline,
+        )?;
+        &reopened
+    };
+    if selected.through_revision != predecessor.revision || &selected.parent != parent {
+        return Err(work_plan_context_invalid());
+    }
+    *remaining = remaining
+        .checked_sub(selected.examined)
+        .ok_or_else(work_plan_history_budget_exhausted)?;
+    Ok(parent)
+}
+
 fn resolve_work_plan(
     store: &Store,
     state: &CaseRevision,
     bundle: &InputBundle,
+    selection: Option<&WorkPlanSelection>,
     deadline: Instant,
 ) -> Result<crate::work_plan::WorkPlanMeaningPlan> {
     use crate::work_plan::{WorkPlanMeaningPlan, WorkPlanRevisionProof};
@@ -4348,28 +4463,20 @@ fn resolve_work_plan(
         return WorkPlanMeaningPlan::new(request.clone(), bundle.fingerprint.clone(), deadline);
     }
     let budget = &bundle.request.budget;
-    let allowance = budget
-        .max_actions
-        .saturating_sub(3 + u32::from(bundle.request.output_path.is_some()));
-    if allowance == 0 {
-        return Err(failure(
-            "ACTION_BUDGET_EXHAUSTED",
-            "作業計画の変更履歴を照合する行動予算が不足しています。",
-        ));
+    let mut remaining = work_plan_history_allowance(&bundle.request);
+    if remaining == 0 {
+        return Err(work_plan_history_budget_exhausted());
     }
     let mut parent =
-        bound_generated_report_parent(store, state, bundle, work_plan_context_invalid)?.clone();
+        bound_work_plan_parent(store, state, bundle, &mut remaining, selection, deadline)?.clone();
     store.with_verified_case_history(&state.actor_id, &state.case_id, |history| {
         let mut ancestors = Vec::new();
         let mut before = state.revision;
         let mut meaning = loop {
             check_work_plan_deadline(deadline)?;
-            if ancestors.len() >= allowance as usize {
-                return Err(failure(
-                    "ACTION_BUDGET_EXHAUSTED",
-                    "作業計画の変更履歴を照合する行動予算が不足しています。",
-                ));
-            }
+            remaining = remaining
+                .checked_sub(1)
+                .ok_or_else(work_plan_history_budget_exhausted)?;
             let committed = history
                 .committed_result_revision(&parent)?
                 .filter(|revision| revision.revision < before)
@@ -4399,11 +4506,13 @@ fn resolve_work_plan(
                     break original;
                 }
                 Intent::ReviseWorkPlan { .. } => {
-                    let earlier = bound_generated_report_parent(
+                    let earlier = bound_work_plan_parent(
                         store,
                         &committed,
                         &saved_input,
-                        work_plan_context_invalid,
+                        &mut remaining,
+                        None,
+                        deadline,
                     )?
                     .clone();
                     ancestors.push((saved_input, parent));
@@ -4528,7 +4637,7 @@ pub(crate) fn verify_work_plan_computation(
     let deadline = Instant::now()
         .checked_add(Duration::from_millis(bundle.request.budget.deadline_ms))
         .ok_or_else(|| failure("INVALID_DEADLINE", "作業計画の照合に使う締切が無効です。"))?;
-    let meaning = resolve_work_plan(store, state, bundle, deadline)?;
+    let meaning = resolve_work_plan(store, state, bundle, None, deadline)?;
     Ok(verify_saved_work_plan(store, bundle, result, plan, &meaning, deadline)?.0)
 }
 
@@ -9696,6 +9805,51 @@ impl Engine {
                             | "CONVERSATION_CONTEXT_INVALID"
                             | "DEADLINE"
                             | "ACTION_BUDGET_EXHAUSTED"
+                    ) =>
+                {
+                    state.bundle = Some(bundle);
+                    self.advance(&mut state, Lifecycle::Sealed, None)?;
+                    return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        let mut work_plan_selection = None;
+        if implicit_context
+            && has_compute_budget
+            && request.attachments.is_empty()
+            && supports_japanese_output_locale(&request.locale)
+            && crate::work_plan_input::has_historical_revision_anchor(
+                &bundle.meaning.intent,
+                &bundle.meaning.source_roles,
+            )
+            && let Some(before) = state.parent_revision
+            && !latest.as_ref().is_some_and(|case| {
+                case.lifecycle == Lifecycle::Commit
+                    && case
+                        .bundle
+                        .as_ref()
+                        .is_some_and(|input| is_work_plan_intent(&input.meaning.intent))
+            })
+        {
+            let deadline = started
+                .checked_add(Duration::from_millis(request.budget.deadline_ms))
+                .ok_or_else(|| failure("INVALID_DEADLINE", "作業計画の照合締切が無効です。"))?;
+            match recent_work_plan(
+                &self.store,
+                &request,
+                before,
+                work_plan_history_allowance(&request),
+                deadline,
+            ) {
+                Ok(selected) => {
+                    bundle = input::seal_historical_work_plan_revision(&bundle, &selected.parent)?;
+                    work_plan_selection = Some(selected);
+                }
+                Err(Error::Contract { code, message })
+                    if matches!(
+                        code.as_str(),
+                        "DEADLINE" | "ACTION_BUDGET_EXHAUSTED" | "WORK_PLAN_CONTEXT_INVALID"
                     ) =>
                 {
                     state.bundle = Some(bundle);
@@ -17328,11 +17482,17 @@ impl Engine {
                     goal.intent,
                     Intent::PlanWork { .. } | Intent::ReviseWorkPlan { .. }
                 ) {
-                    let prepared = resolve_work_plan(&self.store, &state, &bundle, deadline)
-                        .and_then(|meaning| {
-                            let grammar = meaning.grammar(goal.budget.max_evidence_bytes)?;
-                            Ok((meaning, grammar))
-                        });
+                    let prepared = resolve_work_plan(
+                        &self.store,
+                        &state,
+                        &bundle,
+                        work_plan_selection.as_ref(),
+                        deadline,
+                    )
+                    .and_then(|meaning| {
+                        let grammar = meaning.grammar(goal.budget.max_evidence_bytes)?;
+                        Ok((meaning, grammar))
+                    });
                     let (meaning, grammar) = match prepared {
                         Ok(prepared) => prepared,
                         Err(Error::Contract { code, message }) => {

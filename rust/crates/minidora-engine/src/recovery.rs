@@ -20423,6 +20423,85 @@ mod tests {
     }
 
     #[test]
+    fn historical_work_plan_revision_chain_reconciles_its_observed_file_after_restart() {
+        let fixture = empty_fixture();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "save",
+            "alice",
+            "前の段取り、出荷点検は12分かかりそう。間に合う？",
+        );
+        request.output_path = Some(fixture.target.clone());
+        request
+            .permissions
+            .write_paths
+            .insert(fixture.target.clone());
+
+        let adopted = {
+            let mut engine = Engine::open(&fixture.state).unwrap();
+            let mut turn = |id, text| {
+                let result = engine
+                    .execute("alice", RequestEnvelope::new("case", id, "alice", text))
+                    .unwrap();
+                assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+                result
+            };
+            let plan = turn(
+                "plan",
+                "発送準備です。梱包は30分、宛名確認は15分、出荷点検は10分。梱包と宛名確認が終わったら出荷点検をします。2人で50分以内に終える段取りを考えて。",
+            );
+            let first_math = turn("first-math", "17*23");
+            let revision = turn("revise", "さっきの段取り、梱包は35分かかりそう。間に合う？");
+            assert!(revision.dependencies.contains(&plan.id));
+            assert!(!revision.dependencies.contains(&first_math.id));
+            let second_math = turn("second-math", "11+13");
+
+            let result = engine.execute("alice", request.clone()).unwrap();
+            assert_eq!(result.lifecycle, Lifecycle::Commit, "{result:?}");
+            assert!(result.dependencies.contains(&revision.id));
+            assert!(!result.dependencies.contains(&second_math.id));
+            for fragment in ["梱包", "35分", "出荷点検", "12分", "47分"] {
+                assert!(result.text.contains(fragment), "{result:?}");
+            }
+            result
+        };
+
+        let original = fs::read(&fixture.target).unwrap();
+        assert_eq!(adopted.render.as_ref().unwrap().bytes, original);
+        let modified = fs::metadata(&fixture.target).unwrap().modified().unwrap();
+        let token = retain_attempted_prefix(&fixture.state);
+        let mut reopened = Engine::open(&fixture.state).unwrap();
+        let actions = reopened.store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Unknown);
+        assert_eq!(actions[0].idempotency_key, token);
+
+        let recovered = reopened.reconcile("alice", "case").unwrap();
+        assert_eq!(recovered.lifecycle, Lifecycle::Commit, "{recovered:?}");
+        assert_eq!(recovered.id, adopted.id);
+        assert_eq!(recovered.text, adopted.text);
+        assert_eq!(recovered.dependencies, adopted.dependencies);
+        assert_eq!(recovered.content_plan, adopted.content_plan);
+        assert_eq!(recovered.render, adopted.render);
+        assert_eq!(recovered.receipts.len(), 1);
+        assert_eq!(
+            recovered.receipts[0].reason.as_deref(),
+            Some("LOCAL_FILE_RECONCILED_NO_RESEND")
+        );
+        let actions = reopened.store.actions("alice", "case").unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0].phase, EffectPhase::Confirmed);
+        assert_eq!(actions[0].action_id, recovered.receipts[0].action_id);
+        assert_eq!(actions[0].idempotency_key, token);
+        assert_eq!(fs::read(&fixture.target).unwrap(), original);
+        assert_eq!(
+            fs::metadata(&fixture.target).unwrap().modified().unwrap(),
+            modified
+        );
+        assert_eq!(reopened.execute("alice", request).unwrap(), recovered);
+    }
+
+    #[test]
     fn topic_conversation_reconciles_its_observed_file_after_restart() {
         let fixture = empty_fixture();
         let adopted = {

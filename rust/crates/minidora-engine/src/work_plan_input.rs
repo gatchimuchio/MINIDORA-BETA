@@ -12,6 +12,8 @@ pub(crate) const REVISION_PARSER_VERSION: &str = "declarative-ja-v248-work-plan-
 const CONSULTATION_PARSER_VERSION: &str = "declarative-ja-v1-work-plan-consultation";
 const CONSULTATION_REVISION_PARSER_VERSION: &str =
     "declarative-ja-v1-work-plan-consultation-revision";
+pub(crate) const HISTORY_REVISION_PARSER_VERSION: &str =
+    "declarative-ja-v1-work-plan-history-revision";
 
 pub(crate) struct ParsedWorkPlan {
     pub(crate) version: &'static str,
@@ -36,7 +38,9 @@ pub(crate) fn version_matches(version: &str, intent: &Intent) -> bool {
         Intent::PlanWork { .. } => matches!(version, PARSER_VERSION | CONSULTATION_PARSER_VERSION),
         Intent::ReviseWorkPlan { .. } => matches!(
             version,
-            REVISION_PARSER_VERSION | CONSULTATION_REVISION_PARSER_VERSION
+            REVISION_PARSER_VERSION
+                | CONSULTATION_REVISION_PARSER_VERSION
+                | HISTORY_REVISION_PARSER_VERSION
         ),
         _ => !matches!(
             version,
@@ -44,8 +48,18 @@ pub(crate) fn version_matches(version: &str, intent: &Intent) -> bool {
                 | CONSULTATION_PARSER_VERSION
                 | REVISION_PARSER_VERSION
                 | CONSULTATION_REVISION_PARSER_VERSION
+                | HISTORY_REVISION_PARSER_VERSION
         ),
     }
+}
+
+pub(crate) fn has_historical_revision_anchor(intent: &Intent, roles: &Roles) -> bool {
+    matches!(intent, Intent::ReviseWorkPlan { .. })
+        && roles.get("/ReviseWorkPlan/anchor").is_some_and(|anchors| {
+            matches!(anchors.as_slice(), [anchor] if ["前回の", "先ほどの", "さっきの", "前の"]
+                .iter()
+                .any(|prefix| anchor.text.starts_with(prefix)))
+        })
 }
 
 struct Grammar {
