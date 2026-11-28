@@ -1866,6 +1866,23 @@ pub(crate) fn seal_with_source_context(
     previous: Option<&ResultRecord>,
     source_context: Option<SourceContext>,
 ) -> Result<InputBundle> {
+    let sealed = seal_existing_input(request, previous, source_context)?;
+    if !matches!(sealed.meaning.intent, Intent::Unknown { .. }) || !bilingual_text_scope(request) {
+        return Ok(sealed);
+    }
+    let inline = if previous.is_none() && source_context.is_none() {
+        seal_inline_candidate(request)?
+    } else {
+        inline_compound_input(request)?
+    };
+    Ok(inline.unwrap_or(sealed))
+}
+
+fn seal_existing_input(
+    request: &RequestEnvelope,
+    previous: Option<&ResultRecord>,
+    source_context: Option<SourceContext>,
+) -> Result<InputBundle> {
     validate_user_seal_request(request, previous)?;
     let bilingual_locale = matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US");
     if let Some(bundle) = diverse_research_independent_input(request)? {
@@ -9642,7 +9659,7 @@ fn generated_leaf_input(request: &RequestEnvelope, text: &str) -> Result<Option<
         purpose: None,
         ..request.clone()
     };
-    let leaf = seal(&request, None)?;
+    let leaf = seal_existing_input(&request, None, None)?;
     let verified = match &leaf.meaning.intent {
         Intent::DraftMessage { .. } => verified_message_input(&leaf)?,
         Intent::TranslateText { .. } => verified_translation_input(&leaf)?,
@@ -9669,6 +9686,20 @@ pub(crate) fn generated_independent_leaf(
         .filter(|leaf| &leaf.meaning.intent == item.intent.as_ref()))
 }
 
+fn lower_plain_compound_item(
+    request: &RequestEnvelope,
+    item: &str,
+    english_output: bool,
+) -> Result<Intent> {
+    if let Some(leaf) = generated_leaf_input(request, item)? {
+        return Ok(leaf.meaning.intent);
+    }
+    if let Some((intent, _)) = bilingual_statistics_goal(item, english_output)? {
+        return Ok(intent);
+    }
+    interpret_single(item)
+}
+
 pub(crate) fn generated_independent_input(
     request: &RequestEnvelope,
 ) -> Result<Option<InputBundle>> {
@@ -9676,52 +9707,87 @@ pub(crate) fn generated_independent_input(
         return Ok(None);
     }
     let english_output = crate::core::supports_english_output_locale(&request.locale);
-    let Some(intent @ Intent::IndependentRequests { .. }) =
-        crate::composition::parse(&request.text, |item| {
-            if let Some(leaf) = generated_leaf_input(request, item)? {
-                return Ok(leaf.meaning.intent);
-            }
-            if let Some((intent, _)) = bilingual_statistics_goal(item, english_output)? {
-                return Ok(intent);
-            }
-            interpret_single(item)
-        })?
-    else {
+    let parsed = crate::composition::parse(&request.text, |item| {
+        lower_plain_compound_item(request, item, english_output)
+    })?;
+    seal_plain_compound(
+        request,
+        parsed,
+        crate::composition::GENERATED_PARSER_VERSION,
+    )
+}
+
+pub(crate) fn inline_compound_input(request: &RequestEnvelope) -> Result<Option<InputBundle>> {
+    if !bilingual_text_scope(request)
+        || !matches!(
+            seal_existing_input(request, None, None)?.meaning.intent,
+            Intent::Unknown { .. }
+        )
+    {
+        return Ok(None);
+    }
+    seal_inline_candidate(request)
+}
+
+fn seal_inline_candidate(request: &RequestEnvelope) -> Result<Option<InputBundle>> {
+    let english_output = crate::core::supports_english_output_locale(&request.locale);
+    let parsed = crate::composition::parse_inline(&request.text, |item| {
+        lower_plain_compound_item(request, item, english_output)
+    })?;
+    seal_plain_compound(request, parsed, crate::composition::INLINE_PARSER_VERSION)
+}
+
+fn supports_local_inline_item(intent: &Intent, english_output: bool) -> bool {
+    crate::language::CalculationAction::bind(intent).is_some()
+        || crate::math::ProbabilityAction::bind(intent).is_some()
+        || matches!(intent, Intent::DescribeStatistics { .. })
+        || !english_output
+            && matches!(
+                intent,
+                Intent::Statistics { .. } | Intent::FiniteProbabilityStatistics { .. }
+            )
+}
+
+fn seal_plain_compound(
+    request: &RequestEnvelope,
+    parsed: Option<Intent>,
+    parser_version: &'static str,
+) -> Result<Option<InputBundle>> {
+    let Some(intent @ Intent::IndependentRequests { .. }) = parsed else {
         return Ok(None);
     };
     let Intent::IndependentRequests { items } = &intent else {
         unreachable!("independent request list above");
     };
+    let inline = parser_version == crate::composition::INLINE_PARSER_VERSION;
+    let english_output = crate::core::supports_english_output_locale(&request.locale);
     let mut roles = source_role_spans(&request.text, &intent)?;
     let mut has_generation = false;
     for (index, item) in items.iter().enumerate() {
         let source_roles = if let Some(leaf) = generated_independent_leaf(request, item)? {
             has_generation = true;
             leaf.meaning.source_roles
+        } else if inline && !supports_local_inline_item(&item.intent, english_output) {
+            // Prose must resolve every clause before any clause may execute.
+            return Ok(None);
         } else if matches!(item.intent.as_ref(), Intent::DescribeStatistics { .. })
             && let Some((_, source_roles)) =
                 bilingual_statistics_goal(&item.source.text, english_output)?
                     .filter(|(candidate, _)| candidate == item.intent.as_ref())
         {
             source_roles
+        } else if inline {
+            source_role_spans(&item.source.text, &item.intent)?
         } else {
             continue;
         };
         anchor_independent_roles(&request.text, index, item, source_roles, &mut roles)?;
     }
-    if !has_generation {
+    if !inline && !has_generation {
         return Ok(None);
     }
     validate_user_seal_request(request, None)?;
-    seal_user_input(
-        request,
-        None,
-        crate::composition::GENERATED_PARSER_VERSION,
-        intent,
-        roles,
-        Vec::new(),
-    )
-    .map(Some)
+    seal_user_input(request, None, parser_version, intent, roles, Vec::new()).map(Some)
 }
 
 fn anchor_independent_roles(

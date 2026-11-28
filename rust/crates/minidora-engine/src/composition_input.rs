@@ -1,8 +1,8 @@
-//! Bounded item references inside a composed request.
+//! Text boundaries and bounded item references inside a composed request.
 use crate::input::{arithmetic_expression, calculation_step_references};
 use minidora_domain::{Intent, Result, failure};
 use regex::Regex;
-use std::sync::LazyLock;
+use std::{ops::Range, sync::LazyLock};
 use unicode_normalization::UnicodeNormalization;
 
 const SELECTORS: &[&str] = &[
@@ -249,4 +249,271 @@ pub(crate) fn parse(text: &str, item_index: usize) -> Result<Option<Intent>> {
         expression: expression.into(),
         requires,
     }))
+}
+
+const MAX_INLINE_ITEMS: usize = 8;
+const MAX_INLINE_ITEM_BYTES: usize = 8192;
+
+// A boundary must identify a new request, rather than a sentence within one.
+const INLINE_BOUNDARIES: &[&str] = &[
+    "。次に、",
+    "。そのあと、",
+    "。その後、",
+    "、次に、",
+    "、そのあと、",
+    "、その後、",
+    ". then ",
+    ". then, ",
+    ", and then ",
+    "; then ",
+    "; then, ",
+];
+
+#[derive(Clone, Copy)]
+enum InlineDelimiter {
+    Quote(char),
+    Group(char),
+}
+
+fn inline_quote_close(ch: char) -> Option<char> {
+    Some(match ch {
+        '「' => '」',
+        '『' => '』',
+        '“' => '”',
+        '‘' => '’',
+        '"' | '\'' => ch,
+        _ => return None,
+    })
+}
+
+fn inline_group_close(ch: char) -> Option<char> {
+    Some(match ch {
+        '(' => ')',
+        '[' => ']',
+        '{' => '}',
+        '（' => '）',
+        '［' => '］',
+        '｛' => '｝',
+        '【' => '】',
+        '〈' => '〉',
+        '《' => '》',
+        '〔' => '〕',
+        _ => return None,
+    })
+}
+
+fn inline_source_range(text: &str, start: usize, end: usize) -> Option<Range<usize>> {
+    let source = text.get(start..end)?;
+    let trimmed = source.trim_start();
+    let item = trimmed.trim_end();
+    if item.is_empty() || item.len() > MAX_INLINE_ITEM_BYTES {
+        return None;
+    }
+    let start = end - trimmed.len();
+    Some(start..start + item.len())
+}
+
+fn inline_markup(ch: char, before: &str, after: &str) -> bool {
+    if matches!(ch, '\u{60}' | '<' | '>' | '\\') {
+        return true;
+    }
+    if !matches!(ch, '*' | '_' | '~') {
+        return false;
+    }
+    let previous = before.chars().next_back();
+    let next = after.chars().next();
+    if previous == Some(ch) || next == Some(ch) {
+        return true;
+    }
+    let emphasis = previous.is_none_or(|ch| ch.is_whitespace() || ch.is_ascii_punctuation())
+        && next.is_some_and(|ch| !ch.is_whitespace());
+    let multiplication = ch == '*'
+        && before
+            .trim_end()
+            .chars()
+            .next_back()
+            .is_some_and(|ch| ch.is_numeric() || matches!(ch, ')' | '）' | '}'))
+        && after
+            .trim_start()
+            .trim_start_matches(['+', '-', '−'])
+            .trim_start()
+            .chars()
+            .next()
+            .is_some_and(|ch| ch.is_numeric() || matches!(ch, '(' | '（' | '.' | '@'));
+    emphasis && !multiplication
+}
+
+/// Identify explicit sequencing cues in plain prose, using the authored byte ranges.
+pub(crate) fn inline_ranges(text: &str) -> Option<Vec<Range<usize>>> {
+    if text.len() > MAX_INLINE_ITEMS * (MAX_INLINE_ITEM_BYTES + 32)
+        || text.trim().chars().any(char::is_control)
+    {
+        return None;
+    }
+    let trimmed = text.trim_start();
+    if trimmed.starts_with(['#', '>'])
+        || ["- ", "+ ", "* "]
+            .iter()
+            .any(|prefix| trimmed.starts_with(prefix))
+    {
+        return None;
+    }
+    let first = ["まず、", "first, "]
+        .iter()
+        .find(|marker| {
+            trimmed
+                .get(..marker.len())
+                .is_some_and(|prefix| prefix.eq_ignore_ascii_case(marker))
+        })
+        .map_or(trimmed, |marker| &trimmed[marker.len()..]);
+    let origin = text.len() - first.len();
+    let mut start = origin;
+    let mut ranges = Vec::new();
+    let mut delimiters = Vec::new();
+    let mut chars = first.char_indices();
+    while let Some((offset, ch)) = chars.next() {
+        let index = origin + offset;
+        if index < start {
+            continue;
+        }
+        let before = &text[..index];
+        let after = &text[index + ch.len_utf8()..];
+        let word_apostrophe = matches!(ch, '\'' | '’')
+            && before
+                .chars()
+                .next_back()
+                .is_some_and(char::is_alphanumeric)
+            && after.chars().next().is_some_and(char::is_alphanumeric);
+
+        if let Some(InlineDelimiter::Quote(close)) = delimiters.last().copied() {
+            if ch == '\\' {
+                chars.next()?;
+            } else if ch == close && !word_apostrophe {
+                delimiters.pop();
+            } else if !matches!(close, '"' | '\'')
+                && !word_apostrophe
+                && let Some(close) = inline_quote_close(ch)
+            {
+                delimiters.push(InlineDelimiter::Quote(close));
+            }
+            continue;
+        }
+        if word_apostrophe {
+            continue;
+        }
+        if let Some(close) = inline_quote_close(ch) {
+            delimiters.push(InlineDelimiter::Quote(close));
+            continue;
+        }
+        if let Some(close) = inline_group_close(ch) {
+            delimiters.push(InlineDelimiter::Group(close));
+            continue;
+        }
+        if matches!(
+            ch,
+            ')' | ']'
+                | '}'
+                | '）'
+                | '］'
+                | '｝'
+                | '】'
+                | '〉'
+                | '》'
+                | '〕'
+                | '」'
+                | '』'
+                | '”'
+                | '’'
+        ) {
+            if !matches!(delimiters.pop(), Some(InlineDelimiter::Group(close)) if close == ch) {
+                return None;
+            }
+            continue;
+        }
+        if inline_markup(ch, before, after) {
+            return None;
+        }
+        if delimiters.is_empty()
+            && matches!(ch, '。' | '、' | '.' | ',' | ';')
+            && let Some(marker) = INLINE_BOUNDARIES.iter().find(|marker| {
+                text[index..]
+                    .get(..marker.len())
+                    .is_some_and(|prefix| prefix.eq_ignore_ascii_case(marker))
+            })
+        {
+            if ranges.len() == MAX_INLINE_ITEMS - 1 {
+                return None;
+            }
+            ranges.push(inline_source_range(text, start, index)?);
+            start = index + marker.len();
+        }
+    }
+    if ranges.is_empty() || !delimiters.is_empty() {
+        return None;
+    }
+    ranges.push(inline_source_range(text, start, text.len())?);
+    Some(ranges)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::inline_ranges;
+
+    #[test]
+    fn inline_ranges_preserve_quoted_and_grouped_utf8() {
+        for (text, expected) in [
+            (
+                "まず、「一杯です。次に、『二杯です』と言います。」を英訳して。次に、17 *23を計算して",
+                [
+                    "「一杯です。次に、『二杯です』と言います。」を英訳して",
+                    "17 *23を計算して",
+                ],
+            ),
+            (
+                "First, Translate \"I won't arrive. Then, I will call.\" to Japanese. THEN, calculate 17*23",
+                [
+                    "Translate \"I won't arrive. Then, I will call.\" to Japanese",
+                    "calculate 17*23",
+                ],
+            ),
+            (
+                "Use [\"I won't know. Then, ask\", [1; then 2]]. Then calculate (2 + 3)\n",
+                [
+                    "Use [\"I won't know. Then, ask\", [1; then 2]]",
+                    "calculate (2 + 3)",
+                ],
+            ),
+            (
+                "Calculate 17+(2*3), and then calculate (@{request-1}+4)",
+                ["Calculate 17+(2*3)", "calculate (@{request-1}+4)"],
+            ),
+        ] {
+            let ranges = inline_ranges(text).unwrap();
+            assert_eq!(
+                ranges
+                    .iter()
+                    .map(|span| &text[span.clone()])
+                    .collect::<Vec<_>>(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn inline_ranges_decline_unbalanced_markup_and_plain_conjunctions() {
+        for text in [
+            "Calculate 17 and then calculate 23",
+            "\"Calculate 17. Then calculate 23\"",
+            "Translate 「一杯です。次に、2*3",
+            "Calculate (17 + 3]. Then calculate 23",
+            "\u{60}Calculate 17. Then calculate 23\u{60}",
+            "# Calculate 17. Then calculate 23",
+            "Please _calculate 17. Then calculate 23_",
+            "**Calculate 17. Then calculate 23**",
+            "1 *Calculate 17. Then calculate 23*",
+            "Calculate 17. Then ",
+        ] {
+            assert!(inline_ranges(text).is_none(), "{text}");
+        }
+    }
 }

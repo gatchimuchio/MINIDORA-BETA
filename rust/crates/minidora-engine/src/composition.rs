@@ -22,12 +22,14 @@ use minidora_domain::{
 use serde::{Deserialize, Serialize};
 use std::{
     collections::BTreeMap,
+    ops::Range,
     time::{Duration, Instant},
 };
 
 pub(crate) const PREDICATE: &str = "INDEPENDENT_REQUESTS_V1";
 pub(crate) const PARSER_VERSION: &str = "independent-request-list-v1";
 pub(crate) const GENERATED_PARSER_VERSION: &str = "generated-independent-request-list-v1";
+pub(crate) const INLINE_PARSER_VERSION: &str = "inline-independent-requests-v1";
 pub(crate) const BILINGUAL_STATISTICS_PARSER_VERSION: &str =
     "bilingual-statistics-independent-request-list-v1";
 pub(crate) const ATTACHED_PARSER_VERSION: &str = "attached-independent-request-list-v1";
@@ -70,7 +72,7 @@ pub(crate) fn parse(text: &str, lower: impl Fn(&str) -> Result<Intent>) -> Resul
         })
     };
     let first_item = (!header).then_some((start, first));
-    let mut ranges: Vec<(usize, usize)> = Vec::new();
+    let mut ranges: Vec<Range<usize>> = Vec::new();
     for (line_start, line) in first_item.into_iter().chain(lines) {
         if line.chars().any(char::is_control) {
             return Ok(invalid());
@@ -81,30 +83,53 @@ pub(crate) fn parse(text: &str, lower: impl Fn(&str) -> Result<Intent>) -> Resul
                 return Ok(invalid());
             }
             let start = line_start + 2 + body.len() - body.trim_start().len();
-            ranges.push((start, start + item.len()));
+            ranges.push(start..start + item.len());
         } else if line.starts_with("  ")
-            && let Some((_, end)) = ranges.last_mut()
+            && let Some(range) = ranges.last_mut()
         {
-            *end = line_start + line.trim_end().len();
+            range.end = line_start + line.trim_end().len();
         } else {
             return Ok(invalid());
         }
     }
-    if ranges.len() < 2
-        || ranges
-            .iter()
-            .any(|(start, end)| end - start > MAX_ITEM_BYTES)
-    {
+    if !valid_item_ranges(&ranges) {
         return Ok(invalid());
     }
+    lower_items(text, ranges, lower).map(Some)
+}
+
+pub(crate) fn parse_inline(
+    text: &str,
+    lower: impl Fn(&str) -> Result<Intent>,
+) -> Result<Option<Intent>> {
+    let Some(ranges) =
+        composition_input::inline_ranges(text).filter(|ranges| valid_item_ranges(ranges))
+    else {
+        return Ok(None);
+    };
+    lower_items(text, ranges, lower).map(Some)
+}
+
+fn valid_item_ranges(ranges: &[Range<usize>]) -> bool {
+    (2..=MAX_ITEMS).contains(&ranges.len())
+        && ranges
+            .iter()
+            .all(|range| !range.is_empty() && range.len() <= MAX_ITEM_BYTES)
+}
+
+fn lower_items(
+    text: &str,
+    ranges: Vec<Range<usize>>,
+    lower: impl Fn(&str) -> Result<Intent>,
+) -> Result<Intent> {
     let items = ranges
         .into_iter()
         .enumerate()
-        .map(|(index, (start, end))| {
+        .map(|(index, range)| {
             let source = SourceSpan {
-                start,
-                end,
-                text: text[start..end].to_owned(),
+                start: range.start,
+                end: range.end,
+                text: text[range].to_owned(),
             };
             let parsed = composition_input::parse(&source.text, index)
                 .and_then(|intent| intent.map_or_else(|| lower(&source.text), Ok));
@@ -124,7 +149,7 @@ pub(crate) fn parse(text: &str, lower: impl Fn(&str) -> Result<Intent>) -> Resul
             })
         })
         .collect::<Result<Vec<_>>>()?;
-    Ok(Some(Intent::IndependentRequests { items }))
+    Ok(Intent::IndependentRequests { items })
 }
 
 fn node_id(index: usize) -> String {
@@ -419,14 +444,15 @@ pub(crate) fn live_read_count(bundle: &InputBundle, items: &[IndependentRequest]
 }
 
 fn generated_items_enabled(bundle: &InputBundle) -> bool {
-    bundle.meaning.parser_version == GENERATED_PARSER_VERSION
+    matches!(
+        bundle.meaning.parser_version.as_str(),
+        GENERATED_PARSER_VERSION | INLINE_PARSER_VERSION
+    )
 }
 
 fn bilingual_statistics_enabled(bundle: &InputBundle) -> bool {
-    matches!(
-        bundle.meaning.parser_version.as_str(),
-        BILINGUAL_STATISTICS_PARSER_VERSION | GENERATED_PARSER_VERSION
-    )
+    bundle.meaning.parser_version == BILINGUAL_STATISTICS_PARSER_VERSION
+        || generated_items_enabled(bundle)
 }
 
 fn news_items_enabled(bundle: &InputBundle) -> bool {
@@ -474,6 +500,7 @@ fn delivery_items(bundle: &InputBundle) -> Result<&[IndependentRequest]> {
         GENERATED_PARSER_VERSION => {
             input::generated_independent_input(request)?.as_ref() == Some(bundle)
         }
+        INLINE_PARSER_VERSION => input::inline_compound_input(request)?.as_ref() == Some(bundle),
         ATTACHED_PARSER_VERSION => {
             input::validate_request_attachments(request)?;
             input::attached_independent_input(request)?.as_ref() == Some(bundle)
