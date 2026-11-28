@@ -95,6 +95,12 @@ impl Engine {
                     limits: "対応する語彙と文型が対象です。日本語訳は敬体・常体、英訳は対応する助動詞などの短縮形を切り替えます。",
                 },
                 EngineCapability {
+                    id: "offline-short-translation-ja-en-es-v1",
+                    scope: "対応する短い通知・記述を、スペイン語と日本語、またはスペイン語と英語の間で双方向に翻訳します。スペイン語でも翻訳や保存した訳文の文体変更を依頼できます。",
+                    permission: None,
+                    limits: "対応する語彙と文型に限ります。受付時間、料金、天候などの短い記述を扱います。",
+                },
+                EngineCapability {
                     id: "option-decision",
                     scope: "数値と有無で示された候補を、必須条件と優先順で比較し、推奨・同順位・判断保留の根拠を返します。同じ会話の比較は、候補情報、必須条件、優先順の指定箇所だけを更新して見直せます。",
                     permission: None,

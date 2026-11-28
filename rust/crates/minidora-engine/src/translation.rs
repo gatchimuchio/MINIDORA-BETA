@@ -1,4 +1,5 @@
-//! Offline bidirectional translation of bounded Japanese and English statements.
+//! Offline translation of bounded statements through a shared meaning plan.
+mod spanish;
 use std::sync::LazyLock;
 
 use minidora_domain::{
@@ -18,7 +19,8 @@ use crate::{
     translation_time::{Timing, parse_timing, small_number},
 };
 
-pub(crate) const ARTIFACT_KIND: &str = "minidora.core-computation.translation.ja-en.v1";
+const ARTIFACT_KIND: &str = "minidora.core-computation.translation.ja-en.v1";
+const SPANISH_ARTIFACT_KIND: &str = "minidora.core-computation.translation.ja-en-es.v1";
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -258,6 +260,7 @@ impl Nominal {
                 let term = if *plural { lexical.1 } else { lexical.0 };
                 let prefix = match article {
                     Article::Definite => "the ",
+                    Article::Indefinite if *plural => "some ",
                     Article::Indefinite if term.starts_with(['a', 'e', 'i', 'o', 'u']) => "an ",
                     Article::Indefinite => "a ",
                     Article::Bare if !plural && lexical.0 != lexical.1 => "the ",
@@ -267,18 +270,24 @@ impl Nominal {
             }
         }
     }
-    fn japanese(&self) -> String {
+    fn japanese(&self, preserve_number: bool) -> String {
         match self {
             Self::Name(value) => value.clone(),
             Self::Pronoun(index) => PRONOUNS[*index as usize].1.into(),
-            Self::Noun { key, article, .. } => {
+            Self::Noun {
+                key,
+                article,
+                plural,
+            } => {
                 let (_, _, term) = NOUNS
                     .iter()
                     .find(|(word, _, _)| *word == key)
                     .expect("recorded noun");
                 format!(
                     "{}{term}",
-                    if *article == Article::Indefinite {
+                    if preserve_number && *plural {
+                        "複数の"
+                    } else if *article == Article::Indefinite {
                         "ある"
                     } else {
                         ""
@@ -426,7 +435,12 @@ impl Clause {
         text
     }
 
-    fn japanese(&self, register: TranslationRegister, subject_particle: char) -> String {
+    fn japanese(
+        &self,
+        register: TranslationRegister,
+        subject_particle: char,
+        preserve_number: bool,
+    ) -> String {
         let polite = match register {
             TranslationRegister::Preserve => self.polite,
             TranslationRegister::Plain => false,
@@ -435,7 +449,7 @@ impl Clause {
         let mut text = String::new();
         let weather = matches!(self.verb, Verb::Rain | Verb::Snow);
         if !weather && !(self.subject == Nominal::Pronoun(YOU) && self.tense == Tense::Ability) {
-            text.push_str(&self.subject.japanese());
+            text.push_str(&self.subject.japanese(preserve_number));
             text.push(subject_particle);
         }
         let has_time = self.timing.iter().any(Timing::is_clock);
@@ -446,7 +460,7 @@ impl Clause {
             text.push_str(&timing.japanese(self.verb == Verb::Be));
         }
         if let Some(object) = &self.object {
-            text.push_str(&object.japanese());
+            text.push_str(&object.japanese(preserve_number));
             text.push(object_particle(self.verb));
         }
         if let Some(amount) = &self.amount {
@@ -947,11 +961,17 @@ fn parse_condition(text: &str, lang: TranslationLanguage) -> (Option<Condition>,
             ("if it doesn't snow", true, true),
             ("unless it snows", true, true),
         ],
+        TranslationLanguage::Spanish => &[
+            ("si llueve", false, false),
+            ("si no llueve", false, true),
+            ("si nieva", true, false),
+            ("si no nieva", true, true),
+        ],
     };
-    let split = if lang == TranslationLanguage::Japanese {
-        text.split_once(['、', ','])
-    } else {
-        text.split_once(',')
+    let split = match lang {
+        TranslationLanguage::Japanese => text.split_once(['、', ',']),
+        TranslationLanguage::English => text.split_once(','),
+        TranslationLanguage::Spanish => text.split_once(", "),
     };
     if let Some((prefix, body)) = split {
         let prefix = prefix.trim();
@@ -996,6 +1016,10 @@ fn parse_condition(text: &str, lang: TranslationLanguage) -> (Option<Condition>,
                     None
                 }
             }
+            TranslationLanguage::Spanish => prefix
+                .get(..3)
+                .filter(|marker| marker.eq_ignore_ascii_case("si "))
+                .and_then(|_| spanish::clause(prefix[3..].trim_start())),
         };
         if let Some(clause) = clause {
             return (Some(Condition::Clause(clause)), body.trim());
@@ -1029,6 +1053,13 @@ fn parse_sentence(text: &str, lang: TranslationLanguage) -> Option<Sentence> {
             (", and ", Connector::Addition),
             (" but ", Connector::Contrast),
         ],
+        TranslationLanguage::Spanish => &[
+            (", pero ", Connector::Contrast),
+            (" pero ", Connector::Contrast),
+            (", y ", Connector::Addition),
+            (" y ", Connector::Addition),
+            (" e ", Connector::Addition),
+        ],
     };
     for (marker, connector) in markers {
         if let Some((first, second)) = text.split_once(marker) {
@@ -1058,6 +1089,7 @@ fn timed_clause(text: &str, lang: TranslationLanguage) -> Option<Clause> {
     let (parser, delimiter): (fn(&str) -> Option<Clause>, &[char]) = match lang {
         TranslationLanguage::Japanese => (japanese_clause, &['、', ',']),
         TranslationLanguage::English => (english_clause, &[',']),
+        TranslationLanguage::Spanish => (spanish::clause, &[',']),
     };
     if let Some(clause) = parser(text) {
         return Some(clause);
@@ -1066,6 +1098,14 @@ fn timed_clause(text: &str, lang: TranslationLanguage) -> Option<Clause> {
     let mut timing = match lang {
         TranslationLanguage::Japanese => parse_timing(prefix.trim(), lang)?,
         TranslationLanguage::English => english_timing(&prefix.trim().to_ascii_lowercase())?,
+        TranslationLanguage::Spanish => {
+            // This time may select the tense of otherwise identical verb forms.
+            let prefix = prefix.trim();
+            if parse_timing(&prefix.to_lowercase(), lang)?.is_empty() {
+                return None;
+            }
+            return parser(&format!("{} {prefix}", tail.trim()));
+        }
     };
     let mut clause = parser(tail.trim())?;
     if timing.is_empty()
@@ -1091,7 +1131,12 @@ fn capitalize_ascii(text: String) -> String {
 }
 
 impl Sentence {
-    fn render(&self, lang: TranslationLanguage, register: TranslationRegister) -> String {
+    fn render(
+        &self,
+        lang: TranslationLanguage,
+        register: TranslationRegister,
+        preserve_number: bool,
+    ) -> String {
         match lang {
             TranslationLanguage::English => {
                 let plain = register == TranslationRegister::Plain;
@@ -1111,11 +1156,13 @@ impl Sentence {
                 text.push('.');
                 capitalize_ascii(text)
             }
+            TranslationLanguage::Spanish => spanish::sentence(self, register),
             TranslationLanguage::Japanese => {
                 let mut text = match &self.condition {
                     Some(Condition::Weather(weather)) => weather.japanese_condition().into(),
                     Some(Condition::Clause(clause)) => {
-                        let condition = clause.japanese(TranslationRegister::Plain, 'が');
+                        let condition =
+                            clause.japanese(TranslationRegister::Plain, 'が', preserve_number);
                         if let Some(nominal) = condition.strip_suffix('だ') {
                             format!("{nominal}である場合は、")
                         } else {
@@ -1124,13 +1171,13 @@ impl Sentence {
                     }
                     None => String::new(),
                 };
-                text.push_str(&self.main.japanese(register, 'は'));
+                text.push_str(&self.main.japanese(register, 'は', preserve_number));
                 if let Some((connector, clause)) = &self.joined {
                     text.push_str(match connector {
                         Connector::Contrast => "が、",
                         Connector::Addition => "し、",
                     });
-                    text.push_str(&clause.japanese(register, 'は'));
+                    text.push_str(&clause.japanese(register, 'は', preserve_number));
                 }
                 text.push('。');
                 text
@@ -1153,7 +1200,7 @@ fn parse_line(text: &str, lang: TranslationLanguage) -> Option<Line> {
     for (at, ch) in text.char_indices() {
         let end = at + ch.len_utf8();
         if (lang == TranslationLanguage::Japanese && ch == '。')
-            || (lang == TranslationLanguage::English
+            || (lang != TranslationLanguage::Japanese
                 && ch == '.'
                 && !(text
                     .as_bytes()
@@ -1213,6 +1260,11 @@ impl TranslationMeaningPlan {
             } else {
                 parse_line(line.trim(), request.source_language).ok_or_else(unavailable)?
             };
+            if request.target_language == TranslationLanguage::Spanish
+                && !line.sentences.iter().all(spanish::supported)
+            {
+                return Err(unavailable());
+            }
             count += line.sentences.len();
             if count > 16 {
                 return Err(unavailable());
@@ -1244,16 +1296,26 @@ impl TranslationMeaningPlan {
         self.request.target_language.locale()
     }
 
+    fn artifact_kind(&self) -> &'static str {
+        if [self.request.source_language, self.request.target_language]
+            .contains(&TranslationLanguage::Spanish)
+        {
+            SPANISH_ARTIFACT_KIND
+        } else {
+            ARTIFACT_KIND
+        }
+    }
+
     fn render(&self) -> String {
         let target = self.request.target_language;
         let register = self
             .revision
             .as_ref()
             .map_or(self.request.register, |proof| proof.register);
-        let separator = if target == TranslationLanguage::English {
-            " "
-        } else {
+        let separator = if target == TranslationLanguage::Japanese {
             ""
+        } else {
+            " "
         };
         self.lines
             .iter()
@@ -1261,7 +1323,13 @@ impl TranslationMeaningPlan {
                 let body = line
                     .sentences
                     .iter()
-                    .map(|sentence| sentence.render(target, register))
+                    .map(|sentence| {
+                        sentence.render(
+                            target,
+                            register,
+                            self.request.source_language == TranslationLanguage::Spanish,
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(separator);
                 format!("{}{body}", line.prefix)
@@ -1287,7 +1355,7 @@ impl TranslationMeaningPlan {
                 role: MeaningRole::Body,
                 evidence_ids: self.dependencies(),
                 dependencies: Vec::new(),
-                semantic_sha256: identity(&(ARTIFACT_KIND, self))?,
+                semantic_sha256: identity(&(self.artifact_kind(), self))?,
                 fragments: fields,
             }],
             max_output_bytes: budget.min(MAX_EXACT_FIELD_GENERATION_BYTES),
@@ -1320,7 +1388,7 @@ impl GeneratedTranslationArtifact {
         content_generation: MeaningGenerationReport,
     ) -> Self {
         Self {
-            kind: ARTIFACT_KIND.into(),
+            kind: meaning_plan.artifact_kind().into(),
             meaning_plan,
             content_generation,
         }
@@ -1379,6 +1447,93 @@ mod tests {
         assert_eq!(polite.render(), formal);
         assert_eq!(original.lines, plain.lines);
         assert_eq!(plain.lines, polite.lines);
+    }
+
+    #[test]
+    fn spanish_translation_preserves_meaning_and_rejects_ambiguous_tense() {
+        use TranslationLanguage::{English, Japanese, Spanish};
+        let translate = |source: &str, source_language, target_language, register| {
+            let request = TranslationRequest {
+                source: SourceSpan {
+                    start: 0,
+                    end: source.len(),
+                    text: source.into(),
+                },
+                source_language,
+                target_language,
+                register,
+            };
+            TranslationMeaningPlan::from_request(request, "source".into(), None)
+                .map(|plan| plan.render())
+        };
+        for (text, source, target, register, expected) in [
+            (
+                "図書館は明日9時30分に開館しません。",
+                Japanese,
+                Spanish,
+                TranslationRegister::Preserve,
+                "La biblioteca no abre mañana a las 9:30.",
+            ),
+            (
+                "La tarifa no es de 12,5 dólares. Álvaro no trae el libro mañana.",
+                Spanish,
+                English,
+                TranslationRegister::Preserve,
+                "The fee is not 12.5 dollars. Álvaro does not bring the book tomorrow.",
+            ),
+            (
+                "Ayer, nosotros abrimos.",
+                Spanish,
+                English,
+                TranslationRegister::Preserve,
+                "We opened yesterday.",
+            ),
+            (
+                "Mañana, nosotros abrimos.",
+                Spanish,
+                English,
+                TranslationRegister::Preserve,
+                "We open tomorrow.",
+            ),
+            (
+                "El tren sale a las 12 de la noche. El autobús sale a las 12 del mediodía.",
+                Spanish,
+                English,
+                TranslationRegister::Preserve,
+                "The train leaves at 12 AM. The bus leaves at 12 PM.",
+            ),
+            (
+                "Las bibliotecas abren.",
+                Spanish,
+                Japanese,
+                TranslationRegister::Preserve,
+                "複数の図書館は開館します。",
+            ),
+            (
+                "あなたは鍵を持参します。",
+                Japanese,
+                Spanish,
+                TranslationRegister::Preserve,
+                "Usted trae la llave.",
+            ),
+            (
+                "あなたは鍵を持参します。",
+                Japanese,
+                Spanish,
+                TranslationRegister::Plain,
+                "Tú traes la llave.",
+            ),
+        ] {
+            assert_eq!(translate(text, source, target, register).unwrap(), expected);
+        }
+        for text in [
+            "Nosotros abrimos.",
+            "Mañana abre.",
+            "La biblioteca abre a las 9 a.m.",
+            "El tren sale a las 9 del mediodía.",
+        ] {
+            assert!(translate(text, Spanish, English, TranslationRegister::Preserve).is_err());
+        }
     }
 
     #[test]

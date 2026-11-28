@@ -6519,6 +6519,7 @@ fn inspect(
         [
             TranslationLanguage::Japanese.locale(),
             TranslationLanguage::English.locale(),
+            TranslationLanguage::Spanish.locale(),
         ]
         .contains(&plan.locale.as_str())
     } else if requires_draft_message || requires_message_revision {

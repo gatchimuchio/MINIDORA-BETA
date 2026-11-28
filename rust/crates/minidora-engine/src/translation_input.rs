@@ -5,10 +5,11 @@ use minidora_domain::{
     Intent, Result, SourceSpan, TranslationLanguage, TranslationRegister, TranslationRequest,
 };
 
-use TranslationLanguage::{English, Japanese};
+use TranslationLanguage::{English, Japanese, Spanish};
 use TranslationRegister::{Plain, Polite, Preserve};
 
 pub(crate) const PARSER_VERSION: &str = "declarative-ja-en-v244-translation";
+pub(crate) const SPANISH_PARSER_VERSION: &str = "declarative-ja-v1-translation-es";
 pub(crate) const REVISION_PARSER_VERSION: &str = "declarative-ja-en-v245-translation-register";
 pub(crate) const HISTORY_REVISION_PARSER_VERSION: &str =
     "declarative-ja-v1-translation-history-revision";
@@ -21,6 +22,7 @@ pub(crate) struct ParsedTranslation {
 struct Command<'a> {
     target: TranslationLanguage,
     target_evidence: &'a str,
+    source: TranslationLanguage,
     source_evidence: Option<&'a str>,
     register: Option<(TranslationRegister, &'a str)>,
 }
@@ -69,8 +71,40 @@ const ENGLISH_REVISION_REGISTERS: &[(&str, TranslationRegister)] = &[
     ("less formal", Plain),
 ];
 
+const SPANISH_HISTORY_ANCHORS: &[&str] = &[
+    "la traducción anterior",
+    "la traducción de antes",
+    "la última traducción",
+];
+const SPANISH_IMMEDIATE_ANCHORS: &[&str] = &[
+    "la traducción inmediatamente anterior",
+    "la traducción de tu último mensaje",
+    "esa traducción",
+    "esta traducción",
+];
+const SPANISH_REGISTERS: &[(&str, TranslationRegister)] = &[
+    ("formal", Polite),
+    ("más formal", Polite),
+    ("cortés", Polite),
+    ("más cortés", Polite),
+    ("informal", Plain),
+    ("más informal", Plain),
+    ("menos formal", Plain),
+    ("coloquial", Plain),
+    ("más coloquial", Plain),
+];
+
+fn involves_spanish(source: TranslationLanguage, target: TranslationLanguage) -> bool {
+    source == Spanish || target == Spanish
+}
+
 pub(crate) fn parser_version(intent: &Intent) -> Option<&'static str> {
     match intent {
+        Intent::TranslateText { request }
+            if involves_spanish(request.source_language, request.target_language) =>
+        {
+            Some(SPANISH_PARSER_VERSION)
+        }
         Intent::TranslateText { .. } => Some(PARSER_VERSION),
         Intent::ReviseTranslation { .. } => Some(REVISION_PARSER_VERSION),
         _ => None,
@@ -90,6 +124,7 @@ pub(crate) fn version_matches(version: &str, intent: &Intent) -> bool {
         None => !matches!(
             version,
             PARSER_VERSION
+                | SPANISH_PARSER_VERSION
                 | REVISION_PARSER_VERSION
                 | HISTORY_REVISION_PARSER_VERSION
                 | NUMBERED_TRANSLATION_REVISION_PARSER_VERSION
@@ -111,7 +146,10 @@ pub(crate) fn has_historical_revision_anchor(
                     .is_some_and(|subject| JAPANESE_REVISION_SUBJECTS.contains(&subject)))
                 || ENGLISH_HISTORY_ANCHORS
                     .iter()
-                    .any(|phrase| anchor.text.eq_ignore_ascii_case(phrase)))
+                    .any(|phrase| anchor.text.eq_ignore_ascii_case(phrase))
+                || SPANISH_HISTORY_ANCHORS
+                    .iter()
+                    .any(|phrase| spanish_prefix(&anchor.text, phrase) == Some("")))
             })
 }
 
@@ -173,7 +211,11 @@ fn japanese_command(text: &str, after_quote: bool) -> Option<Command<'_>> {
     };
     let short_head = literal_suffix(command, &["してください", "して", "せよ"]).map(str::trim_end);
     let head = short_head
-        .filter(|head| head.ends_with("英訳") || head.ends_with("和訳"))
+        .filter(|head| {
+            ["英訳", "和訳", "西訳"]
+                .iter()
+                .any(|word| head.ends_with(word))
+        })
         .or_else(|| {
             literal_suffix(
                 command,
@@ -190,12 +232,17 @@ fn japanese_command(text: &str, after_quote: bool) -> Option<Command<'_>> {
         })
         .or(short_head)?;
     let (mut direction, mut register) = take_register(head);
-    let explicit_source = [("日本語から", Japanese), ("英語から", English)]
-        .into_iter()
-        .find_map(|(phrase, language)| {
-            let tail = direction.strip_prefix(phrase)?;
-            Some((language, &direction[..phrase.len()], tail.trim_start()))
-        });
+    let explicit_source = [
+        ("日本語から", Japanese),
+        ("英語から", English),
+        ("スペイン語から", Spanish),
+        ("西語から", Spanish),
+    ]
+    .into_iter()
+    .find_map(|(phrase, language)| {
+        let tail = direction.strip_prefix(phrase)?;
+        Some((language, &direction[..phrase.len()], tail.trim_start()))
+    });
     if let Some((_, _, tail)) = explicit_source {
         direction = tail;
     }
@@ -220,14 +267,20 @@ fn japanese_command(text: &str, after_quote: bool) -> Option<Command<'_>> {
     let target = match direction {
         "英訳" | "英語に" | "英語へ" | "英文に" => English,
         "和訳" | "日本語に" | "日本語へ" | "日本文に" => Japanese,
+        "西訳" | "スペイン語に" | "スペイン語へ" | "西語に" | "西語へ" => {
+            Spanish
+        }
         _ => return None,
     };
-    if explicit_source.is_some_and(|(language, _, _)| language == target) {
-        return None;
-    }
+    let default_source = if target == Japanese {
+        English
+    } else {
+        Japanese
+    };
     Some(Command {
         target,
         target_evidence: direction,
+        source: explicit_source.map_or(default_source, |(language, _, _)| language),
         source_evidence: explicit_source.map(|(_, evidence, _)| evidence),
         register,
     })
@@ -237,6 +290,16 @@ fn ascii_prefix<'a>(text: &'a str, phrase: &str) -> Option<&'a str> {
     text.get(..phrase.len())
         .filter(|prefix| prefix.eq_ignore_ascii_case(phrase))
         .map(|_| &text[phrase.len()..])
+}
+
+fn english_language(text: &str) -> Option<TranslationLanguage> {
+    [
+        ("English", English),
+        ("Japanese", Japanese),
+        ("Spanish", Spanish),
+    ]
+    .into_iter()
+    .find_map(|(name, language)| text.eq_ignore_ascii_case(name).then_some(language))
 }
 
 fn english_command(text: &str) -> Option<Command<'_>> {
@@ -255,6 +318,15 @@ fn english_command(text: &str) -> Option<Command<'_>> {
     .find_map(|descriptor| ascii_prefix(rest, descriptor))
     .unwrap_or(rest)
     .trim_start();
+    let (rest, explicit_source) = if let Some(from) = ascii_prefix(rest, "from ") {
+        let (name, remainder) = from.trim_start().split_once(char::is_whitespace)?;
+        (
+            remainder.trim_start(),
+            Some((english_language(name)?, name)),
+        )
+    } else {
+        (rest, None)
+    };
     let rest = ascii_prefix(rest, "into ")
         .or_else(|| ascii_prefix(rest, "to "))?
         .trim_start();
@@ -268,17 +340,109 @@ fn english_command(text: &str) -> Option<Command<'_>> {
             ))
         })
         .unwrap_or((rest, None));
-    let target = if direction.eq_ignore_ascii_case("English") {
-        English
-    } else if direction.eq_ignore_ascii_case("Japanese") {
-        Japanese
-    } else {
+    let target = english_language(direction)?;
+    let default_source = if target == English { Japanese } else { English };
+    let source = explicit_source.map_or(default_source, |(language, _)| language);
+    if explicit_source.is_some() && !involves_spanish(source, target) {
         return None;
+    }
+    Some(Command {
+        target,
+        target_evidence: direction,
+        source,
+        source_evidence: explicit_source.map(|(_, evidence)| evidence),
+        register,
+    })
+}
+
+fn spanish_prefix<'a>(text: &'a str, phrase: &str) -> Option<&'a str> {
+    text.get(..phrase.len())?
+        .chars()
+        .flat_map(char::to_lowercase)
+        .eq(phrase.chars())
+        .then(|| &text[phrase.len()..])
+}
+
+fn spanish_language(text: &str) -> Option<TranslationLanguage> {
+    [
+        ("español", Spanish),
+        ("japonés", Japanese),
+        ("inglés", English),
+    ]
+    .into_iter()
+    .find_map(|(name, language)| (spanish_prefix(text, name) == Some("")).then_some(language))
+}
+
+fn spanish_request_start(text: &str) -> &str {
+    ["por favor, ", "por favor "]
+        .iter()
+        .find_map(|phrase| spanish_prefix(text, phrase))
+        .unwrap_or(text)
+        .trim_start()
+}
+
+fn spanish_register(modifier: &str) -> Option<(TranslationRegister, &str)> {
+    let modifier = modifier.trim_start();
+    let style = [
+        "en un tono ",
+        "en un estilo ",
+        "en un registro ",
+        "para que sea ",
+    ]
+    .iter()
+    .find_map(|phrase| spanish_prefix(modifier, phrase))
+    .unwrap_or(modifier)
+    .trim_start();
+    SPANISH_REGISTERS.iter().find_map(|(phrase, register)| {
+        (spanish_prefix(style, phrase) == Some("")).then_some((*register, style))
+    })
+}
+
+fn spanish_command(text: &str) -> Option<Command<'_>> {
+    let text = spanish_request_start(terminal_trim(text));
+    let rest = ["traduce ", "traduzca ", "traducir "]
+        .iter()
+        .find_map(|phrase| spanish_prefix(text, phrase))?
+        .trim_start();
+    let rest = [
+        "la siguiente oración ",
+        "el siguiente texto ",
+        "la siguiente frase ",
+        "esta oración ",
+        "este texto ",
+        "esta frase ",
+        "esto ",
+    ]
+    .iter()
+    .find_map(|phrase| spanish_prefix(rest, phrase))
+    .unwrap_or(rest)
+    .trim_start();
+    let (rest, explicit_source) = if let Some(from) = spanish_prefix(rest, "del ") {
+        let (name, remainder) = from.trim_start().split_once(char::is_whitespace)?;
+        (
+            remainder.trim_start(),
+            Some((spanish_language(name)?, name)),
+        )
+    } else {
+        (rest, None)
+    };
+    let rest = spanish_prefix(rest, "al ")?.trim_start();
+    let (direction, modifier) = rest.split_once(char::is_whitespace).unwrap_or((rest, ""));
+    let target = spanish_language(direction)?;
+    let source = explicit_source.map_or(Spanish, |(language, _)| language);
+    if !involves_spanish(source, target) {
+        return None;
+    }
+    let register = if modifier.is_empty() {
+        None
+    } else {
+        Some(spanish_register(modifier)?)
     };
     Some(Command {
         target,
         target_evidence: direction,
-        source_evidence: None,
+        source,
+        source_evidence: explicit_source.map(|(_, evidence)| evidence),
         register,
     })
 }
@@ -290,6 +454,7 @@ fn quoted_parts(text: &str) -> Option<(&str, &str)> {
         '『' => '』',
         '"' => '"',
         '“' => '”',
+        '«' => '»',
         _ => return None,
     };
     text[opening.len_utf8()..].split_once(closing)
@@ -315,7 +480,8 @@ fn prefixed_parts(text: &str) -> Option<(&str, &str)> {
 }
 
 fn make_translation(raw: &str, source: &str, command: Command<'_>) -> Option<ParsedTranslation> {
-    if source.trim().is_empty()
+    if command.source == command.target
+        || source.trim().is_empty()
         || source.len() > 4096
         || source
             .chars()
@@ -347,10 +513,7 @@ fn make_translation(raw: &str, source: &str, command: Command<'_>) -> Option<Par
         intent: Intent::TranslateText {
             request: TranslationRequest {
                 source,
-                source_language: match command.target {
-                    Japanese => English,
-                    English => Japanese,
-                },
+                source_language: command.source,
                 target_language: command.target,
                 register: command.register.map_or(Preserve, |(register, _)| register),
             },
@@ -465,6 +628,31 @@ fn english_revision_register(modifier: &str, make: bool) -> Option<(TranslationR
     Some((register, style))
 }
 
+fn revise_spanish(raw: &str) -> Option<ParsedTranslation> {
+    let text = terminal_trim(raw);
+    if text.len() > 256 || text.chars().any(char::is_control) {
+        return None;
+    }
+    let request = spanish_request_start(text);
+    let target = ["haz ", "reescribe ", "revisa "]
+        .iter()
+        .find_map(|verb| spanish_prefix(request, verb))?
+        .trim_start();
+    let (anchor, modifier) = SPANISH_HISTORY_ANCHORS
+        .iter()
+        .chain(SPANISH_IMMEDIATE_ANCHORS)
+        .find_map(|anchor| {
+            let modifier = spanish_prefix(target, anchor)?.strip_prefix(' ')?;
+            Some((&target[..anchor.len()], modifier))
+        })?;
+    let (register, style) = spanish_register(modifier)?;
+    Some(revised_translation(
+        register,
+        original_span(raw, anchor),
+        original_span(raw, style),
+    ))
+}
+
 pub(crate) fn parse_numbered(
     raw: &str,
     anchor: &str,
@@ -491,22 +679,31 @@ pub(crate) fn parse(raw: &str) -> Result<Option<ParsedTranslation>> {
     }
     if let Some((source, command)) = quoted_parts(text) {
         return Ok(japanese_command(command, true)
+            .filter(|command| {
+                !text.starts_with('«') || involves_spanish(command.source, command.target)
+            })
             .and_then(|command| make_translation(raw, source, command)));
     }
     if let Some((header, source)) = prefixed_parts(text)
-        && let Some(command) = japanese_command(header, false).or_else(|| english_command(header))
+        && let Some(command) = japanese_command(header, false)
+            .or_else(|| english_command(header))
+            .or_else(|| spanish_command(header))
     {
         // Explicit delimiters separate a quoted source from any outer instruction.
         // An unquoted body is entirely source data and cannot trigger actions.
         let trimmed_source = source.trim_start();
-        if trimmed_source.starts_with(['「', '『', '"', '“']) {
+        if trimmed_source.starts_with(['「', '『', '"', '“'])
+            || (involves_spanish(command.source, command.target) && trimmed_source.starts_with('«'))
+        {
             return Ok(quoted_parts(trimmed_source)
                 .filter(|(_, tail)| terminal_trim(tail).is_empty())
                 .and_then(|(source, _)| make_translation(raw, source, command)));
         }
         return Ok(make_translation(raw, source, command));
     }
-    Ok(revise(raw).or_else(|| revise_english(raw)))
+    Ok(revise(raw)
+        .or_else(|| revise_english(raw))
+        .or_else(|| revise_spanish(raw)))
 }
 
 #[cfg(test)]
@@ -611,6 +808,123 @@ mod tests {
             ),
         ] {
             check_revision(raw, anchor, style, register, historical);
+        }
+    }
+
+    #[test]
+    fn spanish_requests_seal_exact_languages_and_payload_under_the_new_parser_version() {
+        for (raw, source, target, from, to, payload) in [
+            (
+                "「資料を確認します。」をスペイン語に翻訳して",
+                Japanese,
+                Spanish,
+                None,
+                "スペイン語に",
+                "資料を確認します。",
+            ),
+            (
+                "次の文をスペイン語から日本語に翻訳して：Revisamos el informe.",
+                Spanish,
+                Japanese,
+                Some("スペイン語から"),
+                "日本語に",
+                "Revisamos el informe.",
+            ),
+            (
+                "Translate from English into Spanish: We check the report.",
+                English,
+                Spanish,
+                Some("English"),
+                "Spanish",
+                " We check the report.",
+            ),
+            (
+                "Traduce esto del ESPAÑOL al INGLÉS: Revisamos el informe.",
+                Spanish,
+                English,
+                Some("ESPAÑOL"),
+                "INGLÉS",
+                " Revisamos el informe.",
+            ),
+            (
+                "Traduce al japonés: «Revisamos el informe».",
+                Spanish,
+                Japanese,
+                None,
+                "japonés",
+                "Revisamos el informe",
+            ),
+        ] {
+            let parsed = parse(raw).unwrap().unwrap();
+            let Intent::TranslateText { request } = &parsed.intent else {
+                panic!("typed translation request")
+            };
+            assert_eq!(
+                (request.source_language, request.target_language),
+                (source, target)
+            );
+            assert_eq!(request.source.text, payload);
+            assert_eq!(parser_version(&parsed.intent), Some(SPANISH_PARSER_VERSION));
+            assert!(version_matches(SPANISH_PARSER_VERSION, &parsed.intent));
+            assert!(!version_matches(PARSER_VERSION, &parsed.intent));
+            let source_roles = parsed.roles.get("/TranslateText/source_language");
+            match (from, source_roles.map(Vec::as_slice)) {
+                (Some(expected), Some([span])) => {
+                    assert_eq!(span.text, expected);
+                    assert_eq!(&raw[span.start..span.end], expected);
+                }
+                (None, None) => {}
+                _ => panic!("unexpected source language evidence"),
+            }
+            for (role, expected) in [
+                ("/TranslateText/source", payload),
+                ("/TranslateText/target_language", to),
+            ] {
+                let [span] = parsed.roles[role].as_slice() else {
+                    panic!("one exact source span per role")
+                };
+                assert_eq!(span.text, expected);
+                assert_eq!(&raw[span.start..span.end], expected);
+            }
+        }
+        let old = parse("Translate into Japanese: We check the report.")
+            .unwrap()
+            .unwrap();
+        assert_eq!(parser_version(&old.intent), Some(PARSER_VERSION));
+        assert!(!version_matches(SPANISH_PARSER_VERSION, &old.intent));
+        assert!(!version_matches(SPANISH_PARSER_VERSION, &Intent::Cancel));
+    }
+
+    #[test]
+    fn spanish_register_revision_voices_use_the_existing_context_contract() {
+        for (raw, anchor, style, register, historical) in [
+            (
+                "Haz esa traducción más formal.",
+                "esa traducción",
+                "más formal",
+                Polite,
+                false,
+            ),
+            (
+                "  Por favor, reescribe la TRADUCCIÓN anterior en un tono MÁS INFORMAL.",
+                "la TRADUCCIÓN anterior",
+                "MÁS INFORMAL",
+                Plain,
+                true,
+            ),
+        ] {
+            check_revision(raw, anchor, style, register, historical);
+        }
+        for raw in [
+            "Translate from Spanish into Spanish: Revisamos el informe.",
+            "Traduce al español: Revisamos el informe.",
+            "次の文をスペイン語からスペイン語に翻訳して：Revisamos el informe.",
+            "Traduce del inglés al japonés: We check the report.",
+            "Translate from English into Japanese: We check the report.",
+            "Reescribe la traducción anterior en un tono formal y añade un ejemplo.",
+            "Haz esa traducción más formal. Guárdala.",
+        ] {
+            assert!(parse(raw).unwrap().is_none(), "{raw}");
         }
     }
 

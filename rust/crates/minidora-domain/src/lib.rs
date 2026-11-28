@@ -1529,6 +1529,7 @@ pub struct TranslationRequest {
 pub enum TranslationLanguage {
     Japanese,
     English,
+    Spanish,
 }
 
 impl TranslationLanguage {
@@ -1536,6 +1537,7 @@ impl TranslationLanguage {
         match self {
             Self::Japanese => "ja",
             Self::English => "en",
+            Self::Spanish => "es",
         }
     }
 }

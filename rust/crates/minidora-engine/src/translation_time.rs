@@ -142,6 +142,7 @@ pub(super) fn parse_timing(mut text: &str, language: TranslationLanguage) -> Opt
         let (part, rest) = match language {
             TranslationLanguage::Japanese => next_japanese(text.trim_start())?,
             TranslationLanguage::English => next_english(text.trim_start())?,
+            TranslationLanguage::Spanish => next_spanish(text.trim_start())?,
         };
         // Separate calendar and time slots. Conflicting expressions are not silently dropped.
         let clock = matches!(part, Timing::Clock { .. } | Timing::AfterHours);
@@ -265,7 +266,7 @@ fn next_english(text: &str) -> Option<(Timing, &str)> {
         let year = m.get(3).and_then(|v| v.as_str().parse().ok());
         return checked_date(month, day, year).map(|value| (value, &text[m[0].len()..]));
     }
-    if let Some(rest) = strip_english_word(text, "after hours") {
+    if let Some(rest) = strip_timing_word(text, "after hours") {
         return Some((Timing::AfterHours, rest));
     }
     let (week, next) = if let Some(rest) = text.strip_prefix("next ") {
@@ -274,7 +275,7 @@ fn next_english(text: &str) -> Option<(Timing, &str)> {
         (text.strip_prefix("on ").unwrap_or(text), false)
     };
     for (index, (_, day)) in DAYS.iter().enumerate() {
-        if let Some(rest) = strip_english_word(week, &day.to_ascii_lowercase()) {
+        if let Some(rest) = strip_timing_word(week, &day.to_ascii_lowercase()) {
             return Some((
                 Timing::Weekday {
                     day: index as u8,
@@ -285,14 +286,127 @@ fn next_english(text: &str) -> Option<(Timing, &str)> {
         }
     }
     for (index, (_, word)) in RELATIVE.iter().enumerate() {
-        if let Some(rest) = strip_english_word(text, word) {
+        if let Some(rest) = strip_timing_word(text, word) {
             return Some((Timing::Relative(index as u8), rest));
         }
     }
     None
 }
 
-fn strip_english_word<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+const SPANISH_DAYS: [&str; 7] = [
+    "lunes",
+    "martes",
+    "miércoles",
+    "jueves",
+    "viernes",
+    "sábado",
+    "domingo",
+];
+const SPANISH_MONTHS: [&str; 12] = [
+    "enero",
+    "febrero",
+    "marzo",
+    "abril",
+    "mayo",
+    "junio",
+    "julio",
+    "agosto",
+    "septiembre",
+    "octubre",
+    "noviembre",
+    "diciembre",
+];
+const SPANISH_RELATIVE: [&str; 4] = ["hoy", "mañana", "ayer", "pasado mañana"];
+
+fn next_spanish(text: &str) -> Option<(Timing, &str)> {
+    static CLOCK: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"^(a|desde|para|hasta) (la|las) (una|[0-9]{1,2})(?::([0-9]{2}))?",
+            r"( de la mañana| de la tarde| de la noche| de la madrugada| del mediodía| de la medianoche)?",
+            r"(?:$| )"
+        ))
+        .expect("Spanish clock pattern")
+    });
+    static DATE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"^el ([0-9]{1,2}) de ([a-z]+)(?: de ([0-9]{4}))?(?:$| )")
+            .expect("Spanish date pattern")
+    });
+    if let Some(captures) = CLOCK.captures(text) {
+        let relation = match &captures[1] {
+            "a" => Relation::At,
+            "desde" => Relation::From,
+            "para" => Relation::By,
+            _ => Relation::Until,
+        };
+        let hour = if &captures[3] == "una" {
+            1
+        } else {
+            captures[3].parse().ok()?
+        };
+        if (&captures[2] == "la") != (hour == 1) {
+            return None;
+        }
+        let minute = captures
+            .get(4)
+            .and_then(|value| value.as_str().parse().ok());
+        let meridian = if let Some(suffix) = captures.get(5) {
+            Some(match (suffix.as_str(), hour) {
+                (" de la mañana", 1..=11) | (" de la madrugada", 1..=6 | 12) => Meridian::Am,
+                (" de la noche", 12) => Meridian::Am,
+                (" de la medianoche", 12) if minute.unwrap_or(0) == 0 => Meridian::Am,
+                (" de la tarde", 1..=11) | (" de la noche", 7..=11) | (" del mediodía", 12) => {
+                    Meridian::Pm
+                }
+                _ => return None,
+            })
+        } else {
+            None
+        };
+        let timing = checked_clock(hour, minute, meridian, relation)?;
+        return Some((timing, &text[captures.get(0)?.end()..]));
+    }
+    if let Some(captures) = DATE.captures(text) {
+        let day = captures[1].parse().ok()?;
+        let month = SPANISH_MONTHS
+            .iter()
+            .position(|word| *word == &captures[2])? as u8
+            + 1;
+        let year = captures
+            .get(3)
+            .and_then(|value| value.as_str().parse().ok());
+        return Some((
+            checked_date(month, day, year)?,
+            &text[captures.get(0)?.end()..],
+        ));
+    }
+    if let Some(rest) = strip_timing_word(text, "fuera del horario") {
+        return Some((Timing::AfterHours, rest));
+    }
+    for (index, word) in SPANISH_RELATIVE.iter().enumerate() {
+        if let Some(rest) = strip_timing_word(text, word) {
+            return Some((Timing::Relative(index as u8), rest));
+        }
+    }
+    for (index, word) in SPANISH_DAYS.iter().enumerate() {
+        for (prefix, next) in [("el próximo ", true), ("el ", false)] {
+            if let Some(rest) = text
+                .strip_prefix(prefix)
+                .and_then(|tail| strip_timing_word(tail, word))
+            {
+                return Some((
+                    Timing::Weekday {
+                        day: index as u8,
+                        next,
+                    },
+                    rest,
+                ));
+            }
+        }
+    }
+    None
+}
+
+fn strip_timing_word<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
     text.strip_prefix(prefix)
         .filter(|tail| tail.is_empty() || tail.starts_with(' '))
 }
@@ -364,6 +478,53 @@ impl Timing {
                     None => "",
                 };
                 format!("{prep} {hour}{min}{suffix}")
+            }
+        }
+    }
+
+    pub(super) fn spanish(&self) -> String {
+        match *self {
+            Self::Relative(index) => SPANISH_RELATIVE[index as usize].into(),
+            Self::Weekday { day, next } => {
+                let word = SPANISH_DAYS[day as usize];
+                if next {
+                    format!("el próximo {word}")
+                } else {
+                    format!("el {word}")
+                }
+            }
+            Self::Date { month, day, year } => {
+                let month = SPANISH_MONTHS[(month - 1) as usize];
+                let year = year.map(|year| format!(" de {year}")).unwrap_or_default();
+                format!("el {day} de {month}{year}")
+            }
+            Self::AfterHours => "fuera del horario".into(),
+            Self::Clock {
+                hour,
+                minute,
+                meridian,
+                relation,
+            } => {
+                let prep = match relation {
+                    Relation::At => "a",
+                    Relation::From => "desde",
+                    Relation::By => "para",
+                    Relation::Until => "hasta",
+                };
+                let article = if hour == 1 { "la" } else { "las" };
+                let min = minute.map(|m| format!(":{m:02}")).unwrap_or_default();
+                let suffix = match meridian {
+                    Some(Meridian::Am) if hour == 12 && minute.unwrap_or(0) == 0 => {
+                        " de la medianoche"
+                    }
+                    Some(Meridian::Am) if hour == 12 => " de la madrugada",
+                    Some(Meridian::Am) => " de la mañana",
+                    Some(Meridian::Pm) if hour == 12 => " del mediodía",
+                    Some(Meridian::Pm) if hour >= 7 => " de la noche",
+                    Some(Meridian::Pm) => " de la tarde",
+                    None => "",
+                };
+                format!("{prep} {article} {hour}{min}{suffix}")
             }
         }
     }
