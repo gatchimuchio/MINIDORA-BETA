@@ -78,15 +78,21 @@ pub(crate) fn parser_version(intent: &Intent) -> Option<&'static str> {
 }
 
 pub(crate) fn version_matches(version: &str, intent: &Intent) -> bool {
+    use crate::input::NUMBERED_TRANSLATION_REVISION_PARSER_VERSION;
     match parser_version(intent) {
         Some(expected) => {
             expected == version
-                || (version == HISTORY_REVISION_PARSER_VERSION
-                    && matches!(intent, Intent::ReviseTranslation { .. }))
+                || (matches!(
+                    version,
+                    HISTORY_REVISION_PARSER_VERSION | NUMBERED_TRANSLATION_REVISION_PARSER_VERSION
+                ) && matches!(intent, Intent::ReviseTranslation { .. }))
         }
         None => !matches!(
             version,
-            PARSER_VERSION | REVISION_PARSER_VERSION | HISTORY_REVISION_PARSER_VERSION
+            PARSER_VERSION
+                | REVISION_PARSER_VERSION
+                | HISTORY_REVISION_PARSER_VERSION
+                | NUMBERED_TRANSLATION_REVISION_PARSER_VERSION
         ),
     }
 }
@@ -361,18 +367,23 @@ fn revise(raw: &str) -> Option<ParsedTranslation> {
             let tail = text.strip_prefix(prefix)?;
             literal_prefix(tail, JAPANESE_REVISION_SUBJECTS)
         })?;
-    let style = literal_suffix(subject_end.trim_start(), &["にしてください", "にして"])?;
+    let (register, style) = japanese_revision_register(subject_end)?;
+    Some(revised_translation(
+        register,
+        original_span(raw, &text[..text.len() - subject_end.len()]),
+        original_span(raw, style),
+    ))
+}
+
+fn japanese_revision_register(modifier: &str) -> Option<(TranslationRegister, &str)> {
+    let style = literal_suffix(modifier.trim_start(), &["にしてください", "にして"])?;
     let register = match style {
         "丁寧" | "ていねい" | "もっと丁寧" | "丁寧な言い方" | "です・ます調" | "ですます調"
         | "敬体" => Polite,
         "常体" | "だ・である調" | "である調" | "くだけた文体" => Plain,
         _ => return None,
     };
-    Some(revised_translation(
-        register,
-        original_span(raw, &text[..text.len() - subject_end.len()]),
-        original_span(raw, style),
-    ))
+    Some((register, style))
 }
 
 fn revised_translation(
@@ -417,6 +428,15 @@ fn revise_english(raw: &str) -> Option<ParsedTranslation> {
             let modifier = ascii_prefix(target, anchor)?.strip_prefix(' ')?;
             Some((&target[..anchor.len()], modifier.trim_start()))
         })?;
+    let (register, style) = english_revision_register(modifier, make)?;
+    Some(revised_translation(
+        register,
+        original_span(raw, anchor),
+        original_span(raw, style),
+    ))
+}
+
+fn english_revision_register(modifier: &str, make: bool) -> Option<(TranslationRegister, &str)> {
     let modifier = if make {
         modifier
     } else {
@@ -442,16 +462,25 @@ fn revise_english(raw: &str) -> Option<ParsedTranslation> {
         .iter()
         .find_map(|(phrase, register)| style.eq_ignore_ascii_case(phrase).then_some(*register))?;
 
-    let start = raw.len() - raw.trim_start().len();
-    let span = |offset, value: &str| SourceSpan {
-        start: offset,
-        end: offset + value.len(),
-        text: value.into(),
+    Some((register, style))
+}
+
+pub(crate) fn parse_numbered(
+    raw: &str,
+    anchor: &str,
+    modifier: &str,
+    english: bool,
+    make: bool,
+) -> Option<ParsedTranslation> {
+    let (register, style) = if english {
+        english_revision_register(modifier, make)?
+    } else {
+        japanese_revision_register(modifier)?
     };
     Some(revised_translation(
         register,
-        span(start + body.len() - target.len(), anchor),
-        span(start + body.len() - modifier.len(), style),
+        original_span(raw, anchor),
+        original_span(raw, style),
     ))
 }
 

@@ -5666,6 +5666,7 @@ fn inspect(
             bundle.meaning.parser_version.as_str(),
             crate::message_revision::PARSER_VERSION
                 | crate::message_revision::ENGLISH_PARSER_VERSION
+                | crate::input::NUMBERED_MESSAGE_REVISION_PARSER_VERSION
         )
         || requires_message_revision
             != (goal.required_predicates.first().map(String::as_str)

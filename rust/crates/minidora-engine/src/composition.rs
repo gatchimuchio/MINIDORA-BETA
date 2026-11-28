@@ -198,16 +198,21 @@ fn observe_generated_item(
     bundle: &InputBundle,
     item: &IndependentRequest,
     deadline: Instant,
-) -> Result<Option<Value>> {
+) -> Result<Option<(InputBundle, Value)>> {
     let Some(leaf) = input::generated_independent_leaf(&bundle.request, item)? else {
         return Ok(None);
     };
     Ok(
-        observe_initial_text_generation(&leaf, deadline)?.map(|(text, bytes)| Value {
-            guarantee: Guarantee::Computed,
-            units: vec![text],
-            bytes,
-            quantities: BTreeMap::new(),
+        observe_initial_text_generation(&leaf, deadline)?.map(|(text, bytes)| {
+            (
+                leaf,
+                Value {
+                    guarantee: Guarantee::Computed,
+                    units: vec![text],
+                    bytes,
+                    quantities: BTreeMap::new(),
+                },
+            )
         }),
     )
 }
@@ -225,7 +230,7 @@ fn evaluate(
             return Ok(Branch::Blocked("BRANCH_TIME_BUDGET"));
         };
         return match observe_generated_item(bundle, item, end) {
-            Ok(Some(value)) => Ok(Branch::Value(value)),
+            Ok(Some((_, value))) => Ok(Branch::Value(value)),
             Ok(None) => Ok(Branch::Blocked("BRANCH_INPUT_UNVERIFIED")),
             Err(Error::Contract { code, .. }) if code == "MODEL_DEADLINE" => {
                 Ok(Branch::Blocked("BRANCH_TIME_BUDGET"))
@@ -946,15 +951,12 @@ fn explanation_mismatch(english: bool) -> Error {
     )
 }
 
-/// Explain saved observations without resuming the parent Goal or using its grants.
-pub(crate) fn explain_previous(
-    store: &Store,
-    parent: &InputBundle,
+fn compound_items_for_selection<'a>(
+    parent: &'a InputBundle,
     prior: &ResultRecord,
     selection: Option<usize>,
     english: bool,
-    current_deadline: Instant,
-) -> Result<PreviousExplanation> {
+) -> Result<&'a [IndependentRequest]> {
     let items = delivery_items(parent)?;
     let request = &parent.request;
     let invalid = || explanation_mismatch(english);
@@ -981,12 +983,64 @@ pub(crate) fn explain_previous(
             },
         ));
     }
+    Ok(items)
+}
+
+struct RetainedCompound<'a> {
+    parent: &'a InputBundle,
+    prior: &'a ResultRecord,
+    items: &'a [IndependentRequest],
+    expected_nodes: Vec<GoalNode>,
+    observed: ObservationRefs,
+    consumed: BTreeMap<String, Option<ObservationRefs>>,
+    plan: &'a ContentPlan,
+    source_ref: &'a str,
+    render_ref: String,
+    evidence_bytes: usize,
+}
+
+fn check_revision_evidence(bytes: usize, limit: usize, english: bool) -> Result<()> {
+    if bytes > limit {
+        return Err(failure(
+            "RESOURCE_LIMIT",
+            if english {
+                "The saved compound item exceeds the evidence budget."
+            } else {
+                "保存済みの項目を照合するための証拠予算が不足しています。"
+            },
+        ));
+    }
+    Ok(())
+}
+
+fn read_retained_compound<'a>(
+    store: &Store,
+    parent: &'a InputBundle,
+    prior: &'a ResultRecord,
+    items: &'a [IndependentRequest],
+    evidence_limit: Option<usize>,
+    english: bool,
+) -> Result<RetainedCompound<'a>> {
+    let request = &parent.request;
+    let invalid = || explanation_mismatch(english);
     let read = |reference| store.get_bytes(&request.actor_id, &request.case_id, reference);
     let source_ref = prior.execution_graph_ref.as_deref().ok_or_else(invalid)?;
-    let (recorded_nodes, observed, _, _, _, consumed): RetainedGraph =
-        serde_json::from_slice(&read(source_ref)?)?;
-    let expected_nodes: Vec<_> = nodes(items).collect();
+    let graph_bytes = read(source_ref)?;
     let plan = prior.content_plan.as_ref().ok_or_else(invalid)?;
+    let evidence_bytes = if let Some(limit) = evidence_limit {
+        check_revision_evidence(graph_bytes.len(), limit, english)?;
+        let evidence_bytes = graph_bytes
+            .len()
+            .saturating_add(canonical(plan)?.len())
+            .saturating_add(canonical(prior.render.as_ref().ok_or_else(invalid)?)?.len());
+        check_revision_evidence(evidence_bytes, limit, english)?;
+        evidence_bytes
+    } else {
+        0
+    };
+    let (recorded_nodes, observed, _, _, _, consumed): RetainedGraph =
+        serde_json::from_slice(&graph_bytes)?;
+    let expected_nodes: Vec<_> = nodes(items).collect();
     let render_ref = crate::document::revalidate_previous_document_render(
         store,
         &request.actor_id,
@@ -1027,6 +1081,193 @@ pub(crate) fn explain_previous(
     {
         return Err(invalid());
     }
+    Ok(RetainedCompound {
+        parent,
+        prior,
+        items,
+        expected_nodes,
+        observed,
+        consumed,
+        plan,
+        source_ref,
+        render_ref,
+        evidence_bytes,
+    })
+}
+
+impl RetainedCompound<'_> {
+    fn observation<'a>(
+        &self,
+        index: usize,
+        bytes: &'a [u8],
+        english: bool,
+    ) -> Result<Observation<'a>> {
+        let invalid = || explanation_mismatch(english);
+        let node = &self.expected_nodes[index];
+        let item = &self.items[index];
+        let branch = &self.prior.branch_outcomes[index];
+        let saved: Observation<'_> = serde_json::from_slice(bytes)?;
+        let actual_inputs = node
+            .requires
+            .iter()
+            .map(|id| {
+                Ok((
+                    id.clone(),
+                    self.observed.get(id).ok_or_else(invalid)?.clone(),
+                ))
+            })
+            .collect::<Result<ObservationRefs>>()?;
+        if saved.node_id != node.id
+            || branch.node_id != node.id
+            || saved.input_fingerprint != self.parent.fingerprint
+            || saved.source_range != (item.source.start, item.source.end)
+            || saved.state != branch.state
+            || saved.reason_code != branch.reason_code.as_deref()
+            || (saved.state == BranchState::Confirmed) != saved.reason_code.is_none()
+            || (saved.state == BranchState::Confirmed && saved.value.is_none())
+            || (saved.state == BranchState::Failed && saved.value.is_some())
+            || self.prior.dependencies[index] != branch.artifact_ref
+            || self.observed.get(&node.id) != Some(&branch.artifact_ref)
+            || self.consumed.get(&node.id).and_then(Option::as_ref) != Some(&actual_inputs)
+            || canonical(&saved)? != bytes
+        {
+            return Err(invalid());
+        }
+        Ok(saved)
+    }
+}
+
+fn compound_item_time_budget(english: bool) -> Error {
+    failure(
+        "BRANCH_TIME_BUDGET",
+        if english {
+            "The time budget expired while verifying the saved item."
+        } else {
+            "項目の記録を照合するための時間が足りませんでした。"
+        },
+    )
+}
+
+fn verified_generated_observation(
+    parent: &InputBundle,
+    item: &IndependentRequest,
+    saved: &Observation<'_>,
+    deadline: Instant,
+    english: bool,
+) -> Result<(InputBundle, String)> {
+    let invalid = || explanation_mismatch(english);
+    if Instant::now() >= deadline {
+        return Err(compound_item_time_budget(english));
+    }
+    let value = saved.value.as_ref().ok_or_else(invalid)?;
+    if saved.state != BranchState::Confirmed || saved.evidence_ref.is_some() {
+        return Err(invalid());
+    }
+    let (leaf, reproduced) = observe_generated_item(parent, item, deadline)
+        .map_err(|error| match error {
+            Error::Contract { code, .. } if code == "MODEL_DEADLINE" => {
+                compound_item_time_budget(english)
+            }
+            error => error,
+        })?
+        .ok_or_else(invalid)?;
+    if value.guarantee != reproduced.guarantee
+        || value.units != reproduced.units
+        || value.bytes != reproduced.bytes
+    {
+        return Err(invalid());
+    }
+    let [text] = reproduced.units.as_slice() else {
+        return Err(invalid());
+    };
+    Ok((leaf, text.clone()))
+}
+
+pub(crate) struct GeneratedRevisionBase {
+    pub(crate) leaf: InputBundle,
+    pub(crate) text: String,
+    pub(crate) observation_ref: String,
+    pub(crate) parent_render_ref: String,
+    pub(crate) evidence_bytes: usize,
+}
+
+/// Verify the original generated result of a single numbered item.
+pub(crate) fn verified_generated_revision_base(
+    store: &Store,
+    parent: &InputBundle,
+    prior: &ResultRecord,
+    one_based_item: usize,
+    current_deadline: Instant,
+    max_evidence_bytes: usize,
+    english: bool,
+) -> Result<GeneratedRevisionBase> {
+    let unavailable = || {
+        failure(
+            "COMPOUND_ITEM_REVISION_UNAVAILABLE",
+            if english {
+                "The selected item has no confirmed draft or translation to revise."
+            } else {
+                "指定した項目には、修正できる確定済みの文案や訳文がありません。"
+            },
+        )
+    };
+    let now = Instant::now();
+    let parent_deadline = now
+        .checked_add(Duration::from_millis(parent.request.budget.deadline_ms))
+        .ok_or_else(|| compound_item_time_budget(english))?;
+    let deadline = current_deadline.min(parent_deadline);
+    if now >= deadline {
+        return Err(compound_item_time_budget(english));
+    }
+    let items = compound_items_for_selection(parent, prior, Some(one_based_item), english)?;
+    let index = one_based_item - 1;
+    let item = &items[index];
+    let branch = &prior.branch_outcomes[index];
+    if !generated_items_enabled(parent)
+        || !initial_text_generation_item(item)
+        || branch.state != BranchState::Confirmed
+    {
+        return Err(unavailable());
+    }
+    let evidence_limit = max_evidence_bytes.min(parent.request.budget.max_evidence_bytes);
+    let retained =
+        read_retained_compound(store, parent, prior, items, Some(evidence_limit), english)?;
+    let request = &parent.request;
+    let bytes = store.get_bytes(&request.actor_id, &request.case_id, &branch.artifact_ref)?;
+    let evidence_bytes = retained.evidence_bytes.saturating_add(bytes.len());
+    check_revision_evidence(evidence_bytes, evidence_limit, english)?;
+    let saved = retained.observation(index, &bytes, english)?;
+    let (leaf, text) = verified_generated_observation(parent, item, &saved, deadline, english)?;
+    if Instant::now() >= deadline {
+        return Err(compound_item_time_budget(english));
+    }
+    Ok(GeneratedRevisionBase {
+        leaf,
+        text,
+        observation_ref: branch.artifact_ref.clone(),
+        parent_render_ref: retained.render_ref,
+        evidence_bytes,
+    })
+}
+
+/// Explain saved observations without resuming the parent Goal or using its grants.
+pub(crate) fn explain_previous(
+    store: &Store,
+    parent: &InputBundle,
+    prior: &ResultRecord,
+    selection: Option<usize>,
+    english: bool,
+    current_deadline: Instant,
+) -> Result<PreviousExplanation> {
+    let items = compound_items_for_selection(parent, prior, selection, english)?;
+    let retained = read_retained_compound(store, parent, prior, items, None, english)?;
+    let request = &parent.request;
+    let invalid = || explanation_mismatch(english);
+    let read = |reference| store.get_bytes(&request.actor_id, &request.case_id, reference);
+    let source_ref = retained.source_ref;
+    let plan = retained.plan;
+    let observed = &retained.observed;
+    let consumed = &retained.consumed;
     let branch_bytes = prior
         .branch_outcomes
         .iter()
@@ -1038,61 +1279,20 @@ pub(crate) fn explain_previous(
     let attached = !request.attachments.is_empty();
     let deadline = Instant::now() + Duration::from_millis(request.budget.deadline_ms);
     let mut attached_quantities = BTreeMap::new();
-    for (index, ((item, node), bytes)) in items
-        .iter()
-        .zip(&expected_nodes)
-        .zip(&branch_bytes)
-        .enumerate()
-    {
-        let branch = &prior.branch_outcomes[index];
-        let saved: Observation<'_> = serde_json::from_slice(bytes)?;
-        let actual_inputs = node
-            .requires
-            .iter()
-            .map(|id| Ok((id.clone(), observed.get(id).ok_or_else(invalid)?.clone())))
-            .collect::<Result<ObservationRefs>>()?;
-        if saved.node_id != node.id
-            || branch.node_id != node.id
-            || saved.input_fingerprint != parent.fingerprint
-            || saved.source_range != (item.source.start, item.source.end)
-            || saved.state != branch.state
-            || saved.reason_code != branch.reason_code.as_deref()
-            || (saved.state == BranchState::Confirmed) != saved.reason_code.is_none()
-            || (saved.state == BranchState::Confirmed && saved.value.is_none())
-            || (saved.state == BranchState::Failed && saved.value.is_some())
-            || prior.dependencies[index] != branch.artifact_ref
-            || observed.get(&node.id) != Some(&branch.artifact_ref)
-            || consumed.get(&node.id).and_then(Option::as_ref) != Some(&actual_inputs)
-            || canonical(&saved)? != *bytes
-        {
-            return Err(invalid());
-        }
+    for (index, (item, bytes)) in items.iter().zip(&branch_bytes).enumerate() {
+        let saved = retained.observation(index, bytes, english)?;
         if generated_items_enabled(parent)
             && initial_text_generation_item(item)
             && selection.is_none_or(|number| number == index + 1)
-            && let Some(value) = &saved.value
+            && saved.value.is_some()
         {
-            let reproduced = observe_generated_item(parent, item, deadline.min(current_deadline))
-                .map_err(|error| match error {
-                    Error::Contract { code, .. } if code == "MODEL_DEADLINE" => failure(
-                        "BRANCH_TIME_BUDGET",
-                        if english {
-                            "The time budget expired while verifying the saved item."
-                        } else {
-                            "項目の記録を照合するための時間が足りませんでした。"
-                        },
-                    ),
-                    error => error,
-                })?
-                .ok_or_else(invalid)?;
-            if saved.state != BranchState::Confirmed
-                || saved.evidence_ref.is_some()
-                || value.guarantee != reproduced.guarantee
-                || value.units != reproduced.units
-                || value.bytes != reproduced.bytes
-            {
-                return Err(invalid());
-            }
+            verified_generated_observation(
+                parent,
+                item,
+                &saved,
+                deadline.min(current_deadline),
+                english,
+            )?;
         }
         if bilingual_statistics_enabled(parent)
             && matches!(&*item.intent, Intent::DescribeStatistics { .. })

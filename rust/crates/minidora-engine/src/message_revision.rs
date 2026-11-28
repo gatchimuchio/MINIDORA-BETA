@@ -167,6 +167,16 @@ pub(crate) fn parse(raw: &str) -> Result<Option<ParsedRevision>> {
         }
         None => (false, None, text),
     };
+    Ok(parse_japanese_edits(raw, clauses, named, format, roles))
+}
+
+fn parse_japanese_edits(
+    raw: &str,
+    clauses: &str,
+    named: bool,
+    format: Option<MessageFormat>,
+    mut roles: BTreeMap<String, Vec<SourceSpan>>,
+) -> Option<ParsedRevision> {
     let mut revision = MessageRevision {
         named,
         format,
@@ -181,17 +191,14 @@ pub(crate) fn parse(raw: &str) -> Result<Option<ParsedRevision>> {
         .map(str::trim)
         .filter(|clause| !clause.is_empty())
     {
-        let Some(edit) = edit(clause) else {
-            return Ok(None);
-        };
-        let (role, consistent) = apply_edit(&mut revision, edit);
+        let (role, consistent) = apply_edit(&mut revision, edit(clause)?);
         if !consistent {
-            return Ok(None);
+            return None;
         }
         has_edit = true;
         push_role(raw, &mut roles, role, clause);
     }
-    Ok(has_edit.then_some(ParsedRevision { revision, roles }))
+    has_edit.then_some(ParsedRevision { revision, roles })
 }
 
 fn edit_english(clause: &str) -> Option<Edit> {
@@ -274,6 +281,24 @@ pub(crate) fn parse_english(raw: &str) -> Option<ParsedRevision> {
         }
         (false, None, Some(*head), None)
     };
+    parse_english_edits(
+        raw,
+        first_edit.into_iter().chain(tail.iter().copied()),
+        named,
+        format,
+        shortening,
+        roles,
+    )
+}
+
+fn parse_english_edits<'a>(
+    raw: &str,
+    clauses: impl Iterator<Item = &'a str>,
+    named: bool,
+    format: Option<MessageFormat>,
+    shortening: Option<&str>,
+    mut roles: BTreeMap<String, Vec<SourceSpan>>,
+) -> Option<ParsedRevision> {
     let mut revision = MessageRevision {
         named,
         format,
@@ -286,7 +311,7 @@ pub(crate) fn parse_english(raw: &str) -> Option<ParsedRevision> {
         push_role(raw, &mut roles, "shorten", shorten);
     }
     let mut has_edit = revision.shorten;
-    for clause in first_edit.into_iter().chain(tail.iter().copied()) {
+    for clause in clauses {
         let (role, consistent) = if english_input::no_send(clause) {
             ("constraints", true)
         } else {
@@ -299,4 +324,22 @@ pub(crate) fn parse_english(raw: &str) -> Option<ParsedRevision> {
         push_role(raw, &mut roles, role, clause);
     }
     has_edit.then_some(ParsedRevision { revision, roles })
+}
+
+pub(crate) fn parse_numbered(
+    raw: &str,
+    target: &str,
+    edits: &str,
+    format: Option<MessageFormat>,
+    english: bool,
+    shortening: Option<&str>,
+) -> Option<ParsedRevision> {
+    let mut roles = BTreeMap::new();
+    push_role(raw, &mut roles, "target", target);
+    if english {
+        let clauses = english_input::clauses(edits)?;
+        parse_english_edits(raw, clauses.into_iter(), false, format, shortening, roles)
+    } else {
+        parse_japanese_edits(raw, edits, false, format, roles)
+    }
 }

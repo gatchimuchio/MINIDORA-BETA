@@ -847,6 +847,189 @@ pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> 
     Ok(parsed == meaning.intent && source_role_spans(text, &parsed)? == meaning.source_roles)
 }
 
+pub(crate) const NUMBERED_MESSAGE_REVISION_PARSER_VERSION: &str =
+    "declarative-ja-en-v1-numbered-message-revision";
+pub(crate) const NUMBERED_TRANSLATION_REVISION_PARSER_VERSION: &str =
+    "declarative-ja-en-v1-numbered-translation-revision";
+
+#[derive(Clone, Copy)]
+pub(crate) struct NumberedTextRevisionTarget {
+    pub(crate) item: usize,
+    pub(crate) historical: bool,
+}
+
+struct ParsedNumberedTextRevision {
+    target: NumberedTextRevisionTarget,
+    version: &'static str,
+    intent: Intent,
+    roles: BTreeMap<String, Vec<SourceSpan>>,
+}
+
+fn numbered_text_revision_syntax(raw: &str) -> Option<ParsedNumberedTextRevision> {
+    use minidora_domain::MessageFormat;
+    static JAPANESE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"\A(?<target>(?<anchor>前の|前回の|先ほどの|さっきの|直前の)(?:複合)?依頼(?:の)?[ 　]*",
+            r"(?<item>[0-9０-９]{1,3})(?:番(?:目)?|項目(?:目)?)?[ 　]*の",
+            r"(?<kind>文案|下書き|メール|メッセージ|連絡文|案内文|翻訳結果|訳文|翻訳|訳))",
+            r"を[ 　]*(?<edits>.+)\z"
+        ))
+        .expect("Japanese numbered text revision grammar")
+    });
+    static ENGLISH: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"(?i)\A(?:please +)?(?<verb>make|revise|rewrite|edit|shorten|put) +",
+            r"(?<target>(?:the +)?(?<kind>draft|e-?mail|message|translation) +(?:in|from|of) +",
+            r"(?:item|request) +(?<item>[0-9]{1,3}) +(?:of|in|from) +",
+            r"(?:the +)?(?<anchor>immediately +(?:previous|preceding)|previous|earlier) +",
+            r"(?:compound +)?(?:request|list))(?: +(?<edits>.+))?\z"
+        ))
+        .expect("English numbered text revision grammar")
+    });
+    if raw.len() > 4096
+        || raw.contains(['「', '」', '『', '』', '"', '“', '”'])
+        || raw.chars().any(char::is_control)
+    {
+        return None;
+    }
+    let body = terminal_trim(raw);
+    let (parts, english) = if let Some(parts) = JAPANESE.captures(body) {
+        (parts, false)
+    } else {
+        (ENGLISH.captures(body)?, true)
+    };
+    let item = parts.name("item")?.as_str();
+    let target = NumberedTextRevisionTarget {
+        item: item.nfkc().collect::<String>().parse().ok()?,
+        historical: if english {
+            parts["anchor"].eq_ignore_ascii_case("previous")
+                || parts["anchor"].eq_ignore_ascii_case("earlier")
+        } else {
+            &parts["anchor"] != "直前の"
+        },
+    };
+    let noun = parts.name("kind")?.as_str();
+    let source_target = parts.name("target")?.as_str();
+    let edits = parts.name("edits").map_or("", |field| field.as_str());
+    let verb = parts.name("verb").map_or("", |field| field.as_str());
+    let shortening = verb.eq_ignore_ascii_case("shorten").then_some(verb);
+    let (version, intent, mut roles, item_role) =
+        if matches!(noun, "翻訳結果" | "訳文" | "翻訳" | "訳")
+            || noun.eq_ignore_ascii_case("translation")
+        {
+            if shortening.is_some() {
+                return None;
+            }
+            let parsed = crate::translation_input::parse_numbered(
+                raw,
+                source_target,
+                edits,
+                english,
+                verb.eq_ignore_ascii_case("make"),
+            )?;
+            (
+                NUMBERED_TRANSLATION_REVISION_PARSER_VERSION,
+                parsed.intent,
+                parsed.roles,
+                "/ReviseTranslation/item",
+            )
+        } else {
+            let format = match noun.to_ascii_lowercase().as_str() {
+                "メール" | "email" | "e-mail" => Some(MessageFormat::Email),
+                "メッセージ" | "連絡文" | "案内文" | "message" => {
+                    Some(MessageFormat::Message)
+                }
+                _ => None,
+            };
+            let parsed = crate::message_revision::parse_numbered(
+                raw,
+                source_target,
+                edits,
+                format,
+                english,
+                shortening,
+            )?;
+            (
+                NUMBERED_MESSAGE_REVISION_PARSER_VERSION,
+                Intent::ReviseMessage {
+                    revision: parsed.revision,
+                },
+                parsed.roles,
+                "/ReviseMessage/item",
+            )
+        };
+    let start = item.as_ptr() as usize - raw.as_ptr() as usize;
+    roles.insert(
+        item_role.into(),
+        vec![source_span_at(raw, start, start + item.len())?],
+    );
+    Some(ParsedNumberedTextRevision {
+        target,
+        version,
+        intent,
+        roles,
+    })
+}
+
+fn numbered_text_revision_scope(request: &RequestEnvelope) -> bool {
+    message_text_only(request) && matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
+}
+
+pub(crate) fn numbered_text_revision_target(
+    bundle: &InputBundle,
+) -> Option<NumberedTextRevisionTarget> {
+    if !matches!(
+        bundle.meaning.parser_version.as_str(),
+        NUMBERED_MESSAGE_REVISION_PARSER_VERSION | NUMBERED_TRANSLATION_REVISION_PARSER_VERSION
+    ) || !numbered_text_revision_scope(&bundle.request)
+    {
+        return None;
+    }
+    let parsed = numbered_text_revision_syntax(&bundle.request.text)?;
+    (parsed.version == bundle.meaning.parser_version
+        && parsed.intent == bundle.meaning.intent
+        && parsed.roles == bundle.meaning.source_roles)
+        .then_some(parsed.target)
+}
+
+fn numbered_text_revision_input(
+    request: &RequestEnvelope,
+    previous: Option<&ResultRecord>,
+) -> Result<Option<InputBundle>> {
+    let Some(parsed) = numbered_text_revision_syntax(&request.text) else {
+        return Ok(None);
+    };
+    let english = matches!(request.locale.as_str(), "en" | "en-US");
+    let unresolved = if !numbered_text_revision_scope(request) {
+        vec![if english {
+            "Numbered item revisions accept a Japanese or English text request.".into()
+        } else {
+            "項目番号での修正には、添付・音声・用途指定のない日英のテキストを使ってください。"
+                .into()
+        }]
+    } else if previous.is_none_or(|result| {
+        !matches!(result.lifecycle, Lifecycle::Commit | Lifecycle::Suspend)
+            || result.branch_outcomes.is_empty()
+    }) {
+        vec![if english {
+            "There is no saved compound request bound to this revision.".into()
+        } else {
+            "この修正の対象となる複合依頼がまだ確認できていません。".into()
+        }]
+    } else {
+        Vec::new()
+    };
+    seal_user_input(
+        request,
+        previous,
+        parsed.version,
+        parsed.intent,
+        parsed.roles,
+        unresolved,
+    )
+    .map(Some)
+}
+
 pub(crate) fn verified_message_input(bundle: &InputBundle) -> Result<bool> {
     use crate::{message_revision, writing};
 
@@ -865,7 +1048,7 @@ pub(crate) fn verified_message_input(bundle: &InputBundle) -> Result<bool> {
                 && meaning.context_result_ref.is_none()
                 && bundle.context_sha256 == identity(&None::<&ResultRecord>)?
         }
-        message_revision::ENGLISH_PARSER_VERSION => {
+        message_revision::ENGLISH_PARSER_VERSION | NUMBERED_MESSAGE_REVISION_PARSER_VERSION => {
             matches!(request.locale.as_str(), "ja" | "ja-JP" | "en" | "en-US")
                 && message_text_only(request)
                 && bundle.context_sha256 != identity(&None::<&ResultRecord>)?
@@ -906,6 +1089,9 @@ pub(crate) fn verified_message_input(bundle: &InputBundle) -> Result<bool> {
         (message_revision::ENGLISH_PARSER_VERSION, Intent::ReviseMessage { revision }) => {
             message_revision::parse_english(text)
                 .is_some_and(|p| &p.revision == revision && p.roles == meaning.source_roles)
+        }
+        (NUMBERED_MESSAGE_REVISION_PARSER_VERSION, Intent::ReviseMessage { .. }) => {
+            numbered_text_revision_target(bundle).is_some()
         }
         _ => false,
     })
@@ -1200,6 +1386,9 @@ pub(crate) fn verified_translation_input(bundle: &InputBundle) -> Result<bool> {
             != identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
     {
         return Ok(false);
+    }
+    if version == NUMBERED_TRANSLATION_REVISION_PARSER_VERSION {
+        return Ok(numbered_text_revision_target(bundle).is_some());
     }
     Ok(
         crate::translation_input::parse(text)?.is_some_and(|parsed| {
@@ -1695,6 +1884,9 @@ pub(crate) fn seal_with_source_context(
         return Ok(bundle);
     }
     if let Some(bundle) = bilingual_statistics_independent_input(request)? {
+        return Ok(bundle);
+    }
+    if let Some(bundle) = numbered_text_revision_input(request, previous)? {
         return Ok(bundle);
     }
     if let Some(bundle) = english_message_input(request, previous)? {
