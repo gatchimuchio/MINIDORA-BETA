@@ -670,6 +670,24 @@ pub(crate) fn seal_named_conversation_return(
     )
 }
 
+fn conversation_event_obstacle(
+    request: &RequestEnvelope,
+    event: &minidora_domain::ConversationEvent,
+    continue_topic: bool,
+) -> Option<&'static str> {
+    if !request.attachments.is_empty() {
+        Some("体験や観察の話には、添付を外して本文だけを送ってください。")
+    } else if request.context_ref.is_some() && !continue_topic {
+        Some("指定された前の回答が、続けられる会話の話題か確認できません。")
+    } else if request.output_path.is_some()
+        && !(continue_topic && crate::conversation_input::can_continue_topic(event))
+    {
+        Some("体験や観察への返答を保存する場合は、同じ会話の話題を続けてください。")
+    } else {
+        None
+    }
+}
+
 pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> {
     let request = &bundle.request;
     let meaning = &bundle.meaning;
@@ -713,8 +731,7 @@ pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> 
         return Ok(meaning.source_kind == "USER_REQUEST"
             && meaning.unresolved.is_empty()
             && matches!(request.locale.as_str(), "ja" | "ja-JP")
-            && request.attachments.is_empty()
-            && request.output_path.is_none()
+            && conversation_event_obstacle(request, event, *continue_topic).is_none()
             && *continue_topic == meaning.context_result_ref.is_some()
             && request
                 .context_ref
@@ -1760,18 +1777,9 @@ pub(crate) fn seal_with_source_context(
                     let continue_topic =
                         matches!(source_context, Some(SourceContext::ConversationTopic))
                             && previous.is_some_and(|prior| prior.lifecycle == Lifecycle::Commit);
-                    let obstacle = if !request.attachments.is_empty()
-                        || request.output_path.is_some()
+                    if let Some(reason) =
+                        conversation_event_obstacle(request, &event, continue_topic)
                     {
-                        Some(
-                            "体験や観察の話には、添付や保存先を指定せず、本文だけを送ってください。",
-                        )
-                    } else if request.context_ref.is_some() && !continue_topic {
-                        Some("指定された前の回答が、続けられる会話の話題か確認できません。")
-                    } else {
-                        None
-                    };
-                    if let Some(reason) = obstacle {
                         return seal_user_input(
                             request,
                             None,

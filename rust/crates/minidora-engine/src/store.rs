@@ -4168,7 +4168,8 @@ mod tests {
         record: Option<&[u8]>,
         expected_exit: i32,
     ) -> PathBuf {
-        let scenario = store_directory.join(format!("crash-{worker_test}"));
+        let scenario_name = worker_test.replace("::", "-");
+        let scenario = store_directory.join(format!("crash-{scenario_name}"));
         fs::create_dir(&scenario).unwrap();
         let gate = scenario.join("release");
         let ready = scenario.join("ready");

@@ -479,6 +479,10 @@ fn is_continuative(ch: char) -> bool {
     "いえきぎけげしじせぜちてでにねひびぴへべぺみめりれ".contains(ch)
 }
 
+pub(crate) fn can_continue_topic(event: &ConversationEvent) -> bool {
+    event.greeting.is_none() && !event.report.text.starts_with("ところで")
+}
+
 pub(crate) fn admits_event(intent: &Intent, text: &str, event: &ConversationEvent) -> bool {
     match intent {
         Intent::Unknown { .. } => true,

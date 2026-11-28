@@ -9121,7 +9121,7 @@ impl Engine {
                 Intent::ReportConversationEvent {
                     event,
                     continue_topic: false,
-                } => event.greeting.is_none() && !event.report.text.starts_with("ところで"),
+                } => crate::conversation_input::can_continue_topic(event),
                 _ => false,
             };
             let bundle = if has_compute_budget
