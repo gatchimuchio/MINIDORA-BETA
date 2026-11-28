@@ -1901,6 +1901,11 @@ pub(crate) fn goal_predicates(
         Intent::ExplainCurrentNews { .. } => {
             predicates.push(crate::news::EXPLANATION_PREDICATE.into())
         }
+        Intent::ExplainPrevious
+            if meaning.parser_version == input::COMPOUND_EXPLANATION_PARSER_VERSION =>
+        {
+            predicates.push(crate::composition::EXPLANATION_PREDICATE.into())
+        }
         Intent::ExplainPreviousStop => predicates.push(crate::clarification::PREDICATE.into()),
         Intent::Statistics { .. }
         | Intent::FiniteProbabilityStatistics { .. }
@@ -2138,6 +2143,7 @@ fn verify_report_goal_content(
                 | WEB_ANSWER_PREDICATE
                 | crate::research_goal::PREDICATE
                 | crate::composition::PREDICATE
+                | crate::composition::EXPLANATION_PREDICATE
                 | crate::news::PREDICATE
                 | crate::counterfactual::PREDICATE
                 | crate::news::EXPLANATION_PREDICATE
@@ -3045,6 +3051,92 @@ fn current_news_origin(
         }
         _ => Ok(None),
     }
+}
+
+fn compound_explanation_context_unavailable(english: bool) -> Error {
+    failure(
+        "COMPOUND_EXPLANATION_CONTEXT_UNAVAILABLE",
+        if english {
+            "There is no eligible previous compound request in this conversation."
+        } else {
+            "この会話に、項目を説明できる過去の複合依頼がありません。"
+        },
+    )
+}
+
+fn registered_compound_explanation_input(
+    store: &Store,
+    state: &CaseRevision,
+    result: &ResultRecord,
+    english: bool,
+) -> Result<InputBundle> {
+    let invalid = || {
+        failure(
+            "COMPOUND_EXPLANATION_SOURCE_INVALID",
+            if english {
+                "The saved item results could not be matched to the original request."
+            } else {
+                "保存された項目の記録を元の依頼と照合できませんでした。"
+            },
+        )
+    };
+    let (actor, case) = (&state.actor_id, &state.case_id);
+    let (_, input) = store
+        .get_input_bundle(actor, case, &result.input_id, result.input_version)?
+        .ok_or_else(invalid)?;
+    if state.prior_results.get(&result.id) != Some(result)
+        || identity(&input.request)? != result.id
+        || store
+            .get_input_result(actor, case, &result.input_id, result.input_version)?
+            .as_ref()
+            != Some(result)
+    {
+        return Err(invalid());
+    }
+    Ok(input)
+}
+
+fn previous_compound_explanation_context(
+    store: &Store,
+    state: &CaseRevision,
+    previous: &ResultRecord,
+    through_explanation: bool,
+    english: bool,
+) -> Result<Option<(ResultRecord, InputBundle)>> {
+    let unavailable = || compound_explanation_context_unavailable(english);
+    let prior = if through_explanation {
+        let followup = registered_compound_explanation_input(store, state, previous, english)?;
+        if previous.lifecycle != Lifecycle::Commit
+            || followup.meaning.parser_version != input::COMPOUND_EXPLANATION_PARSER_VERSION
+        {
+            return Err(unavailable());
+        }
+        let prior = followup
+            .meaning
+            .context_result_ref
+            .as_ref()
+            .and_then(|id| state.prior_results.get(id))
+            .filter(|prior| previous.dependencies.contains(&prior.id))
+            .ok_or_else(unavailable)?;
+        if !store.admit_memory_context(&state.actor_id, &state.case_id, prior)?
+            || input::seal_compound_explanation(&followup.request, prior)? != followup
+        {
+            return Err(unavailable());
+        }
+        prior
+    } else {
+        previous
+    };
+    if !matches!(prior.lifecycle, Lifecycle::Commit | Lifecycle::Suspend)
+        || prior.branch_outcomes.is_empty()
+    {
+        return Err(unavailable());
+    }
+    let input = registered_compound_explanation_input(store, state, prior, english)?;
+    if !matches!(input.meaning.intent, Intent::IndependentRequests { .. }) {
+        return Ok(None);
+    }
+    Ok(Some((prior.clone(), input)))
 }
 
 fn registered_conversation_input(
@@ -8805,7 +8897,8 @@ impl Engine {
         {
             crate::recovery::close_cancelled_preparations(&self.store, cancelled)?;
         }
-        let implicit_context = request.context_ref.is_none() && direct_bundle.is_none();
+        let user_input = direct_bundle.is_none();
+        let implicit_context = request.context_ref.is_none() && user_input;
         let mut previous = if let Some(ref requested) = request.context_ref {
             latest.as_ref().and_then(|s| {
                 s.result
@@ -8902,7 +8995,12 @@ impl Engine {
                     {
                         Some(input::SourceContext::WebAnswerExplanation)
                     }
-                    Intent::ExplainPrevious => Some(input::SourceContext::Explanation),
+                    Intent::ExplainPrevious
+                        if bundle.meaning.parser_version
+                            != input::COMPOUND_EXPLANATION_PARSER_VERSION =>
+                    {
+                        Some(input::SourceContext::Explanation)
+                    }
                     _ if input::is_web_body_question_input(bundle) => {
                         Some(input::SourceContext::WebBodyQuestion)
                     }
@@ -8916,7 +9014,77 @@ impl Engine {
         let mut resumed_summary_scope = None;
         let mut explicit_summary_question_scope = None;
         let mut hearing_answer = None;
+        let compound_explanation_item = input::compound_explanation_item(&request.text);
+        let mut compound_explanation_parent = None;
+        let mut compound_explanation_stop = None;
         let sealed = sealed.and_then(|bundle| {
+            let explanation_english = supports_english_output_locale(&request.locale);
+            let explanation_scope = request.output_path.is_none()
+                && request.attachments.is_empty()
+                && request.speech.is_none()
+                && request.purpose.is_none()
+                && (explanation_english || supports_japanese_output_locale(&request.locale));
+            let through_explanation = implicit_context
+                && previous.is_some_and(|prior| prior.lifecycle == Lifecycle::Commit)
+                && latest.as_ref().is_some_and(|case| {
+                    case.result.as_ref() == previous
+                        && case.bundle.as_ref().is_some_and(|input| {
+                            input.meaning.parser_version == input::COMPOUND_EXPLANATION_PARSER_VERSION
+                        })
+                });
+            if user_input
+                && (compound_explanation_item.is_some()
+                    || explanation_scope
+                        && matches!(
+                            bundle.meaning.intent,
+                            Intent::ExplainPrevious | Intent::ExplainPreviousStop
+                        )
+                        && (through_explanation
+                            || previous.is_some_and(|prior| !prior.branch_outcomes.is_empty())))
+            {
+                let binding = (|| -> Result<Option<InputBundle>> {
+                    if !explanation_scope {
+                        return Err(failure(
+                            "COMPOUND_EXPLANATION_SCOPE",
+                            if explanation_english {
+                                "An explanation of previous items is available as display-only text."
+                            } else {
+                                "以前の依頼項目の説明は画面へのテキスト表示に対応しています。"
+                            },
+                        ));
+                    }
+                    let previous = previous
+                        .ok_or_else(|| compound_explanation_context_unavailable(explanation_english))?;
+                    let Some((prior, parent)) = previous_compound_explanation_context(
+                        &self.store,
+                        &state,
+                        previous,
+                        through_explanation,
+                        explanation_english,
+                    )? else {
+                        return if compound_explanation_item.is_some() {
+                            Err(compound_explanation_context_unavailable(explanation_english))
+                        } else {
+                            Ok(None)
+                        };
+                    };
+                    if !has_compute_budget {
+                        return Err(failure("RESOURCE_LIMIT", NO_COMPUTE_BUDGET));
+                    }
+                    let sealed = input::seal_compound_explanation(&request, &prior)?;
+                    compound_explanation_parent = Some((prior, parent));
+                    Ok(Some(sealed))
+                })();
+                match binding {
+                    Ok(Some(sealed)) => return Ok(sealed),
+                    Ok(None) => {}
+                    Err(Error::Contract { code, message }) => {
+                        compound_explanation_stop = Some((code, message));
+                        return Ok(bundle);
+                    }
+                    Err(error) => return Err(error),
+                }
+            }
             if matches!(
                 bundle.meaning.parser_version.as_str(),
                 input::NAMED_CONVERSATION_PARSER_VERSION
@@ -9422,6 +9590,13 @@ impl Engine {
                 return self.stop(&mut state, Lifecycle::Fail, "INPUT_FAILURE", &e.to_string());
             }
         };
+        if let Some((code, message)) = compound_explanation_stop {
+            state.bundle = Some(bundle);
+            self.advance(&mut state, Lifecycle::Sealed, None)?;
+            self.store
+                .bind_memory_policy(&request, self.store.bound_memory_policy(actor)?)?;
+            return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+        }
         if implicit_context
             && has_compute_budget
             && let Intent::ReviseMessage { revision } = &bundle.meaning.intent
@@ -9778,7 +9953,12 @@ impl Engine {
         } else {
             Vec::new()
         };
+        let compound_explanation =
+            bundle.meaning.parser_version == input::COMPOUND_EXPLANATION_PARSER_VERSION;
+        let legacy_explanation =
+            !compound_explanation && matches!(bundle.meaning.intent, Intent::ExplainPrevious);
         let previous_sequence = if has_compute_budget
+            && !compound_explanation
             && matches!(
                 bundle.meaning.intent,
                 Intent::ExplainPrevious
@@ -9840,73 +10020,68 @@ impl Engine {
         } else {
             None
         };
-        let previous_csv_statistics_explanation =
-            if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
-                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
-                    Some(prior) => crate::document::previous_csv_statistics_explanation(
+        let previous_csv_statistics_explanation = if legacy_explanation {
+            match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                Some(prior) => crate::document::previous_csv_statistics_explanation(
+                    &self.store,
+                    actor,
+                    &request.case_id,
+                    prior,
+                )?,
+                None => None,
+            }
+        } else {
+            None
+        };
+        let previous_json_table_group_statistics_explanation = if legacy_explanation {
+            match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                Some(prior) => crate::document::previous_json_table_group_statistics_explanation(
+                    &self.store,
+                    actor,
+                    &request.case_id,
+                    prior,
+                )?,
+                None => None,
+            }
+        } else {
+            None
+        };
+        let previous_json_table_operation_explanation = if legacy_explanation {
+            match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                Some(prior) => {
+                    match crate::document::previous_json_table_operation_explanation(
                         &self.store,
                         actor,
                         &request.case_id,
                         prior,
-                    )?,
-                    None => None,
-                }
-            } else {
-                None
-            };
-        let previous_json_table_group_statistics_explanation =
-            if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
-                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
-                    Some(prior) => {
-                        crate::document::previous_json_table_group_statistics_explanation(
-                            &self.store,
-                            actor,
-                            &request.case_id,
-                            prior,
-                        )?
-                    }
-                    None => None,
-                }
-            } else {
-                None
-            };
-        let previous_json_table_operation_explanation =
-            if matches!(bundle.meaning.intent, Intent::ExplainPrevious) {
-                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
-                    Some(prior) => {
-                        match crate::document::previous_json_table_operation_explanation(
-                            &self.store,
-                            actor,
-                            &request.case_id,
-                            prior,
-                            request.budget.max_evidence_bytes,
-                            &bundle.meaning.parser_version,
-                        ) {
-                            Ok(value) => value,
-                            Err(error) => {
-                                let code = match &error {
-                                    Error::Contract { code, .. } => code.as_str(),
-                                    _ => "JSON_TABLE_CONTEXT_INVALID",
-                                };
-                                return self.stop(
-                                    &mut state,
-                                    Lifecycle::Suspend,
-                                    code,
-                                    &error.to_string(),
-                                );
-                            }
+                        request.budget.max_evidence_bytes,
+                        &bundle.meaning.parser_version,
+                    ) {
+                        Ok(value) => value,
+                        Err(error) => {
+                            let code = match &error {
+                                Error::Contract { code, .. } => code.as_str(),
+                                _ => "JSON_TABLE_CONTEXT_INVALID",
+                            };
+                            return self.stop(
+                                &mut state,
+                                Lifecycle::Suspend,
+                                code,
+                                &error.to_string(),
+                            );
                         }
                     }
-                    None => None,
                 }
-            } else {
-                None
-            };
+                None => None,
+            }
+        } else {
+            None
+        };
         // The verified case head can route an immediate source-question
         // explanation without probing unrelated document and code producers.
         // The source proof must still match the registered prior input.
         let scoped_question_explanation_input = if has_compute_budget
-            && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+            && legacy_explanation
             && previous.is_some_and(|prior| {
                 prior.lifecycle == Lifecycle::Commit && prior.guarantee == Guarantee::Hypothesis
             }) {
@@ -9926,39 +10101,38 @@ impl Engine {
         } else {
             None
         };
-        let previous_document_explanation = if scoped_question_explanation_input.is_none()
-            && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
-        {
-            match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
-                Some(prior) => {
-                    match crate::document::previous_document_explanation(
-                        &self.store,
-                        &state,
-                        prior,
-                        &request.budget,
-                        &bundle.meaning.parser_version,
-                        started,
-                    ) {
-                        Ok(value) => value,
-                        Err(error) => {
-                            let code = match &error {
-                                Error::Contract { code, .. } => code.as_str(),
-                                _ => "CSV_TABLE_CONTEXT_INVALID",
-                            };
-                            return self.stop(
-                                &mut state,
-                                Lifecycle::Suspend,
-                                code,
-                                &error.to_string(),
-                            );
+        let previous_document_explanation =
+            if scoped_question_explanation_input.is_none() && legacy_explanation {
+                match previous.filter(|prior| prior.lifecycle == Lifecycle::Commit) {
+                    Some(prior) => {
+                        match crate::document::previous_document_explanation(
+                            &self.store,
+                            &state,
+                            prior,
+                            &request.budget,
+                            &bundle.meaning.parser_version,
+                            started,
+                        ) {
+                            Ok(value) => value,
+                            Err(error) => {
+                                let code = match &error {
+                                    Error::Contract { code, .. } => code.as_str(),
+                                    _ => "CSV_TABLE_CONTEXT_INVALID",
+                                };
+                                return self.stop(
+                                    &mut state,
+                                    Lifecycle::Suspend,
+                                    code,
+                                    &error.to_string(),
+                                );
+                            }
                         }
                     }
+                    None => None,
                 }
-                None => None,
-            }
-        } else {
-            None
-        };
+            } else {
+                None
+            };
         let csv_group_mean =
             bundle.meaning.parser_version == input::PREVIOUS_CSV_GROUP_MEAN_PARSER_VERSION;
         let [group_mean_source, group_mean_report, group_mean_answer] =
@@ -10281,17 +10455,12 @@ impl Engine {
         } else {
             None
         };
-        let previous_math_report_explanation =
-            if matches!(bundle.meaning.intent, Intent::ExplainPrevious)
-                && let Some(prior) = previous
-            {
-                registered_math_report_explanation(&self.store, actor, &request.case_id, prior)?
-            } else {
-                None
-            };
-        let previous_assertion = if matches!(bundle.meaning.intent, Intent::ExplainPrevious)
-            && let Some(prior) = previous
-        {
+        let previous_math_report_explanation = if legacy_explanation && let Some(prior) = previous {
+            registered_math_report_explanation(&self.store, actor, &request.case_id, prior)?
+        } else {
+            None
+        };
+        let previous_assertion = if legacy_explanation && let Some(prior) = previous {
             match previous_assertion_context(
                 &self.store,
                 actor,
@@ -10311,7 +10480,7 @@ impl Engine {
         let mut prior_explanation_input = scoped_question_explanation_input.cloned();
         let verification_explanation = if has_compute_budget
             && scoped_question_explanation_input.is_none()
-            && matches!(bundle.meaning.intent, Intent::ExplainPrevious)
+            && legacy_explanation
             && let Some(prior) = previous.filter(|prior| prior.lifecycle == Lifecycle::Commit)
         {
             let deadline = started.checked_add(Duration::from_millis(request.budget.deadline_ms));
@@ -10602,6 +10771,9 @@ impl Engine {
             nodes.extend(sequence_nodes);
         }
         let additional_source_node = match &bundle.meaning.intent {
+            Intent::ExplainPrevious if compound_explanation => {
+                Some(crate::composition::EXPLANATION_SOURCE_NODE)
+            }
             Intent::ExplainPreviousStop => Some(crate::clarification::SOURCE_NODE),
             Intent::SpeakPreviousAnswer => Some(crate::speech::SOURCE_NODE),
             intent if crate::branch_text::handles(intent) => Some(crate::branch_text::SOURCE_NODE),
@@ -10789,6 +10961,7 @@ impl Engine {
             && (matches!(&goal.intent, Intent::IndependentRequests { .. })
                 || goal.output_path.is_none()
                     && (matches!(&goal.intent, Intent::Greet { .. })
+                        || compound_explanation
                         || bundle.meaning.parser_version
                             == input::ENGLISH_CALCULATION_PARSER_VERSION
                         || matches!(&goal.intent, Intent::ExplainPrevious)
@@ -11004,6 +11177,47 @@ impl Engine {
             })
         };
         match &goal.intent {
+            Intent::ExplainPrevious if compound_explanation => {
+                let explanation = compound_explanation_parent
+                    .as_ref()
+                    .filter(|(prior, _)| {
+                        goal.output_path.is_none()
+                            && bundle.meaning.context_result_ref.as_deref()
+                                == Some(prior.id.as_str())
+                            && state.prior_results.get(&prior.id) == Some(prior)
+                    })
+                    .ok_or_else(|| compound_explanation_context_unavailable(english))
+                    .and_then(|(prior, parent)| {
+                        crate::composition::explain_previous(
+                            &self.store,
+                            parent,
+                            prior,
+                            compound_explanation_item,
+                            english,
+                        )
+                    });
+                let explanation = match explanation {
+                    Ok(explanation) => explanation,
+                    Err(Error::Contract { code, message }) => {
+                        return self.stop(&mut state, Lifecycle::Suspend, &code, &message);
+                    }
+                    Err(error) => return Err(error),
+                };
+                graph.observe(
+                    crate::composition::EXPLANATION_SOURCE_NODE,
+                    &explanation.source_ref,
+                    &BTreeMap::new(),
+                )?;
+                units = explanation.units;
+                result.dependencies = explanation.dependencies;
+                result.guarantee = Guarantee::Derived;
+                report_goal_content = Some(ReportGoalContent {
+                    predicate: crate::composition::EXPLANATION_PREDICATE,
+                    guarantee: result.guarantee.clone(),
+                    dependencies: result.dependencies.clone(),
+                    units: units.clone(),
+                });
+            }
             Intent::IndependentRequests { items } => {
                 let reads = items
                     .iter()

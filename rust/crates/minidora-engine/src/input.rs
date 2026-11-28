@@ -1053,6 +1053,8 @@ pub(crate) fn memory_settings_intent(text: &str) -> Option<Intent> {
 pub(crate) const NEWS_EXPLANATION_PARSER_VERSION: &str = "declarative-ja-v222-news-explanation";
 pub(crate) const PREVIOUS_STOP_EXPLANATION_PARSER_VERSION: &str =
     "declarative-ja-v236-previous-stop-explanation";
+pub(crate) const COMPOUND_EXPLANATION_PARSER_VERSION: &str = "compound-explanation-ja-en-v1";
+const COMPOUND_EXPLANATION_ITEM_ROLE: &str = "/ExplainPrevious/item";
 
 fn asks_contextual_clarification(text: &str) -> bool {
     static QUESTION: LazyLock<Regex> = LazyLock::new(|| {
@@ -1082,6 +1084,108 @@ pub(crate) fn asks_to_clarify_news_status(text: &str) -> bool {
             text.trim_end_matches(['？', '?', '。', '.']),
             "どういうこと" | "どういうことですか" | "なぜ" | "なんで" | "もう少し説明して"
         )
+}
+
+fn compound_explanation_selector(text: &str) -> Option<regex::Match<'_>> {
+    static JAPANESE: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"\A(?:前の|前回の|直前の|先ほどの)(?:複合)?依頼(?:の)?[ 　]*",
+            r"(?<item>[0-9０-９]{1,3})(?:番(?:目)?|項目(?:目)?)?[ 　]*",
+            r"(?:(?:の(?:結果|根拠))?を(?:詳しく)?(?:説明|解説)して(?:ください)?",
+            r"|の根拠を(?:教えて|示して)(?:ください)?)\z"
+        ))
+        .expect("Japanese compound item explanation grammar")
+    });
+    static ENGLISH: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(concat!(
+            r"(?i)\A(?:please +)?explain +(?:the +basis +for +)?",
+            r"(?:item|request) +(?<item>[0-9]{1,3}) +(?:of|in|from) +",
+            r"(?:the +)?previous +(?:compound +)?(?:request|list)\z"
+        ))
+        .expect("English compound item explanation grammar")
+    });
+    let body = terminal_trim(text);
+    JAPANESE
+        .captures(body)
+        .or_else(|| ENGLISH.captures(body))?
+        .name("item")
+}
+
+pub(crate) fn compound_explanation_item(text: &str) -> Option<usize> {
+    compound_explanation_selector(text)?
+        .as_str()
+        .nfkc()
+        .collect::<String>()
+        .parse()
+        .ok()
+}
+
+pub(crate) fn seal_compound_explanation(
+    request: &RequestEnvelope,
+    previous: &ResultRecord,
+) -> Result<InputBundle> {
+    let english = matches!(request.locale.as_str(), "en" | "en-US");
+    let japanese = matches!(request.locale.as_str(), "ja" | "ja-JP");
+    if !request.attachments.is_empty()
+        || request.speech.is_some()
+        || request.purpose.is_some()
+        || request.output_path.is_some()
+        || !(english || japanese)
+    {
+        return Err(failure(
+            "COMPOUND_EXPLANATION_SCOPE",
+            if english {
+                "An explanation of previous items is available as display-only text."
+            } else {
+                "前の依頼の説明は画面表示に限ります。添付、音声、用途、保存先の指定を外してください。"
+            },
+        ));
+    }
+    validate_user_seal_request(request, Some(previous))?;
+    if !matches!(previous.lifecycle, Lifecycle::Commit | Lifecycle::Suspend)
+        || previous.branch_outcomes.is_empty()
+    {
+        return Err(failure(
+            "COMPOUND_EXPLANATION_CONTEXT_UNAVAILABLE",
+            if english {
+                "There is no eligible previous compound request in this conversation."
+            } else {
+                "この会話には説明できる前の複合依頼がありません。"
+            },
+        ));
+    }
+
+    let mut source_roles = BTreeMap::new();
+    if let Some(item) = compound_explanation_selector(&request.text) {
+        let offset = request.text.len() - request.text.trim_start().len();
+        source_roles.insert(
+            COMPOUND_EXPLANATION_ITEM_ROLE.into(),
+            vec![SourceSpan {
+                start: offset + item.start(),
+                end: offset + item.end(),
+                text: item.as_str().into(),
+            }],
+        );
+    } else if !(matches!(interpret(&request.text)?, Intent::ExplainPrevious)
+        || (japanese && asks_with_question_mark(&request.text)))
+    {
+        return Err(failure(
+            "COMPOUND_EXPLANATION_INPUT",
+            if english {
+                "The question does not identify an explanation of the previous request."
+            } else {
+                "前の依頼の説明を求める入力として照合できませんでした。"
+            },
+        ));
+    }
+    seal_user_input(
+        request,
+        Some(previous),
+        COMPOUND_EXPLANATION_PARSER_VERSION,
+        Intent::ExplainPrevious,
+        source_roles,
+        Vec::new(),
+    )
 }
 
 pub(crate) fn seal_current_news_explanation(

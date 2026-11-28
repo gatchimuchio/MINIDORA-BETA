@@ -7,9 +7,9 @@ use crate::{
     store::Store,
 };
 use minidora_domain::{
-    BranchOutcome, BranchState, ContentPlan, Error, EvidencePacket, ExplanationAudience,
-    ExplanationRequest, Guarantee, IndependentRequest, InputBundle, Intent, Result, ResultRecord,
-    SourceSpan, canonical, digest, failure, identity,
+    BranchOutcome, BranchState, Calculation, ContentPlan, Error, EvidencePacket,
+    ExplanationAudience, ExplanationRequest, Guarantee, IndependentRequest, InputBundle, Intent,
+    Lifecycle, Result, ResultRecord, SourceSpan, canonical, digest, failure, identity,
 };
 use serde::{Deserialize, Serialize};
 use std::{
@@ -19,6 +19,8 @@ use std::{
 
 pub(crate) const PREDICATE: &str = "INDEPENDENT_REQUESTS_V1";
 pub(crate) const PARSER_VERSION: &str = "independent-request-list-v1";
+pub(crate) const EXPLANATION_PREDICATE: &str = "PREVIOUS_COMPOUND_EXPLANATION_V1";
+pub(crate) const EXPLANATION_SOURCE_NODE: &str = "previous-compound-observations";
 const MAX_ITEMS: usize = 8;
 const MAX_ITEM_BYTES: usize = 8192;
 
@@ -140,7 +142,7 @@ pub(crate) fn nodes(items: &[IndependentRequest]) -> impl Iterator<Item = GoalNo
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct Value {
     guarantee: Guarantee,
     units: Vec<String>,
@@ -149,7 +151,7 @@ struct Value {
     quantities: BTreeMap<&'static str, String>,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct Observation<'a> {
     node_id: &'a str,
     input_fingerprint: &'a str,
@@ -591,7 +593,12 @@ fn display_units(observation: &Observation<'_>, number: usize, english: bool) ->
             .chain(value.units.iter().cloned())
             .collect();
     }
-    let status = match (english, &observation.state, observation.reason_code) {
+    let status = branch_status(english, observation.state, observation.reason_code);
+    vec![format!("{heading}　{status}")]
+}
+
+fn branch_status(english: bool, state: BranchState, reason: Option<&str>) -> &'static str {
+    match (english, state, reason) {
         (true, _, Some("BRANCH_LOCALE_UNAVAILABLE")) => {
             "English output is unavailable for this item."
         }
@@ -630,8 +637,402 @@ fn display_units(observation: &Observation<'_>, number: usize, english: bool) ->
         (false, BranchState::Failed, _) => "処理に失敗しました。",
         (true, _, _) => "This item could not be completed.",
         (false, _, _) => "この項目は保留しました。",
+    }
+}
+
+pub(crate) struct PreviousExplanation {
+    pub(crate) units: Vec<String>,
+    pub(crate) dependencies: Vec<String>,
+    pub(crate) source_ref: String,
+}
+
+type ObservationRefs = BTreeMap<String, String>;
+type RetainedGraph = (
+    Vec<GoalNode>,
+    ObservationRefs,
+    Option<ObservationRefs>,
+    Option<ObservationRefs>,
+    Option<ObservationRefs>,
+    BTreeMap<String, Option<ObservationRefs>>,
+);
+
+fn explanation_mismatch(english: bool) -> Error {
+    failure(
+        "COMPOUND_EXPLANATION_SOURCE_INVALID",
+        if english {
+            "The saved item results could not be matched to the original request."
+        } else {
+            "保存された項目の記録を元の依頼と照合できませんでした。"
+        },
+    )
+}
+
+/// Explain saved observations without resuming the parent Goal or using its grants.
+pub(crate) fn explain_previous(
+    store: &Store,
+    parent: &InputBundle,
+    prior: &ResultRecord,
+    selection: Option<usize>,
+    english: bool,
+) -> Result<PreviousExplanation> {
+    let items = delivery_items(parent)?;
+    let request = &parent.request;
+    let invalid = || explanation_mismatch(english);
+    if !matches!(prior.lifecycle, Lifecycle::Commit | Lifecycle::Suspend)
+        || identity(request)? != prior.id
+        || request.input_id != prior.input_id
+        || request.input_version != prior.input_version
+        || prior.branch_outcomes.len() != items.len()
+    {
+        return Err(invalid());
+    }
+    if selection.is_some_and(|number| !(1..=items.len()).contains(&number)) {
+        let count = items.len();
+        return Err(failure(
+            "COMPOUND_ITEM_UNAVAILABLE",
+            if english {
+                format!(
+                    "The previous request has {count} items. Choose a number from 1 to {count}."
+                )
+            } else {
+                format!(
+                    "前の依頼には {count} 項目あります。1 から {count} の番号を指定してください。"
+                )
+            },
+        ));
+    }
+    let read = |reference| store.get_bytes(&request.actor_id, &request.case_id, reference);
+    let source_ref = prior.execution_graph_ref.as_deref().ok_or_else(invalid)?;
+    let (recorded_nodes, observed, _, _, _, consumed): RetainedGraph =
+        serde_json::from_slice(&read(source_ref)?)?;
+    let expected_nodes: Vec<_> = nodes(items).collect();
+    let plan = prior.content_plan.as_ref().ok_or_else(invalid)?;
+    let render_ref = crate::document::revalidate_previous_document_render(
+        store,
+        &request.actor_id,
+        &request.case_id,
+        prior,
+        None,
+        "COMPOUND_EXPLANATION_SOURCE_INVALID",
+        "compound request",
+    )
+    .map_err(|error| match error {
+        Error::Contract { .. } => invalid(),
+        error => error,
+    })?;
+    let compute = digest(&canonical(&(
+        &prior.calculation,
+        &plan.required_units,
+        &prior.evidence,
+        &prior.dependencies,
+    ))?);
+    if !recorded_nodes.starts_with(&expected_nodes)
+        || observed.get("content") != Some(&digest(&canonical(plan)?))
+        || observed.get("render") != Some(&render_ref)
+        || observed.get("compute") != Some(&compute)
+        || plan.locale != request.locale
+        || prior.calculation.is_some()
+        || plan.dependencies.len() != items.len() + 1
+        || !plan.dependencies.starts_with(&prior.dependencies)
+        || plan.dependencies.last() != Some(&compute)
+        || prior.dependencies.len() != items.len()
+        || consumed.get("compute").and_then(Option::as_ref)
+            != Some(
+                &prior
+                    .branch_outcomes
+                    .iter()
+                    .map(|branch| (branch.node_id.clone(), branch.artifact_ref.clone()))
+                    .collect(),
+            )
+    {
+        return Err(invalid());
+    }
+    let branch_bytes = prior
+        .branch_outcomes
+        .iter()
+        .map(|branch| read(&branch.artifact_ref))
+        .collect::<Result<Vec<_>>>()?;
+    let mut branches = Vec::with_capacity(items.len());
+    let mut visible = Vec::new();
+    let parent_english = supports_english_output_locale(&request.locale);
+    for (index, ((item, node), bytes)) in items
+        .iter()
+        .zip(&expected_nodes)
+        .zip(&branch_bytes)
+        .enumerate()
+    {
+        let branch = &prior.branch_outcomes[index];
+        let saved: Observation<'_> = serde_json::from_slice(bytes)?;
+        let actual_inputs = node
+            .requires
+            .iter()
+            .map(|id| Ok((id.clone(), observed.get(id).ok_or_else(invalid)?.clone())))
+            .collect::<Result<ObservationRefs>>()?;
+        if saved.node_id != node.id
+            || branch.node_id != node.id
+            || saved.input_fingerprint != parent.fingerprint
+            || saved.source_range != (item.source.start, item.source.end)
+            || saved.state != branch.state
+            || saved.reason_code != branch.reason_code.as_deref()
+            || (saved.state == BranchState::Confirmed) != saved.reason_code.is_none()
+            || (saved.state == BranchState::Confirmed && saved.value.is_none())
+            || (saved.state == BranchState::Failed && saved.value.is_some())
+            || prior.dependencies[index] != branch.artifact_ref
+            || observed.get(&node.id) != Some(&branch.artifact_ref)
+            || consumed.get(&node.id).and_then(Option::as_ref) != Some(&actual_inputs)
+            || canonical(&saved)? != *bytes
+        {
+            return Err(invalid());
+        }
+        visible.extend(display_units(&saved, index + 1, parent_english));
+        branches.push(saved);
+    }
+    if visible != plan.required_units || plan.text != visible.join("\n") {
+        return Err(invalid());
+    }
+
+    let count = branches
+        .iter()
+        .filter(|b| b.state == BranchState::Confirmed)
+        .count();
+    let total = branches.len();
+    let mut units = vec![if english {
+        format!("In the previous request, {count} of {total} items were confirmed.")
+    } else {
+        format!("前の依頼は {total} 項目のうち {count} 項目が確定しました。")
+    }];
+    if prior.lifecycle == Lifecycle::Suspend && count == total {
+        units.push(if english {
+            "The overall request still has an unfinished delivery or finalization.".into()
+        } else {
+            "依頼全体では保存または確定処理が保留されています。".into()
+        });
+    }
+    for (index, (item, branch)) in items.iter().zip(&branches).enumerate() {
+        if selection.is_some_and(|number| number != index + 1) {
+            continue;
+        }
+        let number = index + 1;
+        units.push(if english {
+            format!("Request {number}")
+        } else {
+            format!("依頼 {number}")
+        });
+        if branch.state != BranchState::Confirmed {
+            let status = match (english, branch.reason_code) {
+                (true, Some("BRANCH_CAPABILITY_NOT_CONNECTED")) => {
+                    "This operation is unavailable inside a multi-item request."
+                }
+                (false, Some("BRANCH_CAPABILITY_NOT_CONNECTED")) => {
+                    "この操作は複数項目の依頼の中では利用できません。"
+                }
+                (true, Some("BRANCH_EVIDENCE_BUDGET" | "BRANCH_TIME_BUDGET")) => {
+                    "The item ran out of time or space to retain the result."
+                }
+                (false, Some("BRANCH_EVIDENCE_BUDGET" | "BRANCH_TIME_BUDGET")) => {
+                    "時間または結果を保持するための予算が足りませんでした。"
+                }
+                _ => branch_status(english, branch.state, branch.reason_code),
+            };
+            units.push(status.into());
+            for id in prerequisite_ids(item) {
+                let predecessor = branches
+                    .iter()
+                    .position(|saved| saved.node_id == id)
+                    .ok_or_else(invalid)?;
+                if branches[predecessor].state != BranchState::Confirmed {
+                    let number = predecessor + 1;
+                    units.push(if english {
+                        format!("Request {number} had not been confirmed.")
+                    } else {
+                        format!("参照先の依頼 {number} が未確定でした。")
+                    });
+                }
+            }
+            if let Some(value) = &branch.value {
+                units.extend(value.units.iter().cloned());
+            }
+            continue;
+        }
+        let value = branch.value.as_ref().ok_or_else(invalid)?;
+        match item.intent.as_ref() {
+            Intent::Calculate { expression } => {
+                let calculation = language::calculate(expression)?;
+                if canonical(&calculation)? != value.bytes {
+                    return Err(invalid());
+                }
+                append_calculation_explanation(&calculation, english, &mut units);
+            }
+            Intent::CalculateFromRequestItems {
+                expression,
+                requires,
+            } => {
+                let kept: language::ResolvedSequenceCalculation =
+                    serde_json::from_slice(&value.bytes)?;
+                let mut quantities = BTreeMap::new();
+                for used in &kept.consumed {
+                    let key = requires
+                        .iter()
+                        .find(|id| {
+                            used.step_id == **id
+                                || used
+                                    .step_id
+                                    .strip_prefix(id.as_str())
+                                    .is_some_and(|suffix| suffix.starts_with('-'))
+                        })
+                        .ok_or_else(invalid)?;
+                    let predecessor = branches
+                        .iter()
+                        .position(|saved| saved.node_id == key)
+                        .ok_or_else(invalid)?;
+                    let field = used
+                        .step_id
+                        .strip_prefix(key.as_str())
+                        .ok_or_else(invalid)?;
+                    let field = field.strip_prefix('-').unwrap_or(field);
+                    if branches[predecessor].state != BranchState::Confirmed
+                        || observed.get(key) != Some(&used.artifact_sha256)
+                        || !proves_consumed_value(
+                            &items[predecessor].intent,
+                            &branches[predecessor],
+                            field,
+                            &used.exact_value,
+                        )?
+                    {
+                        return Err(invalid());
+                    }
+                    if !quantities.contains_key(&used.step_id) {
+                        let number = predecessor + 1;
+                        let amount = &used.exact_value;
+                        units.push(if english {
+                            format!("Uses {amount} from request {number}.")
+                        } else {
+                            format!("依頼 {number} の値 {amount} を使いました。")
+                        });
+                        quantities.insert(
+                            used.step_id.clone(),
+                            language::SequenceValue {
+                                exact_value: amount.clone(),
+                                artifact_sha256: used.artifact_sha256.clone(),
+                            },
+                        );
+                    }
+                }
+                let actual = language::calculate_sequence_expression(expression, &quantities)?;
+                if actual != kept || canonical(&actual)? != value.bytes {
+                    return Err(invalid());
+                }
+                append_calculation_explanation(&kept.calculation, english, &mut units);
+            }
+            Intent::SelectRequestJsonNumber { source, pointer } => {
+                let predecessor = branches
+                    .iter()
+                    .position(|saved| saved.node_id == source)
+                    .ok_or_else(invalid)?;
+                let evidence = branches[predecessor].evidence_ref.ok_or_else(invalid)?;
+                let selected =
+                    composition_source::select_json_number(store, parent, evidence, pointer)?;
+                if canonical(&selected)? != value.bytes {
+                    return Err(invalid());
+                }
+                let number = predecessor + 1;
+                let amount = selected.exact_value;
+                units.push(if english {
+                    format!("Reads the exact number {amount} at {pointer} in the saved JSON from request {number}.")
+                } else {
+                    format!("依頼 {number} で取得したJSONの {pointer} から、数値 {amount} を読み取りました。")
+                });
+            }
+            _ if let Some(uri) = composition_source::read_url(item) => {
+                let evidence = branch.evidence_ref.ok_or_else(invalid)?;
+                let packet = retained_source_packet(store, parent, uri, evidence)?;
+                if canonical(&(&packet.id, &packet.raw_sha256, evidence))? != value.bytes {
+                    return Err(invalid());
+                }
+                let final_uri = &packet.final_uri;
+                let size = packet.raw_body.len();
+                units.push(if english {
+                    format!("The saved source at {final_uri} supplied {size} bytes.")
+                } else {
+                    format!("出典 {final_uri} から取得した {size} バイトの本文が記録されています。")
+                });
+            }
+            _ => {
+                units.push(if english {
+                    "The saved visible result was:".into()
+                } else {
+                    "保存されている表示結果です。".into()
+                });
+                units.extend(value.units.iter().cloned());
+            }
+        }
+    }
+    let dependencies = std::iter::once(prior.id.clone())
+        .chain(std::iter::once(source_ref.to_owned()))
+        .chain(prior.dependencies.iter().cloned())
+        .collect();
+    Ok(PreviousExplanation {
+        units,
+        dependencies,
+        source_ref: source_ref.to_owned(),
+    })
+}
+
+fn proves_consumed_value(
+    intent: &Intent,
+    observation: &Observation<'_>,
+    field: &str,
+    expected: &str,
+) -> Result<bool> {
+    let Some(value) = &observation.value else {
+        return Ok(false);
     };
-    vec![format!("{heading}　{status}")]
+    let bytes = &value.bytes;
+    Ok(match intent {
+        Intent::Calculate { .. } if field.is_empty() => {
+            serde_json::from_slice::<Calculation>(bytes)?.exact_value == expected
+        }
+        Intent::CalculateFromRequestItems { .. } if field.is_empty() => {
+            serde_json::from_slice::<language::ResolvedSequenceCalculation>(bytes)?
+                .calculation
+                .exact_value
+                == expected
+        }
+        Intent::SelectRequestJsonNumber { .. } if field.is_empty() => {
+            serde_json::from_slice::<serde_json::Value>(bytes)?
+                .get("exact_value")
+                .and_then(serde_json::Value::as_str)
+                == Some(expected)
+        }
+        Intent::Statistics { .. }
+        | Intent::DescribeStatistics { .. }
+        | Intent::FiniteProbabilityStatistics { .. } => {
+            math::conversational_exact_quantities(intent, bytes)?
+                .get(field)
+                .is_some_and(|exact| exact == expected)
+        }
+        _ => false,
+    })
+}
+
+fn append_calculation_explanation(
+    calculation: &Calculation,
+    english: bool,
+    units: &mut Vec<String>,
+) {
+    let expression = &calculation.expression;
+    let value = &calculation.exact_value;
+    units.push(if english {
+        format!("Calculated expression: {expression}")
+    } else {
+        format!("計算した式は {expression} です。")
+    });
+    units.extend(calculation.steps.iter().cloned());
+    units.push(if english {
+        format!("Exact result: {value}")
+    } else {
+        format!("厳密な結果は {value} です。")
+    });
 }
 
 #[derive(Deserialize)]
@@ -640,6 +1041,25 @@ struct RetainedObservation {
     input_fingerprint: String,
     source_range: (usize, usize),
     evidence_ref: Option<String>,
+}
+
+fn retained_source_packet(
+    store: &Store,
+    bundle: &InputBundle,
+    uri: &str,
+    reference: &str,
+) -> Result<EvidencePacket> {
+    let request = &bundle.request;
+    let bytes = store.get_bytes(&request.actor_id, &request.case_id, reference)?;
+    let packet: EvidencePacket = serde_json::from_slice(&bytes)?;
+    if packet.request_uri != uri || canonical(&packet)? != bytes {
+        return Err(failure(
+            "COMPOUND_SOURCE_MISMATCH",
+            "The saved source packet differs from the original request.",
+        ));
+    }
+    ports::validate_successful_packet(&packet, &request.permissions)?;
+    Ok(packet)
 }
 
 /// Verify completed items against the sealed input and previously retained bytes.
@@ -679,12 +1099,12 @@ pub(crate) fn verify_delivery(
                 store.get_bytes(&request.actor_id, &request.case_id, &branch.artifact_ref)?;
             let retained: RetainedObservation = serde_json::from_slice(&bytes)?;
             let reference = retained.evidence_ref.ok_or_else(invalid)?;
-            let bytes = store.get_bytes(&request.actor_id, &request.case_id, &reference)?;
-            let packet: EvidencePacket = serde_json::from_slice(&bytes)?;
-            if packet.request_uri != uri || canonical(&packet)? != bytes {
-                return Err(invalid());
-            }
-            ports::validate_successful_packet(&packet, &request.permissions)?;
+            let packet = retained_source_packet(store, bundle, uri, &reference).map_err(
+                |error| match error {
+                    Error::Contract { code, .. } if code == "COMPOUND_SOURCE_MISMATCH" => invalid(),
+                    error => error,
+                },
+            )?;
             Ok((reference, packet))
         },
         |index, bytes| {
@@ -774,4 +1194,54 @@ pub(crate) fn verify_retry_source(
         }
     }
     Err(invalid())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::Engine;
+    use minidora_domain::RequestEnvelope;
+
+    #[test]
+    fn previous_compound_explanation_rejects_changed_branch_proof() {
+        let temporary = tempfile::tempdir().unwrap();
+        let mut engine = Engine::open(temporary.path()).unwrap();
+        let mut request = RequestEnvelope::new(
+            "case",
+            "original",
+            "owner",
+            "- Calculate 27 * 4\n- Calculate @{request-1} + 12",
+        );
+        request.locale = "en-US".into();
+        let original = engine.execute("owner", request).unwrap();
+        assert_eq!(original.lifecycle, Lifecycle::Commit, "{original:?}");
+        let parent = engine
+            .latest("owner", "case")
+            .unwrap()
+            .unwrap()
+            .bundle
+            .unwrap();
+        let explanation =
+            explain_previous(&engine.store, &parent, &original, Some(2), true).unwrap();
+        assert!(
+            explanation
+                .units
+                .iter()
+                .any(|unit| unit == "Uses 108 from request 1.")
+        );
+        assert_eq!(explanation.dependencies[0], original.id);
+        assert_eq!(
+            explanation.source_ref,
+            *original.execution_graph_ref.as_ref().unwrap()
+        );
+
+        let mut substituted = original.clone();
+        substituted.branch_outcomes[1].artifact_ref =
+            original.branch_outcomes[0].artifact_ref.clone();
+        assert!(explain_previous(&engine.store, &parent, &substituted, Some(2), true).is_err());
+
+        let mut changed = original;
+        changed.text.push('!');
+        assert!(explain_previous(&engine.store, &parent, &changed, None, false).is_err());
+    }
 }
