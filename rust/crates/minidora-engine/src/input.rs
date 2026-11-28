@@ -10643,7 +10643,7 @@ fn parse_statistics_goal(raw: &str) -> Result<Option<StatisticsCandidate>> {
     )))
 }
 
-fn arithmetic_expression(text: &str) -> Result<Option<String>> {
+pub(crate) fn arithmetic_expression(text: &str) -> Result<Option<String>> {
     // NFKC is confined to the arithmetic view: quoted JSON values, relation
     // constants and URI bytes must not be rewritten by arithmetic normalization.
     let normalized: String = text.nfkc().collect();

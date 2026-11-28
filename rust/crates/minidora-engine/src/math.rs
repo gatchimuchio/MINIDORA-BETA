@@ -1167,6 +1167,87 @@ pub(crate) fn conversational_math_report(
     }
 }
 
+/// Project only the exact quantities available to a dependent request from the
+/// producer's retained report. Hidden values and unavailable metrics stay local.
+pub(crate) fn conversational_exact_quantities(
+    intent: &Intent,
+    bytes: &[u8],
+) -> Result<BTreeMap<&'static str, String>> {
+    const ALL_STATISTICS: &[Statistic] = &[
+        Statistic::Mean,
+        Statistic::Median,
+        Statistic::Sum,
+        Statistic::Minimum,
+        Statistic::Maximum,
+        Statistic::PopulationVariance,
+        Statistic::SampleVariance,
+    ];
+    let invalid = || {
+        failure(
+            "CONVERSATIONAL_MATH_ARTIFACT_MISMATCH",
+            "保持された数理結果が正規形式と一致しません。",
+        )
+    };
+    let metrics = match intent {
+        Intent::Statistics { .. } => ALL_STATISTICS,
+        Intent::DescribeStatistics {
+            metrics,
+            show_values: true,
+            explanation,
+            ..
+        } if !explanation.as_ref().is_some_and(|request| {
+            matches!(request.audience, ExplanationAudience::Unresolved(_))
+        }) =>
+        {
+            metrics.as_slice()
+        }
+        Intent::FiniteProbabilityStatistics { .. } => {
+            let report: FiniteProbabilityStatistics = serde_json::from_slice(bytes)?;
+            if canonical(&report)?.as_slice() != bytes {
+                return Err(invalid());
+            }
+            return Ok(BTreeMap::from([
+                ("expected-value", report.expected_value),
+                ("variance", report.variance),
+            ]));
+        }
+        _ => return Ok(BTreeMap::new()),
+    };
+
+    let report: Statistics = serde_json::from_slice(bytes)?;
+    if canonical(&report)?.as_slice() != bytes {
+        return Err(invalid());
+    }
+    Ok(metrics
+        .iter()
+        .filter_map(|metric| {
+            let (name, value, unit) = match metric {
+                Statistic::Mean => ("mean", Some(report.mean.as_str()), &report.unit),
+                Statistic::Median => ("median", Some(report.median.as_str()), &report.unit),
+                Statistic::Sum => ("sum", Some(report.sum.as_str()), &report.unit),
+                Statistic::Minimum => ("min", Some(report.min.as_str()), &report.unit),
+                Statistic::Maximum => ("max", Some(report.max.as_str()), &report.unit),
+                Statistic::PopulationVariance => (
+                    "population-variance",
+                    Some(report.population_variance.as_str()),
+                    &report.variance_unit,
+                ),
+                Statistic::SampleVariance => (
+                    "sample-variance",
+                    report.sample_variance.as_deref(),
+                    &report.variance_unit,
+                ),
+            };
+            let value = value?;
+            Some((
+                name,
+                unit.as_ref()
+                    .map_or_else(|| value.to_owned(), |unit| format!("{value} {unit}")),
+            ))
+        })
+        .collect())
+}
+
 fn statistic_result(report: &Statistics, metric: Statistic) -> String {
     let (label, value) = match metric {
         Statistic::Mean => ("平均", Some(report.mean.as_str())),

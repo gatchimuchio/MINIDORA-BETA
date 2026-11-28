@@ -707,6 +707,10 @@ pub enum Intent {
     Calculate {
         expression: String,
     },
+    CalculateFromRequestItems {
+        expression: String,
+        requires: Vec<String>,
+    },
     ConvertPreviousLength {
         unit: String,
     },

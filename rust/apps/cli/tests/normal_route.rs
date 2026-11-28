@@ -5837,6 +5837,47 @@ fn independent_items_keep_verified_results_when_another_item_cannot_run() {
 }
 
 #[test]
+fn composed_statistics_value_is_bound_to_its_producing_artifact() {
+    let scratch = Scratch::new();
+    math_chat(
+        &scratch.0,
+        "/paste\n- 1、2、2の平均を教えて\n- 依頼1の平均に7を足して\n- @{request-2}×3を計算して\n/end\n/exit\n",
+    );
+    let state = inspect_normal_case(&scratch.0, "owner");
+    let result = &state["result"];
+    assert_eq!(result["lifecycle"], "COMMIT", "{result}");
+    let branches = result["branch_outcomes"].as_array().unwrap();
+    assert_eq!(branches.len(), 3);
+    let store = minidora_engine::store::Store::open(&scratch.0).unwrap();
+    let get = |reference: &Value| {
+        store
+            .get_bytes("owner", "normal-route", reference.as_str().unwrap())
+            .unwrap()
+    };
+    let graph: Value = serde_json::from_slice(&get(&result["execution_graph_ref"])).unwrap();
+    assert_eq!(
+        graph[5]["request-2"]["request-1"],
+        branches[0]["artifact_ref"]
+    );
+    assert_eq!(
+        graph[5]["request-3"]["request-2"],
+        branches[1]["artifact_ref"]
+    );
+    for (index, expected) in [(1, "26/3"), (2, "26")] {
+        let branch: Value = serde_json::from_slice(&get(&branches[index]["artifact_ref"])).unwrap();
+        let proof: Vec<u8> = serde_json::from_value(branch["value"]["bytes"].clone()).unwrap();
+        let proof: minidora_engine::language::ResolvedSequenceCalculation =
+            serde_json::from_slice(&proof).unwrap();
+        assert_eq!(proof.calculation.exact_value, expected);
+        assert_eq!(proof.consumed.len(), 1);
+        assert_eq!(
+            proof.consumed[0].artifact_sha256,
+            branches[index - 1]["artifact_ref"]
+        );
+    }
+}
+
+#[test]
 fn v6_statistics_paraphrases_preserve_meaning_and_metric_scope() {
     let original = Scratch::new();
     let paraphrase = Scratch::new();

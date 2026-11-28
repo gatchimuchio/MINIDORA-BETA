@@ -11,6 +11,7 @@ pub mod code_capability;
 pub mod code_generation;
 mod code_intent;
 mod composition;
+mod composition_input;
 mod conversation_history_input;
 mod conversation_input;
 pub mod core;

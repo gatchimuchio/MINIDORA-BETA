@@ -1,5 +1,6 @@
-//! Planning and observation for explicitly independent requests.
+//! Planning and observation for bounded lists of requests within one Goal.
 use crate::{
+    composition_input,
     core::{exact_calculation_unit, supports_english_output_locale},
     input, language, math,
     scheduler::{GoalNode, GoalNodeKind, Scheduler},
@@ -11,7 +12,7 @@ use minidora_domain::{
 };
 use serde::Serialize;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     time::{Duration, Instant},
 };
 
@@ -79,14 +80,20 @@ pub(crate) fn parse(text: &str, lower: impl Fn(&str) -> Result<Intent>) -> Resul
     }
     let items = ranges
         .into_iter()
-        .map(|(start, end)| {
+        .enumerate()
+        .map(|(index, (start, end))| {
             let source = SourceSpan {
                 start,
                 end,
                 text: text[start..end].to_owned(),
             };
-            let intent = match lower(&source.text) {
+            let parsed = composition_input::parse(&source.text, index)
+                .and_then(|intent| intent.map_or_else(|| lower(&source.text), Ok));
+            let intent = match parsed {
                 Ok(intent) => intent,
+                Err(Error::Contract { code, .. }) if is_reference_input_stop(&code) => {
+                    Intent::Unknown { reason: code }
+                }
                 Err(Error::Contract { code, message }) => Intent::Unknown {
                     reason: format!("{code}: {message}"),
                 },
@@ -105,11 +112,25 @@ fn node_id(index: usize) -> String {
     format!("request-{}", index + 1)
 }
 
+fn is_reference_input_stop(code: &str) -> bool {
+    matches!(
+        code,
+        "BRANCH_REFERENCE_NOT_PRIOR" | "BRANCH_REFERENCE_INVALID"
+    )
+}
+
+fn prerequisite_ids(item: &IndependentRequest) -> &[String] {
+    match item.intent.as_ref() {
+        Intent::CalculateFromRequestItems { requires, .. } => requires,
+        _ => &[],
+    }
+}
+
 pub(crate) fn nodes(items: &[IndependentRequest]) -> impl Iterator<Item = GoalNode> {
-    (0..items.len()).map(|index| GoalNode {
+    items.iter().enumerate().map(|(index, item)| GoalNode {
         id: node_id(index),
         kind: GoalNodeKind::CoreResult,
-        requires: Vec::new(),
+        requires: prerequisite_ids(item).to_vec(),
     })
 }
 
@@ -118,6 +139,8 @@ struct Value {
     guarantee: Guarantee,
     units: Vec<String>,
     bytes: Vec<u8>,
+    #[serde(skip)]
+    quantities: BTreeMap<&'static str, String>,
 }
 
 #[derive(Serialize)]
@@ -136,7 +159,13 @@ enum Branch {
     Blocked(&'static str),
 }
 
-fn evaluate(item: &IndependentRequest, bundle: &InputBundle, english: bool) -> Result<Branch> {
+fn evaluate(
+    item: &IndependentRequest,
+    bundle: &InputBundle,
+    english: bool,
+    quantities: &BTreeMap<String, language::SequenceValue>,
+    prerequisites: &BTreeMap<String, String>,
+) -> Result<Branch> {
     let mut partial_reason = None;
     let value = match item.intent.as_ref() {
         Intent::Calculate { expression } => {
@@ -144,6 +173,35 @@ fn evaluate(item: &IndependentRequest, bundle: &InputBundle, english: bool) -> R
             Value {
                 units: vec![exact_calculation_unit(&calculation)],
                 bytes: canonical(&calculation)?,
+                quantities: BTreeMap::from([("", calculation.exact_value)]),
+                guarantee: Guarantee::Computed,
+            }
+        }
+        Intent::CalculateFromRequestItems { expression, .. } => {
+            let resolved = match language::calculate_sequence_expression(expression, quantities) {
+                Ok(resolved) => resolved,
+                Err(Error::Contract { code, .. })
+                    if code == "CALCULATION_REFERENCE_UNAVAILABLE" =>
+                {
+                    return Ok(Branch::Blocked("BRANCH_REFERENCE_VALUE_UNAVAILABLE"));
+                }
+                Err(error) => return Err(error),
+            };
+            let used: BTreeSet<_> = resolved
+                .consumed
+                .iter()
+                .map(|usage| &usage.artifact_sha256)
+                .collect();
+            if used != prerequisites.values().collect() {
+                return Err(failure(
+                    "BRANCH_REFERENCE_MISMATCH",
+                    "Consumed values do not match the observed prerequisite artifacts.",
+                ));
+            }
+            Value {
+                units: vec![exact_calculation_unit(&resolved.calculation)],
+                bytes: canonical(&resolved)?,
+                quantities: BTreeMap::from([("", resolved.calculation.exact_value)]),
                 guarantee: Guarantee::Computed,
             }
         }
@@ -170,9 +228,11 @@ fn evaluate(item: &IndependentRequest, bundle: &InputBundle, english: bool) -> R
                 partial_reason = Some(AUDIENCE_UNRESOLVED);
             }
             let report = math::conversational_math_report(&item.intent, true)?;
+            let quantities = math::conversational_exact_quantities(&item.intent, &report.bytes)?;
             Value {
                 units: report.units,
                 bytes: report.bytes,
+                quantities,
                 guarantee: Guarantee::Computed,
             }
         }
@@ -192,8 +252,16 @@ fn evaluate(item: &IndependentRequest, bundle: &InputBundle, english: bool) -> R
             Value {
                 units: vec![summary.text],
                 bytes,
+                quantities: BTreeMap::new(),
                 guarantee: Guarantee::Hypothesis,
             }
+        }
+        Intent::Unknown { reason } if is_reference_input_stop(reason) => {
+            return Ok(Branch::Blocked(if reason == "BRANCH_REFERENCE_NOT_PRIOR" {
+                "BRANCH_REFERENCE_NOT_PRIOR"
+            } else {
+                "BRANCH_REFERENCE_INVALID"
+            }));
         }
         Intent::Unknown { .. } => return Ok(Branch::Blocked("BRANCH_CAPABILITY_UNAVAILABLE")),
         _ => return Ok(Branch::Blocked("BRANCH_CAPABILITY_NOT_CONNECTED")),
@@ -273,12 +341,30 @@ pub(crate) fn produce(
         units: Vec::new(),
         guarantee: Guarantee::Unknown,
     };
+    let mut quantities = BTreeMap::new();
     for (index, item) in items.iter().enumerate() {
         let id = node_id(index);
+        let prerequisites = prerequisite_ids(item)
+            .iter()
+            .map(|id| {
+                let observed = graph.observed().get(id).ok_or_else(|| {
+                    failure(
+                        "UNOBSERVED_PREREQUISITE",
+                        "A composed item requires an observation in this Goal.",
+                    )
+                })?;
+                Ok((id.clone(), observed.clone()))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        let blocked_predecessor = output.branches.iter().any(|outcome| {
+            prerequisites.contains_key(&outcome.node_id) && outcome.state != BranchState::Confirmed
+        });
         let evaluated = if started.elapsed() >= compute_limit {
             Ok(Branch::Blocked("BRANCH_TIME_BUDGET"))
+        } else if blocked_predecessor {
+            Ok(Branch::Blocked("BRANCH_REFERENCE_PREREQUISITE_UNCONFIRMED"))
         } else {
-            evaluate(item, bundle, english)
+            evaluate(item, bundle, english, &quantities, &prerequisites)
         };
         let (state, reason, value) = match evaluated {
             Ok(Branch::Value(value)) => (BranchState::Confirmed, None, Some(value)),
@@ -321,11 +407,27 @@ pub(crate) fn produce(
                 )
             })?;
         let reference = store.put_bytes(&request.actor_id, &request.case_id, &bytes)?;
-        graph.observe(&id, &reference, &BTreeMap::new())?;
-        if let Some(value) = observed.value
-            && (output.guarantee == Guarantee::Unknown || value.guarantee == Guarantee::Hypothesis)
-        {
-            output.guarantee = value.guarantee;
+        graph.observe(&id, &reference, &prerequisites)?;
+        if let Some(value) = observed.value {
+            if output.guarantee == Guarantee::Unknown || value.guarantee == Guarantee::Hypothesis {
+                output.guarantee = value.guarantee;
+            }
+            if observed.state == BranchState::Confirmed {
+                quantities.extend(value.quantities.into_iter().map(|(field, exact_value)| {
+                    let key = if field.is_empty() {
+                        id.clone()
+                    } else {
+                        format!("{id}-{field}")
+                    };
+                    (
+                        key,
+                        language::SequenceValue {
+                            exact_value,
+                            artifact_sha256: reference.clone(),
+                        },
+                    )
+                }));
+            }
         }
         let state = observed.state;
         let reason_code = observed.reason_code.map(str::to_owned);
@@ -372,6 +474,22 @@ fn display_units(observation: &Observation<'_>, number: usize, english: bool) ->
         }
         (false, _, Some("BRANCH_AUDIENCE_UNRESOLVED")) => {
             "指定された読者向けの説明は保留しました。"
+        }
+        (true, _, Some("BRANCH_REFERENCE_NOT_PRIOR")) => "Choose an earlier item in this request.",
+        (false, _, Some("BRANCH_REFERENCE_NOT_PRIOR")) => "同じ依頼の前の項目を指定してください。",
+        (true, _, Some("BRANCH_REFERENCE_INVALID")) => "The item reference could not be read.",
+        (false, _, Some("BRANCH_REFERENCE_INVALID")) => "参照先の指定を読み取れませんでした。",
+        (true, _, Some("BRANCH_REFERENCE_PREREQUISITE_UNCONFIRMED")) => {
+            "The referenced item is unfinished."
+        }
+        (false, _, Some("BRANCH_REFERENCE_PREREQUISITE_UNCONFIRMED")) => {
+            "参照先の項目が未確定です。"
+        }
+        (true, _, Some("BRANCH_REFERENCE_VALUE_UNAVAILABLE")) => {
+            "The referenced item has no usable value for this field."
+        }
+        (false, _, Some("BRANCH_REFERENCE_VALUE_UNAVAILABLE")) => {
+            "参照先で指定の数値を利用できません。"
         }
         (true, BranchState::Failed, _) => "The operation failed.",
         (false, BranchState::Failed, _) => "処理に失敗しました。",

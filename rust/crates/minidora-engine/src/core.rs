@@ -17312,6 +17312,14 @@ impl Engine {
                 ]);
                 result.guarantee = Guarantee::Computed;
             }
+            Intent::CalculateFromRequestItems { .. } => {
+                return self.stop(
+                    &mut state,
+                    Lifecycle::Suspend,
+                    "BRANCH_REFERENCE_SCOPE",
+                    "依頼番号への参照は、同じ箇条書きの依頼内で指定してください。",
+                );
+            }
             Intent::Unknown { reason } => {
                 return self.stop(
                     &mut state,
