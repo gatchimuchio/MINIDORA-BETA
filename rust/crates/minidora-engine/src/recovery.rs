@@ -6501,6 +6501,7 @@ fn inspect(
                 || (requires_compound && crate::core::supports_english_output_locale(&plan.locale))
                 || (requires_attached_analysis
                     && crate::input::uses_english_attached_analysis(bundle))
+                || (requires_conversation && crate::input::uses_english_conversation_event(bundle))
                 || (requires_current_news && crate::input::uses_english_current_news(bundle))
                 || (requires_research
                     && matches!(

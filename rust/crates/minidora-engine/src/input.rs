@@ -90,6 +90,7 @@ pub(crate) const RELATION_SUBJECT_QUESTION_PARSER_VERSION: &str =
 const COPULAR_SUBJECT_QUESTION_PARSER_VERSION: &str = "declarative-ja-v212-copular-subject-query";
 const CONVERSATION_TOPIC_PARSER_VERSION: &str = "declarative-ja-v213-conversation-topic";
 const CONVERSATION_EVENT_PARSER_VERSION: &str = "declarative-ja-v251-conversation-event";
+const BILINGUAL_CONVERSATION_EVENT_PARSER_VERSION: &str = "declarative-ja-en-v1-conversation-event";
 pub(crate) const HEARING_PARSER_VERSION: &str = "declarative-ja-v214-hearing";
 const HEARING_ANSWER_ROLE: &str = "/SupplyHearingAnswer/answer";
 pub(crate) const CSV_BEFORE_AFTER_COMPARE_PARSER_VERSION: &str =
@@ -671,19 +672,76 @@ pub(crate) fn seal_named_conversation_return(
     )
 }
 
+fn conversation_event(
+    request: &RequestEnvelope,
+    original: &Intent,
+) -> Option<(&'static str, minidora_domain::ConversationEvent)> {
+    let text = &request.text;
+    let english = crate::core::supports_english_output_locale(&request.locale);
+    if !english && !crate::core::supports_japanese_output_locale(&request.locale) {
+        return None;
+    }
+    if let Some(event) = crate::conversation_input::parse(text)
+        && crate::conversation_input::admits_event(original, text, &event)
+    {
+        let version = if english {
+            BILINGUAL_CONVERSATION_EVENT_PARSER_VERSION
+        } else {
+            CONVERSATION_EVENT_PARSER_VERSION
+        };
+        return Some((version, event));
+    }
+    if matches!(original, Intent::Unknown { .. }) {
+        return crate::conversation_input::parse_english(text)
+            .map(|event| (BILINGUAL_CONVERSATION_EVENT_PARSER_VERSION, event));
+    }
+    None
+}
+
+pub(crate) fn uses_english_conversation_event(bundle: &InputBundle) -> bool {
+    crate::core::supports_english_output_locale(&bundle.request.locale)
+        && bundle.meaning.parser_version == BILINGUAL_CONVERSATION_EVENT_PARSER_VERSION
+        && matches!(
+            bundle.meaning.intent,
+            Intent::ReportConversationEvent { .. }
+        )
+}
+
+pub(crate) fn can_continue_conversation_event(
+    version: &str,
+    event: &minidora_domain::ConversationEvent,
+) -> bool {
+    crate::conversation_input::can_continue_topic(event)
+        && (version != BILINGUAL_CONVERSATION_EVENT_PARSER_VERSION
+            || !crate::conversation_input::changes_topic_in_english(event))
+}
+
 fn conversation_event_obstacle(
     request: &RequestEnvelope,
     event: &minidora_domain::ConversationEvent,
     continue_topic: bool,
 ) -> Option<&'static str> {
+    let english = crate::core::supports_english_output_locale(&request.locale);
     if !request.attachments.is_empty() {
-        Some("体験や観察の話には、添付を外して本文だけを送ってください。")
+        Some(if english {
+            "Remove the attachments to talk about your experience."
+        } else {
+            "体験や観察の話には、添付を外して本文だけを送ってください。"
+        })
     } else if request.context_ref.is_some() && !continue_topic {
-        Some("指定された前の回答が、続けられる会話の話題か確認できません。")
+        Some(if english {
+            "The selected answer could not be used to continue this conversation."
+        } else {
+            "指定された前の回答が、続けられる会話の話題か確認できません。"
+        })
     } else if request.output_path.is_some()
         && !(continue_topic && crate::conversation_input::can_continue_topic(event))
     {
-        Some("体験や観察への返答を保存する場合は、同じ会話の話題を続けてください。")
+        Some(if english {
+            "To save a reply about your experience, continue a topic in this conversation."
+        } else {
+            "体験や観察への返答を保存する場合は、同じ会話の話題を続けてください。"
+        })
     } else {
         None
     }
@@ -721,7 +779,11 @@ pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> 
                     NAMED_CONVERSATION_PARSER_VERSION,
                 ))?);
     }
-    if meaning.parser_version == CONVERSATION_EVENT_PARSER_VERSION {
+    let version = meaning.parser_version.as_str();
+    if matches!(
+        version,
+        CONVERSATION_EVENT_PARSER_VERSION | BILINGUAL_CONVERSATION_EVENT_PARSER_VERSION
+    ) {
         let Intent::ReportConversationEvent {
             event,
             continue_topic,
@@ -731,7 +793,9 @@ pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> 
         };
         return Ok(meaning.source_kind == "USER_REQUEST"
             && meaning.unresolved.is_empty()
-            && matches!(request.locale.as_str(), "ja" | "ja-JP")
+            && (version == CONVERSATION_EVENT_PARSER_VERSION
+                || !*continue_topic
+                || can_continue_conversation_event(version, event))
             && conversation_event_obstacle(request, event, *continue_topic).is_none()
             && *continue_topic == meaning.context_result_ref.is_some()
             && request
@@ -745,14 +809,10 @@ pub(crate) fn verified_conversation_input(bundle: &InputBundle) -> Result<bool> 
             && bundle.raw_sha256 == digest(text.as_bytes())
             && bundle.semantic_signature == identity(meaning)?
             && bundle.fingerprint
-                == identity(&(
-                    request,
-                    &bundle.raw_sha256,
-                    &bundle.context_sha256,
-                    CONVERSATION_EVENT_PARSER_VERSION,
-                ))?
-            && crate::conversation_input::parse(text).as_ref() == Some(event)
-            && crate::conversation_input::admits_event(&interpret(text)?, text, event)
+                == identity(&(request, &bundle.raw_sha256, &bundle.context_sha256, version))?
+            && conversation_event(request, &interpret(text)?).is_some_and(
+                |(observed_version, parsed)| observed_version == version && &parsed == event,
+            )
             && meaning.source_roles == source_role_spans(text, &meaning.intent)?);
     }
     if meaning.parser_version != CONVERSATION_TOPIC_PARSER_VERSION
@@ -1830,41 +1890,39 @@ pub(crate) fn seal_with_source_context(
                     vec![reason.into()],
                 );
             }
-            if matches!(request.locale.as_str(), "ja" | "ja-JP") {
-                if let Some(event) = crate::conversation_input::parse(&request.text)
-                    && crate::conversation_input::admits_event(&intent, &request.text, &event)
-                {
-                    let continue_topic =
-                        matches!(source_context, Some(SourceContext::ConversationTopic))
-                            && previous.is_some_and(|prior| prior.lifecycle == Lifecycle::Commit);
-                    if let Some(reason) =
-                        conversation_event_obstacle(request, &event, continue_topic)
-                    {
-                        return seal_user_input(
-                            request,
-                            None,
-                            PARSER_VERSION,
-                            Intent::Unknown {
-                                reason: reason.into(),
-                            },
-                            BTreeMap::new(),
-                            vec![reason.into()],
-                        );
-                    }
-                    let report = Intent::ReportConversationEvent {
-                        event,
-                        continue_topic,
-                    };
-                    let roles = source_role_spans(&request.text, &report)?;
+            if let Some((version, event)) = conversation_event(request, &intent) {
+                let continue_topic =
+                    matches!(source_context, Some(SourceContext::ConversationTopic))
+                        && previous.is_some_and(|prior| prior.lifecycle == Lifecycle::Commit)
+                        && (version == CONVERSATION_EVENT_PARSER_VERSION
+                            || can_continue_conversation_event(version, &event));
+                if let Some(reason) = conversation_event_obstacle(request, &event, continue_topic) {
                     return seal_user_input(
                         request,
-                        if continue_topic { previous } else { None },
-                        CONVERSATION_EVENT_PARSER_VERSION,
-                        report,
-                        roles,
-                        Vec::new(),
+                        None,
+                        PARSER_VERSION,
+                        Intent::Unknown {
+                            reason: reason.into(),
+                        },
+                        BTreeMap::new(),
+                        vec![reason.into()],
                     );
                 }
+                let report = Intent::ReportConversationEvent {
+                    event,
+                    continue_topic,
+                };
+                let roles = source_role_spans(&request.text, &report)?;
+                return seal_user_input(
+                    request,
+                    if continue_topic { previous } else { None },
+                    version,
+                    report,
+                    roles,
+                    Vec::new(),
+                );
+            }
+            if matches!(request.locale.as_str(), "ja" | "ja-JP") {
                 if crate::conversation_input::pseudo_copula(&intent, &request.text) {
                     return seal_user_input(
                         request,
@@ -12714,6 +12772,51 @@ fn condition_definition_source_roles(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bilingual_conversation_event_binds_original_spans_independently_of_output_locale() {
+        let authored = "I did not finish the clay bowl.";
+        let mut request = RequestEnvelope::new("bowl", "conversation", "actor", authored);
+        let japanese_reply = seal(&request, None).unwrap();
+        assert!(verified_conversation_input(&japanese_reply).unwrap());
+        assert!(!uses_english_conversation_event(&japanese_reply));
+        assert!(matches!(
+            &japanese_reply.meaning.intent,
+            Intent::ReportConversationEvent {
+                event,
+                continue_topic: false
+            } if event.negative && event.predicate.text == "did not finish"
+        ));
+        for span in japanese_reply.meaning.source_roles.values().flatten() {
+            assert_eq!(authored.get(span.start..span.end), Some(span.text.as_str()));
+        }
+
+        request.locale = "en-US".into();
+        let english_reply = seal(&request, None).unwrap();
+        assert!(verified_conversation_input(&english_reply).unwrap());
+        assert!(uses_english_conversation_event(&english_reply));
+        assert_eq!(japanese_reply.meaning, english_reply.meaning);
+        assert_ne!(japanese_reply.fingerprint, english_reply.fingerprint);
+
+        let mut tampered = english_reply;
+        if let Intent::ReportConversationEvent { event, .. } = &mut tampered.meaning.intent {
+            event.negative = false;
+        }
+        tampered.semantic_signature = identity(&tampered.meaning).unwrap();
+        assert!(!verified_conversation_input(&tampered).unwrap());
+
+        request.text = "川で鳥を見ました。".into();
+        let japanese_source = seal(&request, None).unwrap();
+        assert!(verified_conversation_input(&japanese_source).unwrap());
+        assert!(uses_english_conversation_event(&japanese_source));
+        request.locale = "ja-JP".into();
+        let legacy = seal(&request, None).unwrap();
+        assert_eq!(
+            legacy.meaning.parser_version,
+            CONVERSATION_EVENT_PARSER_VERSION
+        );
+        assert!(verified_conversation_input(&legacy).unwrap());
+    }
 
     #[test]
     fn counterfactual_relation_binds_each_hypothesis_and_replacement_to_exact_source() {

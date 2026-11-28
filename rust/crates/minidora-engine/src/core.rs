@@ -2939,9 +2939,22 @@ fn conversation_event_fragments(
 
     let mut fragments = Vec::new();
     if let Some(greeting) = &event.greeting {
+        let greeting_japanese = match greeting
+            .text
+            .split_ascii_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "good morning" => "おはようございます",
+            "good evening" => "こんばんは",
+            "good afternoon" | "hello" | "hi" | "hey" => "こんにちは",
+            _ => &greeting.text,
+        };
         fragments.extend([
             ExactField {
-                value: greeting.text.clone(),
+                value: greeting_japanese.into(),
             },
             Literal {
                 value: "。".into()
@@ -2972,26 +2985,107 @@ fn conversation_event_fragments(
             value: "」というお話ですね。".into(),
         },
     ]);
-    let question = if event.negative {
-        "そのときはどんな状況でしたか。よければ聞かせてください。"
-    } else {
-        match event.kind {
-            ConversationEventKind::Observation => "そのとき、どんな様子が印象に残りましたか。",
-            ConversationEventKind::Discovery => "何がきっかけで気づいたのですか。",
-            ConversationEventKind::Activity => {
-                "その場面で、気づいたことや印象に残ったことはありますか。"
-            }
-            ConversationEventKind::Movement => "行き先や道中で、印象に残ったことはありますか。",
-            ConversationEventKind::Difficulty => {
-                "どの場面が難しかったのか、そこから一緒に考えられます。"
-            }
-            ConversationEventKind::Feeling => "どんなところが特に印象に残りましたか。",
-        }
-    };
     fragments.push(Literal {
-        value: question.into(),
+        value: conversation_event_question(event, false).into(),
     });
     fragments
+}
+
+fn english_conversation_event_fragments(
+    event: &ConversationEvent,
+    previous_topic: Option<&SourceSpan>,
+) -> Vec<language::MeaningGrammarFragment> {
+    use language::MeaningGrammarFragment::{ExactField, Literal};
+
+    let mut fragments = Vec::new();
+    if let Some(greeting) = &event.greeting {
+        let greeting = match greeting
+            .text
+            .split_ascii_whitespace()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .to_ascii_lowercase()
+            .as_str()
+        {
+            "おはよう" | "おはようございます" | "good morning" => "Good morning. ",
+            "こんばんは" | "good evening" => "Good evening. ",
+            "good afternoon" => "Good afternoon. ",
+            _ => "Hello. ",
+        };
+        fragments.push(Literal {
+            value: greeting.into(),
+        });
+    }
+    if let Some(topic) = previous_topic {
+        fragments.extend([
+            Literal {
+                value: "Picking up our conversation about “".into(),
+            },
+            ExactField {
+                value: topic.text.clone(),
+            },
+            Literal {
+                value: "”, ".into(),
+            },
+        ]);
+    }
+    fragments.extend([
+        Literal {
+            value: if previous_topic.is_some() {
+                "you mentioned “"
+            } else {
+                "You mentioned “"
+            }
+            .into(),
+        },
+        ExactField {
+            value: event.report.text.clone(),
+        },
+        Literal {
+            value: "”. ".into(),
+        },
+    ]);
+    fragments.push(Literal {
+        value: conversation_event_question(event, true).into(),
+    });
+    fragments
+}
+
+fn conversation_event_question(event: &ConversationEvent, english: bool) -> &'static str {
+    let (japanese, english_text) = if event.negative {
+        (
+            "そのときはどんな状況でしたか。よければ聞かせてください。",
+            "What was happening at the time, if you’d like to talk about it?",
+        )
+    } else {
+        match event.kind {
+            ConversationEventKind::Observation => (
+                "そのとき、どんな様子が印象に残りましたか。",
+                "What stood out to you at the time?",
+            ),
+            ConversationEventKind::Discovery => (
+                "何がきっかけで気づいたのですか。",
+                "What made you notice it?",
+            ),
+            ConversationEventKind::Activity => (
+                "その場面で、気づいたことや印象に残ったことはありますか。",
+                "Did you notice anything that stood out while you were doing that?",
+            ),
+            ConversationEventKind::Movement => (
+                "行き先や道中で、印象に残ったことはありますか。",
+                "What stood out along the way or at your destination?",
+            ),
+            ConversationEventKind::Difficulty => (
+                "どの場面が難しかったのか、そこから一緒に考えられます。",
+                "We can start by looking at which part was difficult for you.",
+            ),
+            ConversationEventKind::Feeling => (
+                "どんなところが特に印象に残りましたか。",
+                "What stood out to you most about the experience?",
+            ),
+        }
+    };
+    if english { english_text } else { japanese }
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -3420,7 +3514,11 @@ impl ConversationMeaningPlan {
         ids
     }
 
-    fn generation_request(&self, budget: usize) -> Result<language::MeaningGenerationRequest> {
+    fn generation_request(
+        &self,
+        budget: usize,
+        english_event: bool,
+    ) -> Result<language::MeaningGenerationRequest> {
         use language::{
             MeaningCompositionFormat, MeaningCompositionPurpose, MeaningCompositionStyle,
             MeaningGrammarUnit, MeaningRole,
@@ -3431,7 +3529,12 @@ impl ConversationMeaningPlan {
             .as_ref()
             .map_or(self.opening.event.as_ref(), |reply| reply.event.as_ref());
         let fragments = if let Some(event) = event {
-            conversation_event_fragments(event, self.reply.as_ref().map(|_| &self.opening.topic))
+            let topic = self.reply.as_ref().map(|_| &self.opening.topic);
+            if english_event {
+                english_conversation_event_fragments(event, topic)
+            } else {
+                conversation_event_fragments(event, topic)
+            }
         } else {
             self.topic_fragments()
         };
@@ -3540,7 +3643,10 @@ pub(crate) fn verify_conversation_computation(
     {
         return Err(invalid());
     }
-    let grammar = meaning_plan.generation_request(bundle.request.budget.max_evidence_bytes)?;
+    let grammar = meaning_plan.generation_request(
+        bundle.request.budget.max_evidence_bytes,
+        input::uses_english_conversation_event(bundle),
+    )?;
     let mut replay = language::generate_semantic_meaning(&grammar)?;
     validate_meaning_generation(&grammar, &dependencies, &replay.report)?;
     replay.report.model_artifact_ref = Some(digest(&canonical(&replay.model)?));
@@ -9230,7 +9336,7 @@ impl Engine {
                 Intent::ReportConversationEvent {
                     event,
                     continue_topic: false,
-                } => crate::conversation_input::can_continue_topic(event),
+                } => input::can_continue_conversation_event(&bundle.meaning.parser_version, event),
                 _ => false,
             };
             let bundle = if has_compute_budget
@@ -11141,6 +11247,7 @@ impl Engine {
         let english_output = english
             && (matches!(&goal.intent, Intent::IndependentRequests { .. })
                 || english_analysis
+                || input::uses_english_conversation_event(&bundle)
                 || input::uses_english_current_news(&bundle)
                 || matches!(
                     bundle.meaning.parser_version.as_str(),
@@ -17518,7 +17625,10 @@ impl Engine {
                         Err(error) => return Err(error),
                     };
                     let dependencies = plan.dependencies();
-                    let grammar = plan.generation_request(goal.budget.max_evidence_bytes)?;
+                    let grammar = plan.generation_request(
+                        goal.budget.max_evidence_bytes,
+                        input::uses_english_conversation_event(&bundle),
+                    )?;
                     conversation_meaning_plan = Some(plan);
                     (dependencies, grammar, CONVERSATION_PREDICATE)
                 };

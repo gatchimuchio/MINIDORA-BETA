@@ -1,4 +1,4 @@
-//! Finite Japanese event reports. Spans always point into the submitted turn.
+//! Finite conversation event reports. Spans always point into the submitted turn.
 
 use minidora_domain::{ConversationEvent, ConversationEventKind, Intent, Proposition, SourceSpan};
 use regex::Regex;
@@ -450,6 +450,366 @@ pub(crate) fn parse(text: &str) -> Option<ConversationEvent> {
     })
 }
 
+const ENGLISH_TOPIC_SWITCH: &str = r"by +the +way|on +another +note|changing +the +subject";
+const ENGLISH_TIME: &str = concat!(
+    r"yesterday(?: +(?:morning|afternoon|evening))?|earlier +today|",
+    r"(?:last|this) +(?:morning|afternoon|evening|night|week|weekend|month|year|",
+    r"monday|tuesday|wednesday|thursday|friday|saturday|sunday)|",
+    r"on +(?:monday|tuesday|wednesday|thursday|friday|saturday|sunday)|",
+    r"(?:[0-9]{1,3}|one|two|three|four|five|six|seven|eight|nine|ten|a) +",
+    r"(?:minutes?|hours?|days?|weeks?|months?|years?) +ago",
+);
+
+static ENGLISH_FRAME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(
+        concat!(
+            r"(?i)\A(?:(?P<greeting>good +(?:morning|afternoon|evening)|hello|hi|hey)[,.!] +)?",
+            r"(?P<report>(?:(?:{topic_switch}), +)?(?:(?:{time}),? +)?(?:i|we) +(?P<clause>.+))\z",
+        ),
+        topic_switch = ENGLISH_TOPIC_SWITCH,
+        time = ENGLISH_TIME,
+    ))
+    .expect("English event frame")
+});
+
+static ENGLISH_SWITCH: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"(?i)\A(?:{ENGLISH_TOPIC_SWITCH}), +")).expect("English topic switch")
+});
+
+static ENGLISH_TRAILING_TIME: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(&format!(r"(?i)(?:\A| +)(?:{ENGLISH_TIME})\z")).expect("English event time")
+});
+
+static ENGLISH_NEGATIVE_AUXILIARY: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"(?i)\A(?:did +not|didn['’]t|could +not|couldn['’]t) +")
+        .expect("English negative event")
+});
+
+static ENGLISH_NOMINAL: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(
+        r"\A[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*(?:(?:['’\-]| +)[\p{L}\p{Nd}][\p{L}\p{M}\p{Nd}]*)*\z",
+    )
+    .expect("English event nominal")
+});
+
+const ENGLISH_PREDICATES: &[(ConversationEventKind, &[(&str, &str)])] = &[
+    (
+        Observation,
+        &[
+            ("see", "saw"),
+            ("spot", "spotted"),
+            ("watch", "watched"),
+            ("hear", "heard"),
+            ("listen", "listened"),
+            ("observe", "observed"),
+            ("look", "looked"),
+        ],
+    ),
+    (
+        Discovery,
+        &[
+            ("discover", "discovered"),
+            ("find", "found"),
+            ("realize", "realized"),
+            ("realise", "realised"),
+            ("recognize", "recognized"),
+            ("recognise", "recognised"),
+            ("learn", "learned"),
+            ("learn", "learnt"),
+            ("identify", "identified"),
+            ("notice", "noticed"),
+        ],
+    ),
+    (
+        Activity,
+        &[
+            ("do", "did"),
+            ("make", "made"),
+            ("finish", "finished"),
+            ("complete", "completed"),
+            ("start", "started"),
+            ("try", "tried"),
+            ("build", "built"),
+            ("write", "wrote"),
+            ("draw", "drew"),
+            ("paint", "painted"),
+            ("carve", "carved"),
+            ("cook", "cooked"),
+            ("bake", "baked"),
+            ("work", "worked"),
+            ("practice", "practiced"),
+            ("practise", "practised"),
+            ("prepare", "prepared"),
+            ("play", "played"),
+            ("repair", "repaired"),
+            ("plant", "planted"),
+        ],
+    ),
+    (
+        Movement,
+        &[
+            ("go", "went"),
+            ("walk", "walked"),
+            ("visit", "visited"),
+            ("arrive", "arrived"),
+            ("leave", "left"),
+            ("return", "returned"),
+            ("come", "came"),
+            ("move", "moved"),
+            ("drive", "drove"),
+            ("travel", "traveled"),
+            ("travel", "travelled"),
+            ("run", "ran"),
+            ("cycle", "cycled"),
+            ("reach", "reached"),
+            ("hike", "hiked"),
+        ],
+    ),
+    (
+        Difficulty,
+        &[
+            ("struggle", "struggled"),
+            ("have trouble", "had trouble"),
+            ("have difficulty", "had difficulty"),
+            ("have a hard time", "had a hard time"),
+        ],
+    ),
+    (
+        Feeling,
+        &[
+            ("feel", "felt"),
+            ("enjoy", "enjoyed"),
+            ("like", "liked"),
+            ("love", "loved"),
+            ("miss", "missed"),
+            ("worry", "worried"),
+            ("have fun", "had fun"),
+        ],
+    ),
+];
+
+fn english_word_prefix<'a>(text: &'a str, prefix: &str) -> Option<&'a str> {
+    let head = text.get(..prefix.len())?;
+    let rest = &text[prefix.len()..];
+    (head.eq_ignore_ascii_case(prefix) && (rest.is_empty() || rest.starts_with(' ')))
+        .then_some(rest)
+}
+
+fn english_predicate(clause: &str) -> Option<(usize, ConversationEventKind, bool)> {
+    let auxiliary = ENGLISH_NEGATIVE_AUXILIARY.find(clause);
+    let never = english_word_prefix(clause, "never");
+    let verb = auxiliary.as_ref().map_or_else(
+        || never.unwrap_or(clause).trim_start(),
+        |boundary| &clause[boundary.end()..],
+    );
+    let (form, kind) = ENGLISH_PREDICATES
+        .iter()
+        .flat_map(|(kind, forms)| forms.iter().map(move |(base, past)| (kind, base, past)))
+        .filter_map(|(kind, base, past)| {
+            let form = if auxiliary.is_some() { base } else { past };
+            english_word_prefix(verb, form).map(|_| (*form, *kind))
+        })
+        .max_by_key(|(form, _)| form.len())?;
+    Some((
+        clause.len() - verb.len() + form.len(),
+        kind,
+        auxiliary.is_some() || never.is_some(),
+    ))
+}
+
+const ENGLISH_PREPOSITIONS: &[&str] = &[
+    "to", "with", "at", "in", "from", "on", "about", "near", "around", "through", "into", "for",
+    "along", "across", "past", "beside", "by", "under", "over", "outside", "inside", "during",
+];
+const ENGLISH_CLAUSE_WORDS: &[&str] = &[
+    "and",
+    "or",
+    "but",
+    "then",
+    "if",
+    "unless",
+    "because",
+    "though",
+    "although",
+    "where",
+    "when",
+    "while",
+    "whether",
+    "which",
+    "who",
+    "whom",
+    "whose",
+    "however",
+    "so",
+    "please",
+    "can",
+    "could",
+    "would",
+    "should",
+    "will",
+    "must",
+    "may",
+    "might",
+    "do",
+    "does",
+    "did",
+    "not",
+    "never",
+    "am",
+    "is",
+    "are",
+    "was",
+    "were",
+    "be",
+    "been",
+    "being",
+    "has",
+    "have",
+    "had",
+    "say",
+    "said",
+    "tell",
+    "told",
+    "stop",
+    "stopped",
+    "change",
+    "changed",
+    "open",
+    "opened",
+    "close",
+    "closed",
+    "fall",
+    "fell",
+    "glow",
+    "glowed",
+    "melt",
+    "melted",
+    "bloom",
+    "bloomed",
+    "sing",
+    "sang",
+    "laugh",
+    "laughed",
+    "take",
+    "took",
+    "talk",
+    "talked",
+    "send",
+    "sent",
+    "delete",
+    "deleted",
+    "save",
+    "saved",
+    "execute",
+    "publish",
+    "download",
+    "upload",
+    "remove",
+    "replace",
+    "ignore",
+    "assuming",
+    "suppose",
+    "supposing",
+    "tomorrow",
+    "singing",
+    "bend",
+    "bent",
+];
+const ENGLISH_DETERMINERS: &[&str] = &[
+    "a", "an", "the", "this", "that", "these", "those", "my", "our", "your", "their", "his", "her",
+    "its", "some",
+];
+
+fn english_target(tail: &str) -> Option<Option<(usize, &str)>> {
+    let tail = ENGLISH_TRAILING_TIME
+        .find(tail)
+        .map_or(tail, |time| tail[..time.start()].trim_end());
+    if tail.is_empty() {
+        return Some(None);
+    }
+    if !ENGLISH_NOMINAL.is_match(tail) {
+        return None;
+    }
+    let lower = tail.to_ascii_lowercase();
+    let words = lower
+        .split(' ')
+        .filter(|word| !word.is_empty())
+        .collect::<Vec<_>>();
+    let start = usize::from(ENGLISH_PREPOSITIONS.contains(&words[0]));
+    let target = *words.get(start)?;
+    for (index, word) in words.iter().copied().enumerate().skip(start) {
+        if ENGLISH_CLAUSE_WORDS.contains(&word)
+            || word == "to"
+            || (word == "that" && index != start)
+            || word.ends_with("n't")
+            || word.ends_with("n’t")
+            || ["i", "we", "he", "she", "they"].contains(&word)
+            || (["you", "it", "him", "them", "us", "me"].contains(&word)
+                && (index != start || words.len() != start + 1))
+        {
+            return None;
+        }
+        if let Some(&(base, past)) = ENGLISH_PREDICATES
+            .iter()
+            .flat_map(|(_, forms)| forms.iter())
+            .find(|(base, past)| word == *base || word == *past)
+        {
+            // Directly introduced modifiers and nouns can have the same form
+            // as a verb, as in `the finished bowl` or `a visit`.
+            let nominal = index == start + 1
+                && ENGLISH_DETERMINERS.contains(&target)
+                && ((word == past && index + 1 < words.len())
+                    || (word == base && index + 1 == words.len()));
+            if !nominal {
+                return None;
+            }
+        }
+    }
+    let nominal = if start == 0 {
+        tail
+    } else {
+        tail[words[0].len()..].trim_start()
+    };
+    let end = nominal.match_indices(' ').find_map(|(offset, _)| {
+        let next = nominal[offset..].trim_start().split(' ').next()?;
+        ENGLISH_PREPOSITIONS
+            .iter()
+            .any(|preposition| next.eq_ignore_ascii_case(preposition))
+            .then_some(offset)
+    });
+    Some(Some((
+        tail.len() - nominal.len(),
+        end.map_or(nominal, |end| &nominal[..end]),
+    )))
+}
+
+pub(crate) fn parse_english(text: &str) -> Option<ConversationEvent> {
+    if text.len() > 640 || text.chars().any(char::is_control) {
+        return None;
+    }
+    let sentence = text.trim();
+    let sentence = sentence.strip_suffix(['.', '!']).unwrap_or(sentence);
+    let fields = ENGLISH_FRAME.captures(sentence)?;
+    let report = fields.name("report")?;
+    let clause = fields.name("clause")?;
+    let (end, kind, negative) = english_predicate(clause.as_str())?;
+    let tail = clause.as_str()[end..].trim_start();
+    let target = english_target(tail)?;
+    let start = text.len() - text.trim_start().len();
+    let clause_start = start + clause.start();
+    let tail_start = clause_start + clause.as_str().len() - tail.len();
+    Some(ConversationEvent {
+        report: source_span(text, start + report.start(), report.as_str()),
+        predicate: source_span(text, clause_start, &clause.as_str()[..end]),
+        target: target.map(|(offset, part)| source_span(text, tail_start + offset, part)),
+        greeting: fields
+            .name("greeting")
+            .map(|value| source_span(text, start + value.start(), value.as_str())),
+        kind,
+        negative,
+    })
+}
+
 fn is_event_in_copular_slot(proposition: &Proposition) -> bool {
     proposition.predicate == "is"
         && !proposition.negative
@@ -479,8 +839,18 @@ fn is_continuative(ch: char) -> bool {
     "いえきぎけげしじせぜちてでにねひびぴへべぺみめりれ".contains(ch)
 }
 
+pub(crate) fn changes_topic_in_english(event: &ConversationEvent) -> bool {
+    ENGLISH_SWITCH.is_match(&event.report.text)
+}
+
 pub(crate) fn can_continue_topic(event: &ConversationEvent) -> bool {
-    event.greeting.is_none() && !event.report.text.starts_with("ところで")
+    event.greeting.is_none()
+        && !event.report.text.starts_with("ところで")
+        && !(event
+            .predicate
+            .text
+            .starts_with(|ch: char| ch.is_ascii_alphabetic())
+            && changes_topic_in_english(event))
 }
 
 pub(crate) fn admits_event(intent: &Intent, text: &str, event: &ConversationEvent) -> bool {
@@ -521,4 +891,145 @@ pub(crate) fn pseudo_copula(intent: &Intent, text: &str) -> bool {
             && !["である", "です", "だ"]
                 .iter()
                 .any(|ending| terminal.ends_with(ending))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn english_events_keep_original_anchors_and_distinct_meanings() {
+        let source = "  Hi! Yesterday I spotted a kestrel at the river.  ";
+        let event = parse_english(source).unwrap();
+        assert_eq!(
+            event.report.text,
+            "Yesterday I spotted a kestrel at the river"
+        );
+        assert_eq!(event.kind, Observation);
+        assert!(!event.negative);
+        assert_eq!(event.greeting.as_ref().unwrap().text, "Hi");
+        assert!(!can_continue_topic(&event));
+        let movement = parse_english("I went.").unwrap();
+        assert_eq!(movement.kind, Movement);
+        assert_eq!(movement.predicate.text, "went");
+        assert!(movement.target.is_none());
+
+        for (source, predicate, target, kind, negative) in [
+            (source, "spotted", "a kestrel", Observation, false),
+            (
+                "I noticed an unfamiliar sign last night.",
+                "noticed",
+                "an unfamiliar sign",
+                Discovery,
+                false,
+            ),
+            (
+                "I did not finish the clay bowl.",
+                "did not finish",
+                "the clay bowl",
+                Activity,
+                true,
+            ),
+            (
+                "I couldn't repair the loose hinge.",
+                "couldn't repair",
+                "the loose hinge",
+                Activity,
+                true,
+            ),
+            (
+                "We went to a lantern exhibition.",
+                "went",
+                "a lantern exhibition",
+                Movement,
+                false,
+            ),
+            (
+                "I struggled with the new bus route.",
+                "struggled",
+                "the new bus route",
+                Difficulty,
+                false,
+            ),
+            (
+                "On Friday, I felt proud of my model.",
+                "felt",
+                "proud of my model",
+                Feeling,
+                false,
+            ),
+            (
+                "I didn’t see the 桜 display.",
+                "didn’t see",
+                "the 桜 display",
+                Observation,
+                true,
+            ),
+        ] {
+            let event = parse_english(source).unwrap_or_else(|| panic!("not parsed: {source}"));
+            assert_eq!(event.predicate.text, predicate);
+            assert_eq!(event.target.as_ref().unwrap().text, target);
+            assert_eq!(event.kind, kind);
+            assert_eq!(event.negative, negative);
+            for span in [
+                Some(&event.report),
+                Some(&event.predicate),
+                event.target.as_ref(),
+                event.greeting.as_ref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                assert_eq!(&source[span.start..span.end], span.text);
+            }
+        }
+    }
+
+    #[test]
+    fn english_events_stop_at_questions_quotes_hypotheses_and_multiple_predicates() {
+        for source in [
+            "Did I finish the bowl?",
+            "I finished the bowl?",
+            "Please finish the bowl.",
+            "I finished the bowl. Send a photo.",
+            "I finished the bowl and carried it home.",
+            "I noticed that the light changed.",
+            "I saw the train leave.",
+            "I heard the metal bend.",
+            "I watched her carve wood.",
+            "I watched the birds singing.",
+            "I saw the note delete the files.",
+            "If I went to the exhibition, I would have told you.",
+            "I spotted a kestrel assuming the map was right.",
+            "\"I spotted a kestrel.\"",
+            "We plan to visit the garden.",
+            "I did not finished the bowl.",
+            "We went to the garden\nand took photos.",
+        ] {
+            assert!(
+                parse_english(source).is_none(),
+                "unexpected event: {source}"
+            );
+        }
+    }
+
+    #[test]
+    fn explicit_english_topic_switches_do_not_attach_to_the_old_topic() {
+        let continued = parse_english("I found the trail yesterday.").unwrap();
+        assert!(can_continue_topic(&continued));
+        for source in [
+            "By the way, we found a trail yesterday.",
+            "ON ANOTHER NOTE, I made a model.",
+            "Changing the subject, we walked to the market.",
+        ] {
+            let event = parse_english(source).unwrap();
+            assert!(!can_continue_topic(&event));
+        }
+        assert!(!can_continue_topic(
+            &parse("ところで、試作品を作りました。").unwrap()
+        ));
+        assert!(can_continue_topic(
+            &parse("By the way, 試作品を作りました。").unwrap()
+        ));
+    }
 }
